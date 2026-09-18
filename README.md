@@ -87,6 +87,24 @@ on load. All AI scoring happened earlier, unattended, in the scheduled
 build (see "Deployment" below) — by the time anyone opens the page, every
 fixture in the window is already scored and sitting in a static file.
 
+## Staying up to date in a tab left open
+
+A tab left open doesn't just freeze on whatever it first loaded: every 5
+minutes it re-fetches `matches.json` (`cache: 'no-store'`, same as the
+initial load) and reacts based on what actually changed, using `buildId`
+(the git commit the build ran from — `.github/workflows/deploy.yml` passes
+`github.sha`) to tell the two cases apart:
+
+- **New data, same code** (a routine scheduled rebuild of the same commit —
+  `buildId` unchanged): refreshes silently, keeping whatever day/filter the
+  viewer already has selected.
+- **New code** (a real commit was deployed — `buildId` changed): this tab
+  is still running the *old* JS/CSS/HTML no matter how fresh the data
+  underneath it is, so a silent refresh can't actually pick up whatever
+  changed in the code. A small banner appears instead ("網站已推出新版本")
+  with a button that reloads the page — deliberately not an automatic
+  reload, so nobody gets yanked away mid-scroll or mid-tap.
+
 ## AI score cache (keeping Gemini usage flat)
 
 A scheduled run every 6 hours would, naively, re-score the same

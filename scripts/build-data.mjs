@@ -38,6 +38,12 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 
 const PROXY_URL = (process.env.PROXY_URL || '').trim().replace(/\/+$/, '');
+// The commit this build ran from (.github/workflows/deploy.yml passes
+// github.sha) - lets a long-open tab tell a genuine code deploy (a new
+// commit) apart from a routine scheduled rebuild of the same commit (see
+// public/app.js's update-check polling). Falls back to a fixed string for
+// local runs, where there's no meaningful "commit this build is from".
+const BUILD_ID = (process.env.BUILD_ID || 'local').trim();
 const OUTPUT_PATH = new URL('../public/data/matches.json', import.meta.url);
 // Committed to the repo (unlike matches.json, which is fully regenerated
 // every run) - this is the persistent record of which matches have already
@@ -405,6 +411,7 @@ async function main() {
 
   const output = {
     generatedAt: now.toISOString(),
+    buildId: BUILD_ID,
     daysAhead: DAYS_AHEAD,
     source: matches.length === 0 ? 'none' : usedAi ? (matches.every(m => m.source === 'ai') ? 'ai' : 'mixed') : 'heuristic',
     matches
