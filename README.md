@@ -77,7 +77,31 @@ Scoring and picking are split across two different places, deliberately:
   actually hidden — just not pushed as a pick.
 - Each fixture shows both teams with **home/away labels** (主/客), logo, and
   bilingual English/Traditional-Chinese name; the venue and (when known)
-  Taiwan broadcast channel are shown the same bilingual/Chinese way.
+  Taiwan broadcast channel are shown the same bilingual/Chinese way. MLB in
+  particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
+  once - the prompt (see Orbit's `/match-recommend`) is told to always name
+  愛爾達體育台 when both apply, rather than answering inconsistently.
+- Each fixture also shows its **expected end time** ("至 9:30 下午") next to
+  the start time, and a countdown that switches from hours to whole days
+  once a fixture is more than 24 hours out ("2 天 5 小時後", not "53 小時
+  後") - both computed from the sport's average broadcast length, same as
+  the scheduling logic above.
+
+## Sport priority (⚙ in the header)
+
+MLB alone can field ~15 games a night, almost all landing in the same few
+overlapping evening windows - so even when every one of them is a
+perfectly good match, only one can win a given slot, and a less-crowded
+sport's ordinary fixture can end up looking like it's "always" the pick
+for that slot purely because it had less competition, not because this
+site favors it. There's no universally correct answer for which sport
+*should* win a close call, so instead of guessing, a small settings panel
+(the ⚙ button in the header) lets each viewer say which way they'd rather
+it lean: 較少/一般/較多 ("less/normal/more") per sport, stored in
+`localStorage` (per-browser, nothing sent anywhere). It only ever nudges
+`resolveViewingPlan`'s own scoring when picks are close - the
+competitiveness/watchability meters shown on every card always stay the
+true, un-nudged AI scores.
 
 ## AI runs in the background, not on page load
 

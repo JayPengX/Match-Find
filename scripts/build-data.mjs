@@ -360,19 +360,26 @@ async function main() {
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
   let cache = pruneCache(await loadCache(), now);
-  // Also retries a cached AI entry from before venueZh/whereToWatchTw
-  // existed (typeof check, not just "in", since an older cache write - or
-  // a Gemini response that genuinely returned "" - both leave the key
-  // present as a string) - otherwise every match scored before that fields
-  // change would keep showing blank forever, never re-sent because
-  // source:'ai' alone already marked it "done".
+  // Also retries a cached AI entry from:
+  //   - before venueZh/whereToWatchTw existed (typeof check, not just
+  //     "in", since an older cache write - or a Gemini response that
+  //     genuinely returned "" - both leave the key present as a string);
+  //   - before the prompt was told to prefer 愛爾達體育台 over 緯來體育台
+  //     when a fixture is carried by both (common for MLB) - a one-time
+  //     nudge so already-cached matches get a chance at the corrected
+  //     answer too, not just fixtures scored from here on. Matches
+  //     genuinely only on 緯來體育台 will just get the same answer back.
+  // Otherwise every match already scored before one of these changes
+  // would keep the old answer forever, never re-sent because source:'ai'
+  // alone already marked it "done".
   const needsScoring = matches.filter(m => {
     const cached = cache[m.id];
     return (
       !cached ||
       cached.source !== 'ai' ||
       typeof cached.venueZh !== 'string' ||
-      typeof cached.whereToWatchTw !== 'string'
+      typeof cached.whereToWatchTw !== 'string' ||
+      cached.whereToWatchTw === '緯來體育台'
     );
   });
   const freshPicks = await fetchAiScores(needsScoring);
