@@ -24,11 +24,13 @@
 // nobody has a settled Chinese name for yet.
 
 const state = {
+  rawMatches: [], // the last fetched payload's matches, untouched - kept so a priority change can re-run resolveViewingPlan without re-fetching
   matches: [], // every fetched match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   visibleDayCount: 7,
   selectedDayKey: null,
-  activeSport: 'all'
+  activeSport: 'all',
+  priorities: {} // { [sport]: -1|0|1 } - see "Sport priority settings" below
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -65,6 +67,116 @@ const updateBanner = document.getElementById('update-banner');
 const updateReloadBtn = document.getElementById('update-reload-btn');
 updateReloadBtn.addEventListener('click', () => location.reload());
 
+const settingsBtn = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+const settingsBackdrop = document.getElementById('settings-backdrop');
+const settingsCloseBtn = document.getElementById('settings-close-btn');
+const settingsResetBtn = document.getElementById('settings-reset-btn');
+const settingsSportList = document.getElementById('settings-sport-list');
+
+// ---- Sport priority settings ---------------------------------------------
+//
+// The DP in resolveViewingPlan picks whichever match scores highest in each
+// overlapping time slot - with MLB's own volume (~15 games most evenings,
+// many sharing near-identical start times) split across many similarly-
+// scored candidates, and other sports each only fielding one or two
+// fixtures at a time, a single MLB game rarely has the single highest score
+// in its own crowded slot even when it's a perfectly good one, while a
+// less-crowded sport's ordinary fixture more easily comes out on top of
+// ITS slot. That's a real structural effect, not a bug to "fix" outright -
+// there's no one correct answer for which sport SHOULD win a close call -
+// so instead of guessing, this lets each viewer say which way they'd
+// rather it lean, applied only as a tie-breaking nudge (see
+// PRIORITY_SCORE_DELTA below), never a hard include/exclude.
+const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority';
+// Added to a match's score per priority level before it ever reaches the
+// DP - small next to the 1-10 score scale (a level does NOT let a mediocre
+// match beat a genuinely great one two levels differently ranked), but
+// large enough to reliably swing a close call between two roughly-
+// comparable fixtures, which is the only case this is meant to affect.
+const PRIORITY_SCORE_DELTA = 1.5;
+const PRIORITY_LEVELS = [
+  { level: -1, label: '較少' },
+  { level: 0, label: '一般' },
+  { level: 1, label: '較多' }
+];
+
+function loadPriorities() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
+    return stored && typeof stored === 'object' ? stored : {};
+  } catch {
+    return {};
+  }
+}
+function savePriorities(priorities) {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(priorities));
+  } catch {
+    // Private browsing / blocked storage - the panel still works for this
+    // page view, it just won't remember next time. Not worth surfacing.
+  }
+}
+state.priorities = loadPriorities();
+
+function recomputeAndRender() {
+  if (!state.rawMatches.length) return;
+  state.matches = resolveViewingPlan(state.rawMatches, state.priorities);
+  renderSections();
+}
+
+function renderSettingsPanel() {
+  settingsSportList.replaceChildren(
+    ...Object.keys(SPORT_LABELS_ZH).map(sport => {
+      const row = document.createElement('div');
+      row.className = 'settings-sport-row';
+      const label = document.createElement('span');
+      label.className = 'settings-sport-label';
+      label.textContent = SPORT_LABELS_ZH[sport];
+      const control = document.createElement('div');
+      control.className = 'settings-priority-control';
+      control.setAttribute('role', 'group');
+      control.setAttribute('aria-label', `${SPORT_LABELS_ZH[sport]}優先程度`);
+      const current = state.priorities[sport] || 0;
+      PRIORITY_LEVELS.forEach(({ level, label: levelLabel }) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = levelLabel;
+        btn.setAttribute('aria-pressed', String(level === current));
+        btn.addEventListener('click', () => {
+          if (level === 0) delete state.priorities[sport];
+          else state.priorities[sport] = level;
+          savePriorities(state.priorities);
+          renderSettingsPanel();
+          recomputeAndRender();
+        });
+        control.appendChild(btn);
+      });
+      row.append(label, control);
+      return row;
+    })
+  );
+}
+
+function openSettingsPanel() {
+  renderSettingsPanel();
+  settingsPanel.hidden = false;
+  settingsBackdrop.hidden = false;
+}
+function closeSettingsPanel() {
+  settingsPanel.hidden = true;
+  settingsBackdrop.hidden = true;
+}
+settingsBtn.addEventListener('click', openSettingsPanel);
+settingsCloseBtn.addEventListener('click', closeSettingsPanel);
+settingsBackdrop.addEventListener('click', closeSettingsPanel);
+settingsResetBtn.addEventListener('click', () => {
+  state.priorities = {};
+  savePriorities(state.priorities);
+  renderSettingsPanel();
+  recomputeAndRender();
+});
+
 const LOCALE = 'zh-Hant';
 
 function localTimeFormatter() {
@@ -91,9 +203,18 @@ function relativeLabel(startMs, endMs) {
   const diffMin = Math.round((startMs - now) / 60_000);
   if (diffMin <= 0) return '即將開始';
   if (diffMin < 60) return `${diffMin} 分鐘後`;
-  const hours = Math.floor(diffMin / 60);
-  const mins = diffMin % 60;
-  return mins ? `${hours} 小時 ${mins} 分後` : `${hours} 小時後`;
+  if (diffMin < 1440) {
+    const hours = Math.floor(diffMin / 60);
+    const mins = diffMin % 60;
+    return mins ? `${hours} 小時 ${mins} 分後` : `${hours} 小時後`;
+  }
+  // Past 24 hours, count in whole days instead of letting the hour count
+  // just keep climbing (nobody reads "38 小時後" faster than "1 天 14
+  // 小時後") - this is also the point at which a plain hour count stops
+  // being enough to place a match without checking a calendar.
+  const days = Math.floor(diffMin / 1440);
+  const hours = Math.floor((diffMin % 1440) / 60);
+  return hours ? `${days} 天 ${hours} 小時後` : `${days} 天後`;
 }
 
 // Local calendar date key, e.g. "2026-09-19" - deliberately NOT toISOString
@@ -170,8 +291,7 @@ function overlapMinutes(a, b) {
 
 function compatible(later, earlier) {
   const toleranceMinutes =
-    Math.max(later.competitiveness + later.watchability, earlier.competitiveness + earlier.watchability) / 2 >=
-    HIGH_SCORE_THRESHOLD
+    Math.max(later.effectiveScore, earlier.effectiveScore) >= HIGH_SCORE_THRESHOLD
       ? OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES
       : OVERLAP_TOLERANCE_BASE_MINUTES;
   const gapMinutes = (later.interval.start - earlier.interval.end) / 60_000;
@@ -179,11 +299,24 @@ function compatible(later, earlier) {
 }
 
 // Runs once, across every fetched match regardless of day, right after
-// matches.json loads - not per day tab, so a plan spanning a day boundary
-// (e.g. an 11pm match still running past midnight) is considered as a
-// whole rather than getting artificially cut at each day's edge.
-function resolveViewingPlan(matches) {
-  const withIntervals = matches.map(match => ({ ...match, interval: matchInterval(match) }));
+// matches.json loads (and again, cheaply, whenever the viewer changes a
+// sport priority in Settings - see recomputeAndRender) - not per day tab,
+// so a plan spanning a day boundary (e.g. an 11pm match still running past
+// midnight) is considered as a whole rather than getting artificially cut
+// at each day's edge.
+//
+// `priorities` (see "Sport priority settings" above) nudges effectiveScore
+// away from the AI's own score - the displayed competitiveness/watchability
+// meters and .score always stay the true, un-nudged values; only the DP's
+// notion of "which match wins this slot" sees the adjusted number, so a
+// viewer's preference can tip a close call without pretending a mediocre
+// match is actually great.
+function resolveViewingPlan(matches, priorities = {}) {
+  const withIntervals = matches.map(match => ({
+    ...match,
+    interval: matchInterval(match),
+    effectiveScore: match.score + (priorities[match.sport] || 0) * PRIORITY_SCORE_DELTA
+  }));
   const eligible = withIntervals.filter(m => !isQuietHours(m)).sort((a, b) => a.interval.end - b.interval.end);
 
   const dp = new Array(eligible.length).fill(0);
@@ -199,7 +332,7 @@ function resolveViewingPlan(matches) {
         bestPredIndex = j;
       }
     }
-    dp[i] = eligible[i].score + bestPredScore;
+    dp[i] = eligible[i].effectiveScore + bestPredScore;
     predecessor[i] = bestPredIndex;
     best[i] = Math.max(i > 0 ? best[i - 1] : 0, dp[i]);
   }
@@ -213,7 +346,7 @@ function resolveViewingPlan(matches) {
       continue;
     }
     selected.add(eligible[cursor].id);
-    target = dp[cursor] - eligible[cursor].score;
+    target = dp[cursor] - eligible[cursor].effectiveScore;
     cursor = predecessor[cursor];
   }
 
@@ -234,7 +367,7 @@ function resolveViewingPlan(matches) {
     }
   }
 
-  return withIntervals.map(({ interval, ...match }) => match);
+  return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -282,6 +415,7 @@ function buildMatchCard(match) {
   const end = start + match.durationMinutes * 60_000;
 
   node.querySelector('.match-time-value').textContent = localTimeFormatter().format(new Date(start));
+  node.querySelector('.match-time-end').textContent = `至 ${localTimeFormatter().format(new Date(end))}`;
   node.querySelector('.match-time-relative').textContent = relativeLabel(start, end);
 
   const badge = node.querySelector('.sport-badge');
@@ -540,7 +674,8 @@ function applyMatchData(data) {
   }
 
   state.daysAhead = data.daysAhead;
-  state.matches = resolveViewingPlan(rawMatches);
+  state.rawMatches = rawMatches;
+  state.matches = resolveViewingPlan(rawMatches, state.priorities);
   state.days = buildDayList(state.matches);
   // Keep whatever day the viewer is already looking at if it still exists
   // in the refreshed window (a routine data refresh shouldn't yank someone

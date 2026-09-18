@@ -62,6 +62,12 @@ button {
   max-width: 760px;
   margin: 0 auto;
 }
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
 .page-header h1 {
   margin: 0;
   font-size: 1.9rem;
@@ -77,6 +83,113 @@ button {
   margin: 14px 0 0;
   font-size: 0.82rem;
   color: var(--text-faint);
+}
+
+.settings-btn {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.settings-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 19;
+}
+.settings-panel {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(400px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 64px));
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pinned);
+  padding: 20px;
+  z-index: 20;
+}
+.settings-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-panel-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.settings-panel-header button {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px;
+}
+.settings-hint {
+  margin: 8px 0 18px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.settings-sport-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.settings-sport-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-sport-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.settings-priority-control {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.settings-priority-control button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 6px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.settings-priority-control button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+.settings-reset {
+  display: block;
+  margin: 20px auto 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px;
 }
 
 main#app {
@@ -190,9 +303,16 @@ main#app {
   font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
 }
+.match-time-end {
+  display: block;
+  margin-top: 1px;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
 .match-time-relative {
   display: block;
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 0.72rem;
   color: var(--text-faint);
 }
@@ -383,6 +503,13 @@ main#app {
   z-index: 10;
   animation: update-banner-in 0.25s ease;
 }
+/* Same bug class as .match-watch above: this element's own `display: flex`
+   has equal specificity to the UA stylesheet's `[hidden] { display: none }`
+   and was winning by cascade order, so the banner rendered on every visit
+   regardless of the `hidden` attribute JS actually sets - see
+   public/app.js's pollForUpdates, which only ever removes `hidden` on a
+   real buildId change. */
+.update-banner[hidden] { display: none; }
 .update-banner button {
   border: none;
   background: var(--accent);

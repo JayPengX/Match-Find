@@ -14,11 +14,27 @@
 <body>
   <header class="page-header">
     <div class="page-header-inner">
-      <h1>Match Find</h1>
-      <p class="tagline">值得你空出時間的那一場比賽</p>
+      <div class="page-header-row">
+        <div>
+          <h1>Match Find</h1>
+          <p class="tagline">值得你空出時間的那一場比賽</p>
+        </div>
+        <button id="settings-btn" class="settings-btn" type="button" aria-label="設定">⚙</button>
+      </div>
       <p class="clock" id="local-clock" aria-live="off"></p>
     </div>
   </header>
+
+  <div id="settings-backdrop" class="settings-backdrop" hidden></div>
+  <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="賽事優先順序設定">
+    <div class="settings-panel-header">
+      <h2>賽事優先順序</h2>
+      <button id="settings-close-btn" type="button" aria-label="關閉">✕</button>
+    </div>
+    <p class="settings-hint">時間衝突、精彩程度相近時，優先顯示你偏好的運動。</p>
+    <div id="settings-sport-list" class="settings-sport-list"></div>
+    <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設值</button>
+  </div>
 
   <main id="app" hidden>
     <section id="day-scroller-section">
@@ -65,6 +81,7 @@
     <article class="match-card">
       <div class="match-time">
         <span class="match-time-value"></span>
+        <span class="match-time-end"></span>
         <span class="match-time-relative"></span>
       </div>
       <div class="match-body">
