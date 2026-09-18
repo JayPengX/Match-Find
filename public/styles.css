@@ -323,6 +323,57 @@ main#app {
   font-weight: 700;
 }
 
+/* A recommended match with genuinely decent overlapping alternatives (see
+   app.js's resolveViewingPlan/buildMatchStack) renders as a horizontally
+   swipeable stack instead of either picking one silently or expanding all
+   of them at once - a native CSS scroll-snap carousel, not custom
+   drag/pointer handling, so touch swiping just works the same way it does
+   anywhere else on the page (see the day-picker's own scroller). Only one
+   card is ever on screen at a time, matching "recommend just one by
+   default" - the others are a deliberate swipe away, not clutter. */
+.match-stack {
+  position: relative;
+  margin-bottom: 12px;
+}
+.match-stack-scroller {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.match-stack-scroller::-webkit-scrollbar { display: none; }
+.match-stack-scroller > .match-card {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  margin-bottom: 0;
+}
+.match-stack-dots {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+.match-stack-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.match-stack-dot.is-active {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+.match-stack-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 6px 2px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 /* A single readable line - "7:00 下午 – 9:35 下午" plus a small relative
    label - replaces the old cramped 74px right-hand column of three stacked
    labels, which was hard to scan at a glance, especially on a phone. */
@@ -423,6 +474,10 @@ main#app {
   border-radius: 999px;
   padding: 2px 9px;
 }
+.recommended-tag.is-alternative {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 .match-venue {
   margin: 4px 0 0;
   font-size: 0.8rem;
@@ -455,7 +510,16 @@ main#app {
   font-size: 0.62rem;
   font-weight: 700;
   line-height: 1;
+  overflow: hidden;
 }
+.watch-logo {
+  height: 12px;
+  width: auto;
+  max-width: 34px;
+  object-fit: contain;
+  display: block;
+}
+.watch-logo[hidden] { display: none; }
 .watch-owned {
   flex: none;
   font-size: 0.66rem;
