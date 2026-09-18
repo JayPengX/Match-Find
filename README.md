@@ -2,12 +2,15 @@
 
 **Live site: https://jaypengx-collab.github.io/Match-Find/**
 
-A tiny static site that answers "what's worth watching today" across the
-Premier League, MLS, MLB, NBA, and F1 — shown in your own local time, with
-team logos and bilingual (English / Traditional Chinese) team names, a
-horizontally-scrolling day picker (today through the next two weeks), and a
-curated daily lineup picked so you can watch back-to-back without constant
-channel-hopping or being told to stay up for a 3am fixture.
+A tiny, Traditional-Chinese static site that answers "what's worth watching
+today" across the Premier League, MLS, MLB, NBA, and F1 — shown in your own
+local time, with team logos, home/away labels, bilingual (English /
+Traditional Chinese) team names and venues, where to watch each fixture in
+Taiwan (愛爾達體育台, Apple TV, ...), a horizontally-scrolling day picker
+(today through the next two weeks, auto-jumping past today if today's
+fixtures are already over), and a curated daily lineup picked so you can
+watch back-to-back without constant channel-hopping or being told to stay
+up for a 3am fixture.
 
 No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
 
@@ -25,12 +28,15 @@ Scoring and picking are split across two different places, deliberately:
    that file's own comment; a team missing from it just shows English-only).
 2. It sends only fixtures it hasn't already scored (see "AI score cache"
    below) to a `/match-recommend` endpoint on a shared Cloudflare Worker
-   (see "AI recommendations" below), which asks Gemini to score each one's
-   **competitiveness** (how close it's likely to be) and **watchability**
-   (how entertaining/notable it is regardless of closeness) using real-world
-   knowledge of the teams/drivers involved. This score doesn't depend on
-   who's looking at the page or when, so it's the only part computed once,
-   at build time, and cached.
+   (see "AI recommendations" below), which asks Gemini for four things per
+   fixture: **competitiveness** (how close it's likely to be),
+   **watchability** (how entertaining/notable it is regardless of
+   closeness), the venue's **Traditional Chinese name**, and **where to
+   watch it in Taiwan** (a TV channel or streaming service, e.g. 愛爾達體育台
+   or Apple TV — ESPN's API has no concept of Taiwan broadcast rights at
+   all, so this can only come from the model's own knowledge, same as the
+   scoring). None of this depends on who's looking at the page or when, so
+   it's all computed once, at build time, and cached.
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
@@ -61,12 +67,17 @@ Scoring and picking are split across two different places, deliberately:
 - A horizontally-scrolling **day picker** at the top — today plus the next
   6 days up front, with a "+N more" pill that reveals the rest of the
   already-fetched 14-day window on tap (no extra network request — see
-  above, it's all in the one `matches.json` fetched on page load).
-- For the selected day: **"Recommended for \<day\>"**, the curated
+  above, it's all in the one `matches.json` fetched on page load). Defaults
+  to today, but jumps ahead to the next day that still has a fixture to
+  come if today's are all already over.
+- For the selected day: **推薦賽事 ("recommended fixtures")**, the curated
   back-to-back lineup described above, closest/live match first.
-- Below that: **"All matches — \<day\>"**, every fixture that day
+- Below that: **所有賽事 ("all fixtures")**, every fixture that day
   regardless of whether it made the recommended lineup, so nothing is
   actually hidden — just not pushed as a pick.
+- Each fixture shows both teams with **home/away labels** (主/客), logo, and
+  bilingual English/Traditional-Chinese name; the venue and (when known)
+  Taiwan broadcast channel are shown the same bilingual/Chinese way.
 
 ## AI runs in the background, not on page load
 

@@ -1,29 +1,41 @@
 :root {
   --bg: #0b0d12;
-  --bg-elevated: #12151c;
-  --border: #232733;
-  --text: #eef1f7;
-  --text-muted: #9aa3b5;
+  --bg-elevated: #14171f;
+  --bg-raised: #1a1e28;
+  --border: #262b38;
+  --text: #f1f3f9;
+  --text-muted: #99a2b6;
+  --text-faint: #6b7386;
   --accent: #5b8cff;
-  --accent-soft: rgba(91, 140, 255, 0.15);
+  --accent-soft: rgba(91, 140, 255, 0.16);
   --good: #3ddc97;
+  --good-soft: rgba(61, 220, 151, 0.14);
   --warn: #ffb84d;
-  --radius: 14px;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.45);
+  --shadow-pinned: 0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 32px -14px rgba(91, 140, 255, 0.35);
   --sport-epl: #5b8cff;
   --sport-mls: #3ddc97;
   --sport-mlb: #ff6b6b;
   --sport-nba: #ff9f4d;
   --sport-f1: #b98bff;
+  --font-sans: "Noto Sans TC", -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f5f6fa;
+    --bg: #f4f5f9;
     --bg-elevated: #ffffff;
-    --border: #e1e4ec;
+    --bg-raised: #ffffff;
+    --border: #e6e8f0;
     --text: #14161c;
     --text-muted: #5c6270;
-    --accent-soft: rgba(91, 140, 255, 0.12);
+    --text-faint: #8890a0;
+    --accent-soft: rgba(91, 140, 255, 0.1);
+    --good-soft: rgba(61, 220, 151, 0.12);
+    --shadow-card: 0 1px 2px rgba(20, 22, 30, 0.04), 0 8px 20px -12px rgba(20, 22, 30, 0.12);
+    --shadow-pinned: 0 1px 2px rgba(20, 22, 30, 0.06), 0 16px 28px -14px rgba(91, 140, 255, 0.25);
   }
 }
 
@@ -33,12 +45,17 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.45;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
 }
 
 .page-header {
-  padding: 32px 16px 24px;
+  padding: 36px 16px 26px;
   border-bottom: 1px solid var(--border);
 }
 .page-header-inner {
@@ -48,16 +65,18 @@ body {
 .page-header h1 {
   margin: 0;
   font-size: 1.9rem;
-  letter-spacing: -0.02em;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 .tagline {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   color: var(--text-muted);
+  font-size: 0.95rem;
 }
 .clock {
-  margin: 12px 0 0;
-  font-size: 0.85rem;
-  color: var(--text-muted);
+  margin: 14px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-faint);
 }
 
 main#app {
@@ -67,19 +86,20 @@ main#app {
 }
 
 .section-label {
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--text-muted);
-  margin: 28px 0 12px;
+  margin: 30px 0 12px;
 }
-#recommended-section .section-label { margin-top: 8px; }
+.section-label span { color: var(--text); }
+#recommended-section .section-label { margin-top: 6px; }
 
 .day-scroller {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 4px 2px 8px;
+  padding: 4px 2px 10px;
   scrollbar-width: none;
 }
 .day-scroller::-webkit-scrollbar { display: none; }
@@ -89,17 +109,19 @@ main#app {
   background: var(--bg-elevated);
   color: var(--text);
   border-radius: 999px;
-  padding: 8px 16px;
-  font-size: 0.85rem;
+  padding: 9px 18px;
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  scroll-snap-align: center;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
+.day-pill:active { transform: scale(0.97); }
 .day-pill[aria-selected="true"] {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(91, 140, 255, 0.6);
 }
 .day-pill-more {
   color: var(--text-muted);
@@ -111,61 +133,68 @@ main#app {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-bottom: 4px;
 }
 .filter-chip {
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text);
+  background: transparent;
+  color: var(--text-muted);
   border-radius: 999px;
   padding: 6px 14px;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .filter-chip[aria-pressed="true"] {
-  background: var(--accent);
+  background: var(--accent-soft);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent);
 }
 
 .match-card {
   display: flex;
   gap: 16px;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
-  margin-bottom: 10px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
 }
 .match-card.is-recommended {
-  border-color: var(--accent);
+  border-color: rgba(91, 140, 255, 0.4);
 }
 .match-card.is-muted {
-  opacity: 0.6;
+  opacity: 0.55;
+  box-shadow: none;
 }
 .match-card.is-pinned {
-  background: linear-gradient(155deg, var(--accent-soft), transparent 65%), var(--bg-elevated);
-  border-width: 2px;
-  padding: 16px;
+  background: linear-gradient(160deg, var(--accent-soft), transparent 60%), var(--bg-raised);
+  border-color: rgba(91, 140, 255, 0.45);
+  box-shadow: var(--shadow-pinned);
+  padding: 18px;
 }
 .match-card.is-live .match-time-relative {
   color: var(--good);
   font-weight: 700;
-  text-transform: uppercase;
 }
 
 .match-time {
-  flex: 0 0 72px;
+  flex: 0 0 74px;
   text-align: right;
 }
 .match-time-value {
   display: block;
   font-weight: 700;
   font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
 }
 .match-time-relative {
   display: block;
+  margin-top: 2px;
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--text-faint);
 }
 
 .match-body { flex: 1; min-width: 0; }
@@ -179,24 +208,23 @@ main#app {
   display: inline-block;
   font-size: 0.68rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 8px;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
   border-radius: 999px;
   color: #0b0d12;
   background: #ccc;
 }
 .sport-badge[data-sport="Premier League"] { background: var(--sport-epl); color: #0b0d12; }
-.sport-badge[data-sport="MLS"] { background: var(--sport-mls); }
-.sport-badge[data-sport="MLB"] { background: var(--sport-mlb); }
-.sport-badge[data-sport="NBA"] { background: var(--sport-nba); }
-.sport-badge[data-sport="F1"] { background: var(--sport-f1); }
+.sport-badge[data-sport="MLS"] { background: var(--sport-mls); color: #06231a; }
+.sport-badge[data-sport="MLB"] { background: var(--sport-mlb); color: #2a0808; }
+.sport-badge[data-sport="NBA"] { background: var(--sport-nba); color: #2a1200; }
+.sport-badge[data-sport="F1"] { background: var(--sport-f1); color: #1a0d2e; }
 
 .teams {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin: 6px 0 4px;
+  gap: 5px;
+  margin: 9px 0 6px;
 }
 .team-row {
   display: flex;
@@ -204,6 +232,20 @@ main#app {
   gap: 8px;
   min-width: 0;
   flex-wrap: wrap;
+}
+.team-side {
+  flex: none;
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: var(--text-faint);
+  background: var(--border);
+}
+.team-side.is-home {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 .team-logo {
   width: 20px;
@@ -219,47 +261,60 @@ main#app {
   color: var(--text-muted);
 }
 .team-at {
-  color: var(--text-muted);
-  font-size: 0.72rem;
+  color: var(--text-faint);
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding-left: 28px;
+  padding-left: 33px;
 }
 
 .recommended-tag {
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  text-transform: uppercase;
   color: var(--good);
-  border: 1px solid var(--good);
+  background: var(--good-soft);
   border-radius: 999px;
-  padding: 1px 8px;
+  padding: 2px 9px;
 }
 
 .match-venue {
-  margin: 2px 0 8px;
+  margin: 4px 0 0;
   font-size: 0.8rem;
   color: var(--text-muted);
 }
+.match-watch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+/* .match-watch's own `display: flex` above has the same specificity as the
+   UA stylesheet's `[hidden] { display: none }` and wins by cascade order,
+   so the element would otherwise render as an empty row whenever it's
+   toggled hidden (see app.js's buildMatchCard) - this explicitly restores
+   the hide. */
+.match-watch[hidden] { display: none; }
+.watch-icon { font-size: 0.85rem; }
 
 .score-row {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin: 12px 0 6px;
 }
-.score-meter { flex: 1; min-width: 130px; }
+.score-meter { flex: 1; min-width: 120px; }
 .score-label {
   font-size: 0.68rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--text-faint);
 }
 .meter {
-  height: 6px;
+  height: 5px;
   border-radius: 999px;
   background: var(--border);
-  margin-top: 4px;
+  margin-top: 5px;
   overflow: hidden;
 }
 .meter-fill {
@@ -275,13 +330,14 @@ main#app {
   color: var(--text-muted);
 }
 .match-reason.is-heuristic::after {
-  content: " (estimated, no AI recommendation)";
+  content: "（估計，非 AI 推薦）";
   font-style: italic;
+  color: var(--text-faint);
 }
 
 .conflict-note {
-  margin: 6px 0 0;
-  font-size: 0.78rem;
+  margin: 8px 0 0;
+  font-size: 0.76rem;
   color: var(--warn);
 }
 .conflict-note.is-allowed-overlap {
@@ -296,20 +352,21 @@ main#app {
   padding: 40px 16px;
 }
 #recommended-empty, #all-empty {
-  padding: 20px 4px;
+  padding: 18px 4px;
   text-align: left;
+  font-size: 0.9rem;
 }
 
 .page-footer {
   max-width: 760px;
   margin: 0 auto;
-  padding: 16px 16px 40px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
+  padding: 20px 16px 44px;
+  color: var(--text-faint);
+  font-size: 0.76rem;
 }
 .page-footer p { margin: 4px 0; }
 
 @media (max-width: 480px) {
-  .match-card { gap: 10px; }
-  .match-time { flex-basis: 56px; }
+  .match-card { gap: 10px; padding: 14px; }
+  .match-time { flex-basis: 58px; }
 }
