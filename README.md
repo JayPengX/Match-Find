@@ -246,6 +246,15 @@ per run - refinement runs on the same throttle as the base pass (see
 above), so it costs nothing extra on a routine scheduled run that's
 already within the cooldown window.
 
+Refine calls are spaced ~4 seconds apart rather than fired back-to-back -
+confirmed live that Orbit's Pro-tier models aren't currently reachable on
+this account (each attempt falls through to the same `gemini-3.7-flash`
+the base pass already calls, near-instantly), so a burst of refine calls
+right after the base pass's own calls can blow through Gemini's real
+requests-*per-minute* cap even though the total count for one run is
+small. A few extra seconds of build time is free; re-triggering the same
+avoidable rate limit on every eligible run forever is not.
+
 ## Deployment
 
 This repo deploys itself: `.github/workflows/deploy.yml` runs
