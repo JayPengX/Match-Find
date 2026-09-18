@@ -11,11 +11,17 @@
 //     both relative to the viewer's own clock, and one static build serves
 //     every viewer in every timezone at once.
 //
-// The AI scoring itself (competitiveness/watchability/reason) already
-// happened automatically in the background, on a schedule, well before
-// this page ever loaded - see build-data.mjs. Nothing here ever calls
-// Gemini or the proxy Worker; this only ever reorders/filters numbers that
-// are already sitting in matches.json.
+// The AI scoring itself (competitiveness/watchability/reason/venueZh/
+// whereToWatchTw) already happened automatically in the background, on a
+// schedule, well before this page ever loaded - see build-data.mjs.
+// Nothing here ever calls Gemini or the proxy Worker; this only ever
+// reorders/filters/formats numbers and text that are already sitting in
+// matches.json.
+//
+// UI copy is Traditional Chinese throughout; team names, venues, and the
+// AI's reasoning stay bilingual (see buildTeamRow/renderVenue) since an
+// English team/venue name is often the more recognizable half for a fixture
+// nobody has a settled Chinese name for yet.
 
 const state = {
   matches: [], // every fetched match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
@@ -23,6 +29,22 @@ const state = {
   visibleDayCount: 7,
   selectedDayKey: null,
   activeSport: 'all'
+};
+
+// Sport labels as ESPN/build-data.mjs spell them internally (see
+// TEAM_LEAGUES in that script) stay the stable data key and CSS hook
+// (data-sport="Premier League" etc.) - only the on-screen label goes
+// through this map, so the underlying data model never has to change
+// just because the display language does. MLB/NBA/MLS/F1 stay as their
+// English initialisms - that's how Taiwanese sports media normally
+// writes them too, even in otherwise-Chinese text; only the Premier
+// League has a standard, universally-used Chinese short name.
+const SPORT_LABELS_ZH = {
+  'Premier League': '英超',
+  MLS: 'MLS',
+  MLB: 'MLB',
+  NBA: 'NBA',
+  F1: 'F1'
 };
 
 const clockEl = document.getElementById('local-clock');
@@ -40,33 +62,35 @@ const generatedNote = document.getElementById('generated-note');
 const cardTemplate = document.getElementById('match-card-template');
 const teamRowTemplate = document.getElementById('team-row-template');
 
+const LOCALE = 'zh-Hant';
+
 function localTimeFormatter() {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+  return new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', minute: '2-digit' });
 }
 function localDayFormatter() {
-  return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  return new Intl.DateTimeFormat(LOCALE, { weekday: 'long', month: 'long', day: 'numeric' });
 }
 function shortDayFormatter() {
-  return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' });
+  return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'numeric', day: 'numeric' });
 }
 
 function updateClock() {
   const now = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  clockEl.textContent = `Your local time: ${localTimeFormatter().format(now)} (${tz})`;
+  clockEl.textContent = `你的當地時間：${localTimeFormatter().format(now)}（${tz}）`;
 }
 updateClock();
 setInterval(updateClock, 30_000);
 
 function relativeLabel(startMs, endMs) {
   const now = Date.now();
-  if (now >= startMs && now < endMs) return 'live now';
+  if (now >= startMs && now < endMs) return '直播中';
   const diffMin = Math.round((startMs - now) / 60_000);
-  if (diffMin <= 0) return 'starting now';
-  if (diffMin < 60) return `in ${diffMin} min`;
+  if (diffMin <= 0) return '即將開始';
+  if (diffMin < 60) return `${diffMin} 分鐘後`;
   const hours = Math.floor(diffMin / 60);
   const mins = diffMin % 60;
-  return mins ? `in ${hours}h ${mins}m` : `in ${hours}h`;
+  return mins ? `${hours} 小時 ${mins} 分後` : `${hours} 小時後`;
 }
 
 // Local calendar date key, e.g. "2026-09-19" - deliberately NOT toISOString
@@ -82,8 +106,8 @@ function dayLabelFor(date, { short = false } = {}) {
   const today = new Date();
   const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const diffDays = Math.round((startOfDay(date) - startOfDay(today)) / 86_400_000);
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Tomorrow';
+  if (diffDays === 0) return '今天';
+  if (diffDays === 1) return '明天';
   return (short ? shortDayFormatter() : localDayFormatter()).format(date);
 }
 
@@ -190,7 +214,6 @@ function resolveViewingPlan(matches) {
     cursor = predecessor[cursor];
   }
 
-  const byId = new Map(withIntervals.map(m => [m.id, m]));
   withIntervals.forEach(match => {
     match.recommended = selected.has(match.id);
   });
@@ -217,7 +240,7 @@ function fillMeter(el, value) {
   el.style.width = `${Math.max(0, Math.min(10, value)) * 10}%`;
 }
 
-function buildTeamRow({ logo, name, nameZh }) {
+function buildTeamRow({ logo, name, nameZh, homeAway }) {
   const node = teamRowTemplate.content.firstElementChild.cloneNode(true);
   const img = node.querySelector('.team-logo');
   if (logo) {
@@ -227,9 +250,27 @@ function buildTeamRow({ logo, name, nameZh }) {
   } else {
     img.hidden = true;
   }
+  const sideEl = node.querySelector('.team-side');
+  if (homeAway === 'home' || homeAway === 'away') {
+    sideEl.textContent = homeAway === 'home' ? '主' : '客';
+    sideEl.classList.add(homeAway === 'home' ? 'is-home' : 'is-away');
+  } else {
+    sideEl.hidden = true;
+  }
   node.querySelector('.team-name-en').textContent = name;
   node.querySelector('.team-name-zh').textContent = nameZh || '';
   return node;
+}
+
+// English + Chinese together, same reasoning as team names (see README) -
+// an obscure US ballpark's English name is often more recognizable than a
+// guessed Chinese transliteration, so neither is dropped when both exist.
+function renderVenue(el, match) {
+  if (!match.venue) {
+    el.textContent = '';
+    return;
+  }
+  el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
 function buildMatchCard(match) {
@@ -241,7 +282,7 @@ function buildMatchCard(match) {
   node.querySelector('.match-time-relative').textContent = relativeLabel(start, end);
 
   const badge = node.querySelector('.sport-badge');
-  badge.textContent = match.sport;
+  badge.textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
   badge.dataset.sport = match.sport;
 
   const teamsEl = node.querySelector('[data-teams]');
@@ -250,14 +291,20 @@ function buildMatchCard(match) {
     teamsEl.appendChild(buildTeamRow(away));
     const at = document.createElement('span');
     at.className = 'team-at';
-    at.textContent = '@';
+    at.textContent = 'vs';
     teamsEl.appendChild(at);
     teamsEl.appendChild(buildTeamRow(home));
   } else {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
 
-  node.querySelector('.match-venue').textContent = match.venue || '';
+  renderVenue(node.querySelector('.match-venue'), match);
+
+  const watchEl = node.querySelector('.match-watch');
+  if (match.whereToWatchTw && match.whereToWatchTw !== '無已知台灣轉播') {
+    watchEl.hidden = false;
+    watchEl.querySelector('.watch-text').textContent = match.whereToWatchTw;
+  }
 
   const recommendedTag = node.querySelector('.recommended-tag');
   if (match.recommended) recommendedTag.hidden = false;
@@ -274,12 +321,12 @@ function buildMatchCard(match) {
     const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
-    conflictNote.textContent = `Overlaps by about ${match.overlapsWithPrevious.minutes} min with ${previous ? previous.name : 'the previous pick'} — kept in the lineup anyway for its quality.`;
+    conflictNote.textContent = `與「${previous ? previous.name : '前一場推薦賽事'}」重疊約 ${match.overlapsWithPrevious.minutes} 分鐘——因賽事精彩仍納入推薦。`;
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
       conflictNote.hidden = false;
-      conflictNote.textContent = `Overlaps with ${others.map(m => m.name).join(', ')} — that's the recommended pick for this time slot.`;
+      conflictNote.textContent = `與「${others.map(m => m.name).join('、')}」時間重疊——該時段推薦的是這一場。`;
     }
     node.classList.add('is-muted');
   }
@@ -305,8 +352,12 @@ function pinCurrentOrNext(sortedMatches) {
   return [pinned, ...sortedMatches.slice(0, pinIndex), ...sortedMatches.slice(pinIndex + 1)];
 }
 
+function matchesForDay(dayKey) {
+  return state.matches.filter(m => localDateKey(new Date(m.startTimeUtc)) === dayKey);
+}
+
 function matchesForSelectedDay() {
-  return state.matches.filter(m => localDateKey(new Date(m.startTimeUtc)) === state.selectedDayKey);
+  return matchesForDay(state.selectedDayKey);
 }
 
 function applySportFilter(matches) {
@@ -341,7 +392,7 @@ function renderDayScroller() {
     const more = document.createElement('button');
     more.type = 'button';
     more.className = 'day-pill day-pill-more';
-    more.textContent = `+${state.days.length - state.visibleDayCount} more`;
+    more.textContent = `還有 ${state.days.length - state.visibleDayCount} 天 ＋`;
     more.addEventListener('click', () => {
       state.visibleDayCount = state.days.length;
       renderDayScroller();
@@ -361,7 +412,7 @@ function renderFilters() {
       const btn = document.createElement('button');
       btn.className = 'filter-chip';
       btn.type = 'button';
-      btn.textContent = sport === 'all' ? 'All sports' : sport;
+      btn.textContent = sport === 'all' ? '全部' : SPORT_LABELS_ZH[sport] || sport;
       btn.setAttribute('aria-pressed', String(sport === state.activeSport));
       btn.addEventListener('click', () => {
         state.activeSport = sport;
@@ -437,6 +488,28 @@ function buildDayList(matches) {
   return days;
 }
 
+// "Today" is the natural default, but if every one of today's fixtures has
+// already ended (or there simply are none), staying on "today" would just
+// show an empty state for no reason - jump ahead to the next day that
+// actually has a fixture still to come instead.
+function pickInitialDay(days, matches) {
+  const now = Date.now();
+  const todayKey = localDateKey(new Date());
+  const todayHasRemaining = matches.some(m => {
+    if (localDateKey(new Date(m.startTimeUtc)) !== todayKey) return false;
+    return Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now;
+  });
+  if (todayHasRemaining) return todayKey;
+
+  const todayIndex = days.findIndex(d => d.key === todayKey);
+  for (let i = todayIndex + 1; i < days.length; i++) {
+    if (matches.some(m => localDateKey(new Date(m.startTimeUtc)) === days[i].key)) {
+      return days[i].key;
+    }
+  }
+  return todayKey;
+}
+
 async function init() {
   try {
     const response = await fetch('./data/matches.json', { cache: 'no-store' });
@@ -447,7 +520,7 @@ async function init() {
 
     if (data.generatedAt) {
       const generated = new Date(data.generatedAt);
-      generatedNote.textContent = `Data last generated ${localDayFormatter().format(generated)}, ${localTimeFormatter().format(generated)} your time.`;
+      generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
     }
 
     if (!rawMatches.length) {
@@ -457,10 +530,10 @@ async function init() {
 
     state.matches = resolveViewingPlan(rawMatches);
     state.days = buildDayList(state.matches);
-    state.selectedDayKey = localDateKey(new Date());
-    if (!state.days.some(d => d.key === state.selectedDayKey)) {
-      state.selectedDayKey = state.days[0]?.key;
-    }
+    state.selectedDayKey = pickInitialDay(state.days, state.matches);
+
+    const selectedIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
+    if (selectedIndex >= state.visibleDayCount) state.visibleDayCount = selectedIndex + 1;
 
     appEl.hidden = false;
     renderDayScroller();

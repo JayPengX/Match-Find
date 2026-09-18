@@ -1,56 +1,59 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Match Find — what to watch tonight</title>
-<meta name="description" content="Premier League, MLS, MLB, NBA, and F1 fixtures ranked by competitiveness and watchability, shown in your own local time." />
+<title>Match Find — 今晚看什麼</title>
+<meta name="description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度與競爭程度推薦，並換算成你的當地時間。" />
 <link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <header class="page-header">
     <div class="page-header-inner">
       <h1>Match Find</h1>
-      <p class="tagline">The one match worth clearing your evening for.</p>
+      <p class="tagline">值得你空出時間的那一場比賽</p>
       <p class="clock" id="local-clock" aria-live="off"></p>
     </div>
   </header>
 
   <main id="app" hidden>
     <section id="day-scroller-section">
-      <div id="day-scroller" class="day-scroller" role="tablist" aria-label="Select day"></div>
+      <div id="day-scroller" class="day-scroller" role="tablist" aria-label="選擇日期"></div>
     </section>
 
     <section id="filters-section">
-      <div id="sport-filters" class="filter-row" role="group" aria-label="Filter by sport"></div>
+      <div id="sport-filters" class="filter-row" role="group" aria-label="依運動篩選"></div>
     </section>
 
     <section id="recommended-section">
-      <h2 class="section-label">Recommended for <span data-day-label></span></h2>
+      <h2 class="section-label"><span data-day-label></span>推薦賽事</h2>
       <div id="recommended-list"></div>
       <p id="recommended-empty" class="empty-state" hidden>
-        Nothing stands out for this day — or everything on is late-night, which this site won't push as a "must watch."
+        這一天沒有特別推薦的賽事，也可能都在深夜時段——本站不會把深夜賽事列為必看推薦。
       </p>
     </section>
 
     <section id="all-matches-section">
-      <h2 class="section-label">All matches — <span data-day-label></span></h2>
+      <h2 class="section-label"><span data-day-label></span>所有賽事</h2>
       <div id="all-match-list"></div>
-      <p id="all-empty" class="empty-state" hidden>No fixtures found for this day.</p>
+      <p id="all-empty" class="empty-state" hidden>這一天沒有找到任何賽事。</p>
     </section>
   </main>
 
   <p id="empty-state" class="empty-state" hidden>
-    No upcoming fixtures found in the next window. Check back soon.
+    近期沒有找到即將開始的賽事，請稍後再回來看看。
   </p>
   <p id="error-state" class="empty-state" hidden>
-    Couldn't load match data. The site may still be building its first data set — try again shortly.
+    無法載入賽事資料，網站可能正在建置第一批資料，請稍後再試一次。
   </p>
 
   <footer class="page-footer">
     <p id="generated-note"></p>
-    <p>Schedules from ESPN's public API · recommendations from Gemini via a shared proxy Worker · refreshes automatically every few hours.</p>
+    <p>賽程資料來自 ESPN 公開 API．推薦內容由 Gemini AI 透過共用代理伺服器產生．每數小時自動更新一次。</p>
   </footer>
 
   <template id="match-card-template">
@@ -62,17 +65,18 @@
       <div class="match-body">
         <div class="match-heading">
           <span class="sport-badge"></span>
-          <span class="recommended-tag" hidden>Recommended</span>
+          <span class="recommended-tag" hidden>推薦</span>
         </div>
         <div class="teams" data-teams></div>
         <p class="match-venue"></p>
+        <p class="match-watch" hidden><span class="watch-icon" aria-hidden="true">📺</span><span class="watch-text"></span></p>
         <div class="score-row">
           <div class="score-meter">
-            <span class="score-label">Competitiveness</span>
+            <span class="score-label">競爭度</span>
             <div class="meter"><div class="meter-fill competitiveness-fill"></div></div>
           </div>
           <div class="score-meter">
-            <span class="score-label">Watchability</span>
+            <span class="score-label">精彩度</span>
             <div class="meter"><div class="meter-fill watchability-fill"></div></div>
           </div>
         </div>
@@ -84,6 +88,7 @@
 
   <template id="team-row-template">
     <div class="team-row">
+      <span class="team-side"></span>
       <img class="team-logo" alt="" loading="lazy" referrerpolicy="no-referrer" />
       <span class="team-name-en"></span>
       <span class="team-name-zh"></span>

@@ -227,8 +227,14 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
 // since this has no real sports knowledge behind it.
 function heuristicScore(match) {
   const records = match.competitors.map(c => c.record).filter(Boolean);
+  // The site is Traditional Chinese throughout (see public/app.js) - this
+  // reason has to read that way too even though it never touched Gemini,
+  // same as venueZh/whereToWatchTw below staying empty rather than an
+  // untranslated English placeholder. The UI itself appends an "(估計，非
+  // AI 推薦)" caveat (see styles.css .is-heuristic) - this stays purely
+  // descriptive so the two don't repeat each other.
   if (records.length !== 2) {
-    return { competitiveness: 5, watchability: 5, reason: 'No record data available for either side yet.' };
+    return { competitiveness: 5, watchability: 5, reason: '目前沒有雙方的戰績資料可供估計。', venueZh: '', whereToWatchTw: '' };
   }
   const winRates = records.map(r => r.wins / Math.max(1, r.wins + r.losses));
   const diff = Math.abs(winRates[0] - winRates[1]);
@@ -236,10 +242,13 @@ function heuristicScore(match) {
   return {
     competitiveness: Math.max(1, Math.min(8, Math.round(8 - diff * 16))),
     watchability: Math.max(1, Math.min(8, Math.round(avg * 10))),
-    // The UI itself appends the "(estimated, no AI recommendation)" caveat
-    // (see styles.css .is-heuristic) - this stays purely descriptive so the
-    // two don't repeat each other.
-    reason: `Estimated from each side's current win-loss record (${records[0].wins}-${records[0].losses} vs ${records[1].wins}-${records[1].losses}).`
+    reason: `依雙方目前戰績估計（${records[0].wins}勝${records[0].losses}敗 對 ${records[1].wins}勝${records[1].losses}敗）。`,
+    // Neither can be guessed locally - no real-world knowledge behind this
+    // fallback path at all (see this function's own top comment) - so both
+    // stay empty and the UI just omits that line rather than showing a
+    // fabricated translation or broadcaster.
+    venueZh: '',
+    whereToWatchTw: ''
   };
 }
 
@@ -286,10 +295,11 @@ function chunk(array, size) {
 // Cloudflare Worker, which owns the actual Gemini prompt/schema (see that
 // repo's cloudflare-worker/orbit-worker.js, route /match-recommend) and
 // holds the real API key - this script only ever sends {id, sport, name,
-// startTimeUtc, context}, the same shape for every fixture regardless of
-// sport. This is the entire reason Gemini quota use stays flat no matter
-// how often the build runs: a match that was already scored on a previous
-// run simply isn't included in the request body at all. Batched under
+// startTimeUtc, context, venue}, the same shape for every fixture
+// regardless of sport. This is the entire reason Gemini quota use stays
+// flat no matter how often the build runs: a match that was already
+// scored on a previous run simply isn't included in the request body at
+// all. Batched under
 // AI_SCORE_BATCH_SIZE (see that constant's own comment) so a cold cache
 // across a 14-day window never exceeds the proxy's per-request cap.
 async function fetchAiScores(matchesNeedingScore) {
@@ -301,7 +311,8 @@ async function fetchAiScores(matchesNeedingScore) {
       sport: m.sport,
       name: m.name,
       startTimeUtc: m.startTimeUtc,
-      context: m.context
+      context: m.context,
+      venue: m.venue
     }));
     try {
       const response = await fetch(`${PROXY_URL}/match-recommend`, {
@@ -343,7 +354,21 @@ async function main() {
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
   let cache = pruneCache(await loadCache(), now);
-  const needsScoring = matches.filter(m => !cache[m.id] || cache[m.id].source !== 'ai');
+  // Also retries a cached AI entry from before venueZh/whereToWatchTw
+  // existed (typeof check, not just "in", since an older cache write - or
+  // a Gemini response that genuinely returned "" - both leave the key
+  // present as a string) - otherwise every match scored before that fields
+  // change would keep showing blank forever, never re-sent because
+  // source:'ai' alone already marked it "done".
+  const needsScoring = matches.filter(m => {
+    const cached = cache[m.id];
+    return (
+      !cached ||
+      cached.source !== 'ai' ||
+      typeof cached.venueZh !== 'string' ||
+      typeof cached.whereToWatchTw !== 'string'
+    );
+  });
   const freshPicks = await fetchAiScores(needsScoring);
 
   for (const match of needsScoring) {
@@ -354,6 +379,8 @@ async function main() {
         competitiveness: Math.max(1, Math.min(10, Math.round(pick.competitiveness))),
         watchability: Math.max(1, Math.min(10, Math.round(pick.watchability))),
         reason: String(pick.reason || '').slice(0, 300),
+        venueZh: String(pick.venueZh || '').slice(0, 100),
+        whereToWatchTw: String(pick.whereToWatchTw || '').slice(0, 100),
         source: 'ai'
       };
     } else {
@@ -367,6 +394,8 @@ async function main() {
     match.competitiveness = scored.competitiveness;
     match.watchability = scored.watchability;
     match.reason = scored.reason;
+    match.venueZh = scored.venueZh || '';
+    match.whereToWatchTw = scored.whereToWatchTw || '';
     match.source = scored.source;
     if (scored.source === 'ai') usedAi = true;
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
