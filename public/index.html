@@ -17,28 +17,36 @@
     </div>
   </header>
 
-  <main id="app">
-    <section id="spotlight-section" hidden>
-      <h2 class="section-label">Top pick</h2>
-      <article id="spotlight-card" class="spotlight-card"></article>
+  <main id="app" hidden>
+    <section id="day-scroller-section">
+      <div id="day-scroller" class="day-scroller" role="tablist" aria-label="Select day"></div>
     </section>
 
     <section id="filters-section">
-      <h2 class="section-label">All upcoming fixtures</h2>
       <div id="sport-filters" class="filter-row" role="group" aria-label="Filter by sport"></div>
     </section>
 
-    <section id="list-section">
-      <div id="match-list"></div>
+    <section id="recommended-section">
+      <h2 class="section-label">Recommended for <span data-day-label></span></h2>
+      <div id="recommended-list"></div>
+      <p id="recommended-empty" class="empty-state" hidden>
+        Nothing stands out for this day — or everything on is late-night, which this site won't push as a "must watch."
+      </p>
     </section>
 
-    <p id="empty-state" class="empty-state" hidden>
-      No upcoming fixtures found in the next window. Check back soon.
-    </p>
-    <p id="error-state" class="empty-state" hidden>
-      Couldn't load match data. The site may still be building its first data set — try again shortly.
-    </p>
+    <section id="all-matches-section">
+      <h2 class="section-label">All matches — <span data-day-label></span></h2>
+      <div id="all-match-list"></div>
+      <p id="all-empty" class="empty-state" hidden>No fixtures found for this day.</p>
+    </section>
   </main>
+
+  <p id="empty-state" class="empty-state" hidden>
+    No upcoming fixtures found in the next window. Check back soon.
+  </p>
+  <p id="error-state" class="empty-state" hidden>
+    Couldn't load match data. The site may still be building its first data set — try again shortly.
+  </p>
 
   <footer class="page-footer">
     <p id="generated-note"></p>

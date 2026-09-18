@@ -1,17 +1,23 @@
 # Match Find
 
-A tiny static site that builds one continuous viewing plan out of everything
-on today across the Premier League, MLS, MLB, NBA, and F1 — which fixture is
-actually worth watching, shown in your own local time, with team logos and
-bilingual (English / Traditional Chinese) team names, and picks chosen so a
-viewer can watch them back-to-back without constant channel-hopping.
+**Live site: https://jaypengx-collab.github.io/Match-Find/**
+
+A tiny static site that answers "what's worth watching today" across the
+Premier League, MLS, MLB, NBA, and F1 — shown in your own local time, with
+team logos and bilingual (English / Traditional Chinese) team names, a
+horizontally-scrolling day picker (today through the next two weeks), and a
+curated daily lineup picked so you can watch back-to-back without constant
+channel-hopping or being told to stay up for a 3am fixture.
 
 No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
 
 ## How it works
 
-1. **`scripts/build-data.mjs`** (run by the GitHub Action below, not by a
-   browser) fetches upcoming fixtures for the next ~36 hours from
+Scoring and picking are split across two different places, deliberately:
+
+1. **`scripts/build-data.mjs`** (run by the scheduled GitHub Action below,
+   never by a browser — see "AI runs in the background" below) fetches
+   upcoming fixtures for the next 14 days from
    [ESPN's public scoreboard API](https://site.api.espn.com) — no API key
    needed for this part. Each fixture comes with both teams' ESPN-hosted
    logo and a Traditional Chinese name looked up from
@@ -22,12 +28,23 @@ No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
    (see "AI recommendations" below), which asks Gemini to score each one's
    **competitiveness** (how close it's likely to be) and **watchability**
    (how entertaining/notable it is regardless of closeness) using real-world
-   knowledge of the teams/drivers involved.
-3. **`resolveViewingPlan`** picks the set of fixtures across the *whole*
-   window (every sport combined, one plan, not one per league) that
+   knowledge of the teams/drivers involved. This score doesn't depend on
+   who's looking at the page or when, so it's the only part computed once,
+   at build time, and cached.
+3. The result — every fixture, scored, nothing filtered or picked yet — is
+   written to `public/data/matches.json`.
+4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
+   picks the set of fixtures across the whole fetched window that
    maximizes total score while staying watchable back-to-back — a
    weighted-interval-scheduling-style pass over each sport's *average*
-   broadcast length (ESPN never gives an actual end time):
+   broadcast length (ESPN never gives an actual end time). This has to run
+   client-side, not at build time, because its two real inputs are both
+   relative to *your* clock, and one static build serves every viewer in
+   every timezone at once:
+   - A fixture whose **local** start time falls between midnight and 7am
+     is never eligible to be picked, however good its score — this site
+     won't tell you a 3am kickoff is unmissable. It still shows up further
+     down in "all matches", just never as a recommended pick.
    - A small tolerance absorbs the fact that a duration is only ever a
      per-sport average, not this match's real length.
    - A much larger tolerance kicks in whenever either match involved has a
@@ -36,31 +53,46 @@ No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
      next slot a bit rather than being dropped, or bumping its neighbor,
      over a minor overlap. The UI calls this out explicitly ("Overlaps by
      about N min with X — kept in the lineup anyway for its quality").
-   - This all happens once in UTC at build time (an overlap in UTC is the
-     same overlap for every viewer, regardless of timezone), not per
-     visitor.
-4. The result is written to `public/data/matches.json`, which the static
-   page (`public/index.html` + `public/app.js`) reads and renders, converting
-   every kickoff time to *your* browser's local timezone client-side.
+   - Whichever pick is currently live, or (failing that) the soonest one
+     still to come, is pinned to the top of the day's list.
 
-If the Gemini proxy isn't configured, or a call to it fails, affected
-fixtures fall back to a simple local heuristic based on each team's
-win-loss record — the site still works, just with less insightful picks
-(shown as "estimated" in the UI).
+## Page layout
+
+- A horizontally-scrolling **day picker** at the top — today plus the next
+  6 days up front, with a "+N more" pill that reveals the rest of the
+  already-fetched 14-day window on tap (no extra network request — see
+  above, it's all in the one `matches.json` fetched on page load).
+- For the selected day: **"Recommended for \<day\>"**, the curated
+  back-to-back lineup described above, closest/live match first.
+- Below that: **"All matches — \<day\>"**, every fixture that day
+  regardless of whether it made the recommended lineup, so nothing is
+  actually hidden — just not pushed as a pick.
+
+## AI runs in the background, not on page load
+
+Nothing in the browser ever calls Gemini or the proxy Worker. The only
+network request the page itself makes is one `fetch('./data/matches.json')`
+on load. All AI scoring happened earlier, unattended, in the scheduled
+build (see "Deployment" below) — by the time anyone opens the page, every
+fixture in the window is already scored and sitting in a static file.
 
 ## AI score cache (keeping Gemini usage flat)
 
-A scheduled run every 6 hours would, naively, re-score the same ~30-hour
-overlap of fixtures on every single run. Instead, `data/ai-cache.json` (a
-file *committed to the repo*, unlike the fully-regenerated
-`public/data/matches.json`) records every match Gemini has already scored,
-keyed by a stable match id. Each build only sends fixtures **not** already
-in that cache — so a given match is scored by Gemini exactly once, on
-whichever run first sees it inside the fetch window, no matter how many
-times the build runs afterward. The workflow commits the cache back to the
-repo only when it actually changed (see `.github/workflows/deploy.yml`'s
-"Commit updated AI score cache" step), and entries older than 12 hours past
-kickoff are pruned automatically so the file doesn't grow forever.
+A scheduled run every 6 hours would, naively, re-score the same
+heavily-overlapping 14-day window of fixtures on every single run. Instead,
+`data/ai-cache.json` (a file *committed to the repo*, unlike the
+fully-regenerated `public/data/matches.json`) records every match Gemini has
+already scored, keyed by a stable match id. Each build only sends fixtures
+**not** already in that cache — so a given match is scored by Gemini exactly
+once, on whichever run first sees it inside the fetch window, no matter how
+many times the build runs afterward. Requests are batched under the shared
+Worker's 80-fixtures-per-call cap (see `AI_SCORE_BATCH_SIZE` — matters most
+on the very first run, when nothing is cached yet and a 14-day window can
+easily find several hundred new fixtures at once). The workflow commits the
+cache back to the repo only when it actually changed (see
+`.github/workflows/deploy.yml`'s "Commit updated AI score cache" step), and
+entries older than 12 hours past kickoff are pruned automatically so the
+file doesn't grow forever.
 
 ## Deployment
 
