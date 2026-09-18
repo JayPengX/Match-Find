@@ -64,7 +64,7 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // below retries anything scored under an older one. A one-time full
 // re-score costs quota, but it's the only way an already-cached match ever
 // benefits from a prompt fix instead of keeping a stale answer forever.
-const PROMPT_VERSION = 2;
+const PROMPT_VERSION = 3;
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
@@ -388,13 +388,23 @@ function chunk(array, size) {
 // Cloudflare Worker, which owns the actual Gemini prompt/schema (see that
 // repo's cloudflare-worker/orbit-worker.js, route /match-recommend) and
 // holds the real API key - this script only ever sends {id, sport, name,
-// startTimeUtc, context, venue}, the same shape for every fixture
-// regardless of sport. This is the entire reason Gemini quota use stays
-// flat no matter how often the build runs: a match that was already
+// startTimeUtc, context, venue, broadcast}, the same shape for every
+// fixture regardless of sport. This is the entire reason Gemini quota use
+// stays flat no matter how often the build runs: a match that was already
 // scored on a previous run simply isn't included in the request body at
 // all. Batched under
 // AI_SCORE_BATCH_SIZE (see that constant's own comment) so a cold cache
 // across a 14-day window never exceeds the proxy's per-request cap.
+//
+// `broadcast` is ESPN's own on-record national broadcaster for the
+// fixture (e.g. "Apple TV", "TBS", "Fox") - not a Taiwan answer by itself,
+// but a concrete, per-fixture signal the prompt can reason from instead of
+// guessing blind. A generic web search for "which channel shows this one
+// specific game in Taiwan" often has thin coverage; knowing the game is,
+// say, one of MLB's Apple TV-exclusive "Friday Night Baseball" slate (a
+// genuinely global exclusive with no regional blackout, unlike a plain US
+// cable network name) is a much stronger and cheaper hint than hoping
+// search finds an authoritative Taiwan-specific source for one game.
 async function fetchAiScores(matchesNeedingScore) {
   if (!PROXY_URL || !matchesNeedingScore.length) return new Map();
   const picks = new Map();
@@ -405,7 +415,8 @@ async function fetchAiScores(matchesNeedingScore) {
       name: m.name,
       startTimeUtc: m.startTimeUtc,
       context: m.context,
-      venue: m.venue
+      venue: m.venue,
+      broadcast: m.broadcast
     }));
     try {
       const response = await fetch(`${PROXY_URL}/match-recommend`, {
