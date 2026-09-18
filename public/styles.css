@@ -219,6 +219,110 @@ button {
   padding: 4px;
 }
 
+.settings-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.settings-chip.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.settings-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sync-code-display {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.sync-code-display button {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sync-code-display button:hover { color: var(--accent); border-color: var(--accent); }
+.sync-action-btn {
+  display: block;
+  width: 100%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.86rem;
+  border-radius: var(--radius-sm);
+  padding: 11px 16px;
+  cursor: pointer;
+}
+.sync-connect-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sync-connect-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.sync-connect-row .sync-action-btn {
+  flex: none;
+  width: auto;
+}
+.sync-error {
+  margin: 12px 0 0;
+  font-size: 0.82rem;
+  color: var(--warn);
+}
+.sync-error[hidden] { display: none; }
+
+#sync-prompt-banner {
+  bottom: 18px;
+}
+#sync-prompt-banner.is-raised {
+  bottom: 78px;
+}
+.sync-prompt-dismiss {
+  background: transparent !important;
+  color: var(--text-faint) !important;
+  font-weight: 600 !important;
+}
+
 main#app {
   max-width: 760px;
   margin: 0 auto;

@@ -14,9 +14,11 @@
 // The AI scoring itself (competitiveness/watchability/reason/venueZh/
 // whereToWatchTw) already happened automatically in the background, on a
 // schedule, well before this page ever loaded - see build-data.mjs.
-// Nothing here ever calls Gemini or the proxy Worker; this only ever
-// reorders/filters/formats numbers and text that are already sitting in
-// matches.json.
+// Nothing here ever calls Gemini; the one thing this file DOES call over
+// the network besides matches.json itself is the settings-sync proxy (see
+// "Cross-device settings sync" below) - a viewer's own sport-priority/
+// enabled-sports/subscribed-services choices, never fixture data, and
+// never Gemini.
 //
 // UI copy is Traditional Chinese throughout; team names, venues, and the
 // AI's reasoning stay bilingual (see buildTeamRow/renderVenue) since an
@@ -24,14 +26,19 @@
 // nobody has a settled Chinese name for yet.
 
 const state = {
-  rawMatches: [], // the last fetched payload's matches with a real time, untouched - kept so a priority change can re-run resolveViewingPlan without re-fetching
+  allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
+  rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
-  matches: [], // every fetched (non-TBD) match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
+  matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   visibleDayCount: 7,
   selectedDayKey: null,
   activeSport: 'all',
-  priorityOrder: [] // sports ranked best-to-least - see "Sport priority settings" below
+  priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
+  enabledSports: [], // sports to show at all - see "Enabled sports settings" below
+  myServiceIds: [], // subscribed services - see "Broadcast service registry" below
+  proxyUrl: '', // from matches.json - where sync calls go (see "Cross-device settings sync")
+  syncPasscode: '' // '' when not paired to a sync code - see "Cross-device settings sync"
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -55,7 +62,7 @@ const SPORT_LABELS_ZH = {
 // `whereToWatchTw` (see Orbit's /match-recommend) is free-form text written
 // by Gemini, not a fixed enum - this registry is what turns that text back
 // into something the UI can badge/color/reason about consistently, and
-// what OWNED (see MY_SERVICE_IDS below) means at all. Adding a new service
+// what OWNED (see DEFAULT_MY_SERVICE_IDS below) means at all. Adding a new service
 // later is just one more entry here (id, matching pattern, badge/color) -
 // nothing else in this file needs to change, same reasoning as
 // SPORT_LABELS_ZH above for sports.
@@ -125,14 +132,14 @@ const SERVICES = [
   { id: 'myvideo', pattern: /myVideo/i, label: 'myVideo', badge: 'MV', color: '#ff6600' },
   { id: 'mlbtv', pattern: /MLB\.?TV/i, label: 'MLB.TV', badge: 'MLB', color: '#041e42' }
 ];
-// Which of the above the site owner actually subscribes to right now -
+// Which of the above a viewer actually subscribes to - editable in
+// Settings (see "Enabled sports / subscribed services settings" below),
 // used only as a tie-breaking nudge in resolveViewingPlan (a match on a
 // service you don't have is still shown and can still be recommended, see
-// OWNED_SERVICE_SCORE_BONUS below) and as a small "你有訂閱" mark in the UI.
-// Plain data, not a setting - unlike sport priority, this isn't something
-// worth exposing per-viewer since this is a personal site with one real
-// owner; change this array directly if that ever stops being true.
-const MY_SERVICE_IDS = new Set(['elta', 'appletv', 'netflix']);
+// OWNED_SERVICE_SCORE_BONUS below) and as a small "已訂閱" mark in the UI.
+// This default is this site's own owner's real subscriptions, used until a
+// viewer (this owner on a fresh device, or anyone else) picks their own.
+const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
 
 function resolveService(whereToWatchTw) {
   if (!whereToWatchTw) return null;
@@ -175,6 +182,21 @@ const settingsBackdrop = document.getElementById('settings-backdrop');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const settingsResetBtn = document.getElementById('settings-reset-btn');
 const settingsSportList = document.getElementById('settings-sport-list');
+const settingsEnabledSports = document.getElementById('settings-enabled-sports');
+const settingsMyServices = document.getElementById('settings-my-services');
+const syncStatusText = document.getElementById('sync-status-text');
+const syncConnectedView = document.getElementById('sync-connected-view');
+const syncDisconnectedView = document.getElementById('sync-disconnected-view');
+const syncCodeText = document.getElementById('sync-code-text');
+const syncCopyBtn = document.getElementById('sync-copy-btn');
+const syncDisconnectBtn = document.getElementById('sync-disconnect-btn');
+const syncCreateBtn = document.getElementById('sync-create-btn');
+const syncCodeInput = document.getElementById('sync-code-input');
+const syncConnectBtn = document.getElementById('sync-connect-btn');
+const syncErrorText = document.getElementById('sync-error-text');
+const syncPromptBanner = document.getElementById('sync-prompt-banner');
+const syncPromptOpenBtn = document.getElementById('sync-prompt-open-btn');
+const syncPromptDismissBtn = document.getElementById('sync-prompt-dismiss-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -203,7 +225,7 @@ const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // only case this is meant to affect.
 const PRIORITY_SCORE_DELTA = 1;
 // A small nudge (see resolveViewingPlan) toward a fixture shown on a
-// service in MY_SERVICE_IDS - "optimize for the services you actually
+// service in state.myServiceIds - "optimize for the services you actually
 // pay for" without turning this into a hard filter: a great game on a
 // service you don't have still shows up and can still be recommended
 // (you might catch a replay, a friend's account, whatever), this just
@@ -238,9 +260,284 @@ function savePriorityOrder(order) {
 }
 state.priorityOrder = loadPriorityOrder();
 
+// ---- Enabled sports / subscribed services settings ------------------------
+//
+// Two more per-viewer settings, same localStorage-first, sync-if-paired
+// pattern as sport priority above. Unlike priority (a tie-breaking nudge),
+// a disabled sport is a hard exclude - it never appears anywhere on the
+// page, not even in "所有賽事", since "enable/disable" is a plainer,
+// stronger statement than "prefer less".
+const ENABLED_SPORTS_STORAGE_KEY = 'matchfind-enabled-sports';
+const MY_SERVICES_STORAGE_KEY = 'matchfind-my-services';
+
+function loadEnabledSports() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(ENABLED_SPORTS_STORAGE_KEY));
+    if (!Array.isArray(stored) || !stored.length) return new Set(DEFAULT_SPORT_ORDER);
+    return new Set(stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport)));
+  } catch {
+    return new Set(DEFAULT_SPORT_ORDER);
+  }
+}
+function saveEnabledSports(enabledSports) {
+  try {
+    localStorage.setItem(ENABLED_SPORTS_STORAGE_KEY, JSON.stringify([...enabledSports]));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+function loadMyServiceIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(MY_SERVICES_STORAGE_KEY));
+    if (!Array.isArray(stored)) return new Set(DEFAULT_MY_SERVICE_IDS);
+    return new Set(stored.filter(id => SERVICES.some(s => s.id === id)));
+  } catch {
+    return new Set(DEFAULT_MY_SERVICE_IDS);
+  }
+}
+function saveMyServiceIds(myServiceIds) {
+  try {
+    localStorage.setItem(MY_SERVICES_STORAGE_KEY, JSON.stringify([...myServiceIds]));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+state.enabledSports = loadEnabledSports();
+state.myServiceIds = loadMyServiceIds();
+
+// ---- Cross-device settings sync --------------------------------------------
+//
+// Syncs exactly three things - priorityOrder, enabledSports, myServiceIds -
+// across a viewer's own devices via a single passcode, through Orbit's
+// shared Cloudflare Worker (see that repo's /match-find-sync route, the
+// same singleCredential design as its own /vocab-sync: one passcode is
+// both the identifier and the only credential, no separate manager role,
+// because this is always "one person's own settings on their own devices",
+// never "one person's data read by many"). Never syncs fixture data or
+// scores - those already come from the one shared matches.json build, not
+// per-viewer state, and have nothing to do with this.
+//
+// state.proxyUrl comes from matches.json (see applyMatchData) - the same
+// Worker base URL the build script already uses for /match-recommend,
+// baked in at build time since a plain fetch target carries no credential
+// worth hiding. Sync is simply unavailable (buttons show a plain status
+// message, nothing throws) when it's empty - same graceful-absence
+// posture as PROXY_URL being unset for AI scoring at build time.
+const SYNC_PASSCODE_STORAGE_KEY = 'matchfind-sync-passcode';
+const SYNC_PROMPTED_STORAGE_KEY = 'matchfind-sync-prompted';
+
+function loadSyncPasscode() {
+  try {
+    return localStorage.getItem(SYNC_PASSCODE_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+function saveSyncPasscode(passcode) {
+  try {
+    if (passcode) localStorage.setItem(SYNC_PASSCODE_STORAGE_KEY, passcode);
+    else localStorage.removeItem(SYNC_PASSCODE_STORAGE_KEY);
+  } catch {
+    // Private browsing / blocked storage - sync still works for this page
+    // view, it just won't remember the passcode next time.
+  }
+}
+state.syncPasscode = loadSyncPasscode();
+
+function buildSyncPayloadObject() {
+  return {
+    priorityOrder: state.priorityOrder,
+    enabledSports: [...state.enabledSports],
+    myServiceIds: [...state.myServiceIds]
+  };
+}
+
+// Applies a synced payload on top of local state - the same tolerant
+// filtering as the individual loadX functions above (an unknown sport/
+// service id, e.g. from an older or newer version of this site syncing
+// with this one, is dropped rather than trusted blindly), then persists it
+// locally so a later offline visit still has it.
+function applySyncPayloadObject(payload) {
+  if (Array.isArray(payload?.priorityOrder)) {
+    const known = payload.priorityOrder.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
+    const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
+    state.priorityOrder = [...known, ...missing];
+  }
+  if (Array.isArray(payload?.enabledSports) && payload.enabledSports.length) {
+    const known = payload.enabledSports.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
+    if (known.length) state.enabledSports = new Set(known);
+  }
+  if (Array.isArray(payload?.myServiceIds)) {
+    state.myServiceIds = new Set(payload.myServiceIds.filter(id => SERVICES.some(s => s.id === id)));
+  }
+  savePriorityOrder(state.priorityOrder);
+  saveEnabledSports(state.enabledSports);
+  saveMyServiceIds(state.myServiceIds);
+}
+
+async function syncFetch(method, { passcode = state.syncPasscode, body } = {}) {
+  if (!state.proxyUrl) throw new Error('同步功能尚未設定');
+  const url = new URL(`${state.proxyUrl.replace(/\/+$/, '')}/match-find-sync`);
+  if (method !== 'POST') url.searchParams.set('passcode', passcode);
+  const response = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message || `HTTP ${response.status}`);
+  return data;
+}
+
+// Pulls the synced payload and applies it - called once on load (see
+// init()) when a passcode is already stored, deliberately BEFORE the
+// viewer does anything else, so a setting changed on another device is
+// what actually applies here, not whatever this device happened to have
+// cached from before ("if the app is updated it should always fetch
+// first" applies just as much to a viewer's own synced settings as it
+// does to matches.json/buildId). Silent on failure (offline, proxy down)
+// - this device's own local settings are still a perfectly good fallback.
+async function syncPull() {
+  try {
+    const data = await syncFetch('GET');
+    if (data.exists && typeof data.payload === 'string' && data.payload) {
+      applySyncPayloadObject(JSON.parse(data.payload));
+      applyEnabledSportsAndRender();
+    }
+  } catch (error) {
+    console.warn('sync pull failed', error);
+  }
+}
+
+// Fire-and-forget push after a local settings change (see
+// persistSettingsAndSync) - failure here just means this one change
+// didn't make it to other devices yet; it'll go out again next time
+// anything changes, and doesn't block or roll back the local change
+// itself.
+async function syncPush() {
+  try {
+    await syncFetch('PATCH', { body: { payload: JSON.stringify(buildSyncPayloadObject()) } });
+  } catch (error) {
+    console.warn('sync push failed', error);
+  }
+}
+
+async function syncCreate() {
+  syncErrorText.hidden = true;
+  syncCreateBtn.disabled = true;
+  try {
+    const data = await syncFetch('POST', { body: { payload: JSON.stringify(buildSyncPayloadObject()) } });
+    state.syncPasscode = data.passcode;
+    saveSyncPasscode(state.syncPasscode);
+    renderSyncPanel();
+  } catch (error) {
+    syncErrorText.hidden = false;
+    syncErrorText.textContent = `建立同步碼失敗：${error.message}`;
+  } finally {
+    syncCreateBtn.disabled = false;
+  }
+}
+
+async function syncConnect(passcode) {
+  syncErrorText.hidden = true;
+  syncConnectBtn.disabled = true;
+  try {
+    const data = await syncFetch('GET', { passcode });
+    if (!data.exists) {
+      syncErrorText.hidden = false;
+      syncErrorText.textContent = '找不到這組同步碼，請確認輸入是否正確。';
+      return;
+    }
+    state.syncPasscode = passcode;
+    saveSyncPasscode(passcode);
+    if (typeof data.payload === 'string' && data.payload) {
+      applySyncPayloadObject(JSON.parse(data.payload));
+      applyEnabledSportsAndRender();
+    }
+    // Full re-render, not just renderSyncPanel() - a synced payload can
+    // change priority order/enabled sports/my services, and the settings
+    // panel is open (this only runs from the connect button) showing
+    // whatever chip states it rendered with before the pull landed.
+    renderSettingsPanel();
+  } catch (error) {
+    syncErrorText.hidden = false;
+    syncErrorText.textContent = `連接失敗：${error.message}`;
+  } finally {
+    syncConnectBtn.disabled = false;
+  }
+}
+
+// Only forgets the passcode on THIS device - deliberately never calls
+// DELETE, since other devices may still be using the same code and
+// disconnecting one device's own local copy shouldn't wipe shared data out
+// from under them.
+function syncDisconnect() {
+  state.syncPasscode = '';
+  saveSyncPasscode('');
+  renderSyncPanel();
+}
+
+function renderSyncPanel() {
+  const connected = !!state.syncPasscode;
+  syncConnectedView.hidden = !connected;
+  syncDisconnectedView.hidden = connected;
+  syncErrorText.hidden = true;
+  if (connected) {
+    syncCodeText.textContent = state.syncPasscode;
+    syncStatusText.textContent = '這個裝置已同步，變更設定會自動套用到其他同步過的裝置。';
+  } else if (!state.proxyUrl) {
+    syncStatusText.textContent = '同步功能尚未設定。';
+  } else {
+    syncStatusText.textContent = '建立一組同步碼，在其他裝置輸入同一組碼即可套用相同設定。';
+  }
+}
+
+syncCreateBtn.addEventListener('click', syncCreate);
+syncConnectBtn.addEventListener('click', () => {
+  const passcode = syncCodeInput.value.trim().toUpperCase();
+  if (passcode) syncConnect(passcode);
+});
+syncDisconnectBtn.addEventListener('click', syncDisconnect);
+syncCopyBtn.addEventListener('click', () => {
+  navigator.clipboard?.writeText(state.syncPasscode).catch(() => {});
+});
+
+// A one-time, dismissible nudge on first visit (never shown again either
+// way - see SYNC_PROMPTED_STORAGE_KEY) rather than asking on every load,
+// which would just be nagging. Only shown when sync is actually available
+// and this device isn't already paired.
+function maybeShowSyncPrompt() {
+  if (state.syncPasscode || !state.proxyUrl) return;
+  let prompted = false;
+  try {
+    prompted = localStorage.getItem(SYNC_PROMPTED_STORAGE_KEY) === '1';
+  } catch {
+    // Can't remember a dismissal without storage - default to not nagging.
+    prompted = true;
+  }
+  if (!prompted) {
+    syncPromptBanner.classList.toggle('is-raised', !updateBanner.hidden);
+    syncPromptBanner.hidden = false;
+  }
+}
+function dismissSyncPrompt() {
+  syncPromptBanner.hidden = true;
+  try {
+    localStorage.setItem(SYNC_PROMPTED_STORAGE_KEY, '1');
+  } catch {
+    // Not fatal - worst case this asks again next visit.
+  }
+}
+syncPromptOpenBtn.addEventListener('click', () => {
+  dismissSyncPrompt();
+  openSettingsPanel();
+});
+syncPromptDismissBtn.addEventListener('click', dismissSyncPrompt);
+
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
-  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder);
+  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds);
   renderSections();
 }
 
@@ -263,7 +560,7 @@ function renderSettingsPanel() {
         const to = from + delta;
         if (to < 0 || to >= state.priorityOrder.length) return;
         [state.priorityOrder[from], state.priorityOrder[to]] = [state.priorityOrder[to], state.priorityOrder[from]];
-        savePriorityOrder(state.priorityOrder);
+        persistSettingsAndSync();
         renderSettingsPanel();
         recomputeAndRender();
       }
@@ -287,6 +584,72 @@ function renderSettingsPanel() {
       return row;
     })
   );
+  renderEnabledSportsPanel();
+  renderMyServicesPanel();
+  renderSyncPanel();
+}
+
+// Saves every setting to localStorage and, if currently paired to a sync
+// code, pushes the combined payload to Orbit's /match-find-sync (see
+// "Cross-device settings sync" below) - one call after any settings
+// mutation, rather than each individual toggle/reorder handler needing to
+// remember to do both.
+function persistSettingsAndSync() {
+  savePriorityOrder(state.priorityOrder);
+  saveEnabledSports(state.enabledSports);
+  saveMyServiceIds(state.myServiceIds);
+  if (state.syncPasscode) syncPush();
+}
+
+// Toggle chips, not a full multi-select list - a disabled sport is a hard
+// exclude (see ENABLED_SPORTS_STORAGE_KEY's own comment), so this needs to
+// read as "on/off per sport", not "pick your favorites". The last enabled
+// sport can't be turned off - an empty site isn't a valid state.
+function renderEnabledSportsPanel() {
+  settingsEnabledSports.replaceChildren(
+    ...DEFAULT_SPORT_ORDER.map(sport => {
+      const enabled = state.enabledSports.has(sport);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = enabled ? 'settings-chip is-active' : 'settings-chip';
+      chip.textContent = SPORT_LABELS_ZH[sport];
+      chip.setAttribute('aria-pressed', String(enabled));
+      chip.disabled = enabled && state.enabledSports.size === 1;
+      chip.addEventListener('click', () => {
+        if (enabled) {
+          if (state.enabledSports.size === 1) return; // guarded by chip.disabled too
+          state.enabledSports.delete(sport);
+        } else {
+          state.enabledSports.add(sport);
+        }
+        persistSettingsAndSync();
+        renderEnabledSportsPanel();
+        applyEnabledSportsAndRender();
+      });
+      return chip;
+    })
+  );
+}
+
+function renderMyServicesPanel() {
+  settingsMyServices.replaceChildren(
+    ...SERVICES.map(service => {
+      const owned = state.myServiceIds.has(service.id);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = owned ? 'settings-chip is-active' : 'settings-chip';
+      chip.textContent = service.label;
+      chip.setAttribute('aria-pressed', String(owned));
+      chip.addEventListener('click', () => {
+        if (owned) state.myServiceIds.delete(service.id);
+        else state.myServiceIds.add(service.id);
+        persistSettingsAndSync();
+        renderMyServicesPanel();
+        recomputeAndRender();
+      });
+      return chip;
+    })
+  );
 }
 
 function openSettingsPanel() {
@@ -303,7 +666,7 @@ settingsCloseBtn.addEventListener('click', closeSettingsPanel);
 settingsBackdrop.addEventListener('click', closeSettingsPanel);
 settingsResetBtn.addEventListener('click', () => {
   state.priorityOrder = DEFAULT_SPORT_ORDER.slice();
-  savePriorityOrder(state.priorityOrder);
+  persistSettingsAndSync();
   renderSettingsPanel();
   recomputeAndRender();
 });
@@ -460,13 +823,13 @@ function compatible(later, earlier) {
 // biggest negative one - symmetric around the middle rank so "no
 // preference at all" (the default order) really does mean zero nudge for
 // everyone, not just for whichever sport happens to be first in the array.
-function resolveViewingPlan(matches, priorityOrder = []) {
+function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set()) {
   const centerRank = (priorityOrder.length - 1) / 2;
   const withIntervals = matches.map(match => {
     const rank = priorityOrder.indexOf(match.sport);
     const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
     const service = resolveService(match.whereToWatchTw);
-    const serviceNudge = service && MY_SERVICE_IDS.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
+    const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
     return { ...match, interval: matchInterval(match), effectiveScore: match.score + priorityNudge + serviceNudge };
   });
   const eligible = withIntervals.filter(m => !isQuietHours(m)).sort((a, b) => a.interval.end - b.interval.end);
@@ -707,9 +1070,9 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
       badge.hidden = true;
     }
     // A quiet "you already have this" mark rather than hiding/muting
-    // anything without it - see MY_SERVICE_IDS's own comment on why this
-    // stays a nudge, not a filter.
-    watchEl.querySelector('.watch-owned').hidden = !(service && MY_SERVICE_IDS.has(service.id));
+    // anything without it - see DEFAULT_MY_SERVICE_IDS's own comment on why
+    // this stays a nudge, not a filter.
+    watchEl.querySelector('.watch-owned').hidden = !(service && state.myServiceIds.has(service.id));
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
@@ -1042,6 +1405,7 @@ function renderAiStatus(lastAiFetchAt) {
 // the initial load and by pollForUpdates() below, so "how a payload turns
 // into what's on screen" only exists in one place.
 function applyMatchData(data) {
+  state.proxyUrl = data.proxyUrl || '';
   const allMatches = Array.isArray(data.matches) ? data.matches : [];
   // TBD fixtures (see build-data.mjs's isTimeTbd) never carry a real
   // startTimeUtc, so they're split off here, before anything else touches
@@ -1069,14 +1433,28 @@ function applyMatchData(data) {
   }
 
   state.daysAhead = data.daysAhead;
+  state.allRawMatches = rawMatches;
+  applyEnabledSportsAndRender();
+}
+
+// Filters state.allRawMatches down to the sports currently enabled in
+// Settings (see "Enabled sports settings" below), then redoes everything
+// downstream of that - the viewing plan, the day list (a day can gain or
+// lose entries entirely depending which sports are on), and every render
+// call. Shared by the initial load/poll (applyMatchData) and by toggling a
+// sport in Settings, so "what's actually on screen" only ever has one path
+// from "which sports are enabled" to the DOM.
+function applyEnabledSportsAndRender() {
+  const rawMatches = state.allRawMatches.filter(m => state.enabledSports.has(m.sport));
   state.rawMatches = rawMatches;
-  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder);
+  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
   state.days = buildDayList(state.matches);
   // Keep whatever day the viewer is already looking at if it still exists
   // in the refreshed window (a routine data refresh shouldn't yank someone
   // back to "today" out from under them) - only fall back to picking a
   // fresh default when their previous selection no longer has a match at
-  // all (e.g. it aged out of the rolling window).
+  // all (e.g. it aged out of the rolling window, or its only sport just
+  // got disabled).
   if (!state.selectedDayKey || !state.days.some(d => d.key === state.selectedDayKey)) {
     state.selectedDayKey = pickInitialDay(state.days, state.matches);
   }
@@ -1115,6 +1493,7 @@ async function pollForUpdates() {
 
     if (state.buildId && data.buildId && data.buildId !== state.buildId) {
       updateBanner.hidden = false;
+      if (!syncPromptBanner.hidden) syncPromptBanner.classList.add('is-raised');
     }
   } catch (error) {
     console.error('update check failed', error);
@@ -1130,6 +1509,12 @@ async function init() {
     state.buildId = data.buildId;
 
     applyMatchData(data);
+
+    // Pull first if already paired (so another device's more recent
+    // settings win over whatever this one has cached), otherwise offer to
+    // pair - never both, and only once, on the initial load.
+    if (state.syncPasscode) syncPull();
+    else maybeShowSyncPrompt();
 
     setInterval(() => renderSections(), 60_000);
     setInterval(pollForUpdates, DATA_POLL_INTERVAL_MS);
