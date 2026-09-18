@@ -1895,5 +1895,25 @@
     "whereToWatchTw": "緯來體育台",
     "source": "ai",
     "promptVersion": 3
+  },
+  "f1-600057444-race": {
+    "startTimeUtc": "2026-09-26T11:00:00.000Z",
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "巴庫賽道街道賽充滿變數，超車機會多且容易出現安全車。",
+    "venueZh": "巴庫市街賽道",
+    "whereToWatchTw": "Apple TV",
+    "source": "ai",
+    "promptVersion": 3
+  },
+  "f1-600057444-qual": {
+    "startTimeUtc": "2026-09-25T12:00:00.000Z",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "排位賽在刁鑽的街道賽進行，車手們爭奪桿位的競爭相當激烈。",
+    "venueZh": "巴庫市街賽道",
+    "whereToWatchTw": "Apple TV",
+    "source": "ai",
+    "promptVersion": 3
   }
 }
