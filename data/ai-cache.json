@@ -1,1 +1,1339 @@
-{}
+{
+  "epl-401879275": {
+    "startTimeUtc": "2026-09-18T19:00:00.000Z",
+    "competitiveness": 1,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (2-1 vs 1-3).",
+    "source": "heuristic"
+  },
+  "epl-401879269": {
+    "startTimeUtc": "2026-09-19T11:30:00.000Z",
+    "competitiveness": 8,
+    "watchability": 1,
+    "reason": "Estimated from each side's current win-loss record (0-1 vs 0-2).",
+    "source": "heuristic"
+  },
+  "epl-401879274": {
+    "startTimeUtc": "2026-09-19T14:00:00.000Z",
+    "competitiveness": 3,
+    "watchability": 8,
+    "reason": "Estimated from each side's current win-loss record (4-0 vs 2-1).",
+    "source": "heuristic"
+  },
+  "epl-401878778": {
+    "startTimeUtc": "2026-09-19T14:00:00.000Z",
+    "competitiveness": 1,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (2-0 vs 1-3).",
+    "source": "heuristic"
+  },
+  "epl-401879271": {
+    "startTimeUtc": "2026-09-19T14:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (2-2 vs 1-2).",
+    "source": "heuristic"
+  },
+  "epl-401879270": {
+    "startTimeUtc": "2026-09-19T16:30:00.000Z",
+    "competitiveness": 3,
+    "watchability": 2,
+    "reason": "Estimated from each side's current win-loss record (0-0 vs 1-2).",
+    "source": "heuristic"
+  },
+  "epl-401879276": {
+    "startTimeUtc": "2026-09-20T13:00:00.000Z",
+    "competitiveness": 4,
+    "watchability": 1,
+    "reason": "Estimated from each side's current win-loss record (1-3 vs 0-3).",
+    "source": "heuristic"
+  },
+  "epl-401879273": {
+    "startTimeUtc": "2026-09-20T13:00:00.000Z",
+    "competitiveness": 1,
+    "watchability": 8,
+    "reason": "Estimated from each side's current win-loss record (1-0 vs 2-2).",
+    "source": "heuristic"
+  },
+  "epl-401879272": {
+    "startTimeUtc": "2026-09-20T13:00:00.000Z",
+    "competitiveness": 1,
+    "watchability": 8,
+    "reason": "Estimated from each side's current win-loss record (1-1 vs 4-0).",
+    "source": "heuristic"
+  },
+  "epl-401878777": {
+    "startTimeUtc": "2026-09-20T15:30:00.000Z",
+    "competitiveness": 1,
+    "watchability": 3,
+    "reason": "Estimated from each side's current win-loss record (1-1 vs 0-1).",
+    "source": "heuristic"
+  },
+  "mls-761815": {
+    "startTimeUtc": "2026-09-18T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (8-6 vs 8-8).",
+    "source": "heuristic"
+  },
+  "mls-761818": {
+    "startTimeUtc": "2026-09-19T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (6-5 vs 5-6).",
+    "source": "heuristic"
+  },
+  "mls-761819": {
+    "startTimeUtc": "2026-09-19T23:30:00.000Z",
+    "competitiveness": 4,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (11-7 vs 6-11).",
+    "source": "heuristic"
+  },
+  "mls-761816": {
+    "startTimeUtc": "2026-09-19T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (10-4 vs 13-4).",
+    "source": "heuristic"
+  },
+  "mls-761817": {
+    "startTimeUtc": "2026-09-19T23:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (11-7 vs 12-5).",
+    "source": "heuristic"
+  },
+  "mls-761822": {
+    "startTimeUtc": "2026-09-20T00:30:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (7-8 vs 12-7).",
+    "source": "heuristic"
+  },
+  "mls-761820": {
+    "startTimeUtc": "2026-09-20T00:30:00.000Z",
+    "competitiveness": 4,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (8-8 vs 13-4).",
+    "source": "heuristic"
+  },
+  "mls-761821": {
+    "startTimeUtc": "2026-09-20T00:30:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (7-9 vs 7-8).",
+    "source": "heuristic"
+  },
+  "mls-761823": {
+    "startTimeUtc": "2026-09-20T00:30:00.000Z",
+    "competitiveness": 8,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (9-6 vs 5-3).",
+    "source": "heuristic"
+  },
+  "mls-761824": {
+    "startTimeUtc": "2026-09-20T00:30:00.000Z",
+    "competitiveness": 4,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (6-11 vs 11-8).",
+    "source": "heuristic"
+  },
+  "mls-761826": {
+    "startTimeUtc": "2026-09-20T01:30:00.000Z",
+    "competitiveness": 2,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (7-7 vs 11-2).",
+    "source": "heuristic"
+  },
+  "mls-761827": {
+    "startTimeUtc": "2026-09-20T01:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (11-6 vs 16-6).",
+    "source": "heuristic"
+  },
+  "mls-761825": {
+    "startTimeUtc": "2026-09-20T01:30:00.000Z",
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (14-4 vs 8-5).",
+    "source": "heuristic"
+  },
+  "mls-761828": {
+    "startTimeUtc": "2026-09-20T02:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (6-5 vs 9-5).",
+    "source": "heuristic"
+  },
+  "mls-761829": {
+    "startTimeUtc": "2026-09-20T23:00:00.000Z",
+    "competitiveness": 8,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (8-6 vs 12-9).",
+    "source": "heuristic"
+  },
+  "mls-761543": {
+    "startTimeUtc": "2026-09-24T01:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (8-5 vs 7-7).",
+    "source": "heuristic"
+  },
+  "mls-761830": {
+    "startTimeUtc": "2026-09-26T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (8-8 vs 6-5).",
+    "source": "heuristic"
+  },
+  "mls-761831": {
+    "startTimeUtc": "2026-09-26T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (8-8 vs 5-6).",
+    "source": "heuristic"
+  },
+  "mls-761832": {
+    "startTimeUtc": "2026-09-26T23:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (11-6 vs 11-7).",
+    "source": "heuristic"
+  },
+  "mls-761834": {
+    "startTimeUtc": "2026-09-26T23:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (10-4 vs 9-6).",
+    "source": "heuristic"
+  },
+  "mls-761833": {
+    "startTimeUtc": "2026-09-26T23:30:00.000Z",
+    "competitiveness": 8,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (11-8 vs 8-6).",
+    "source": "heuristic"
+  },
+  "mls-761839": {
+    "startTimeUtc": "2026-09-27T00:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (8-6 vs 7-8).",
+    "source": "heuristic"
+  },
+  "mls-761835": {
+    "startTimeUtc": "2026-09-27T00:30:00.000Z",
+    "competitiveness": 8,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (11-7 vs 12-7).",
+    "source": "heuristic"
+  },
+  "mls-761836": {
+    "startTimeUtc": "2026-09-27T00:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (5-3 vs 13-4).",
+    "source": "heuristic"
+  },
+  "mls-761838": {
+    "startTimeUtc": "2026-09-27T00:30:00.000Z",
+    "competitiveness": 2,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (6-11 vs 16-6).",
+    "source": "heuristic"
+  },
+  "mls-761837": {
+    "startTimeUtc": "2026-09-27T00:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (7-8 vs 7-7).",
+    "source": "heuristic"
+  },
+  "mls-761840": {
+    "startTimeUtc": "2026-09-27T01:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (13-4 vs 8-5).",
+    "source": "heuristic"
+  },
+  "mls-761841": {
+    "startTimeUtc": "2026-09-27T02:30:00.000Z",
+    "competitiveness": 1,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (11-2 vs 7-9).",
+    "source": "heuristic"
+  },
+  "mls-761843": {
+    "startTimeUtc": "2026-09-27T02:30:00.000Z",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "Estimated from each side's current win-loss record (9-5 vs 12-5).",
+    "source": "heuristic"
+  },
+  "mls-761842": {
+    "startTimeUtc": "2026-09-27T02:30:00.000Z",
+    "competitiveness": 1,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (6-11 vs 14-4).",
+    "source": "heuristic"
+  },
+  "mls-761844": {
+    "startTimeUtc": "2026-09-27T23:00:00.000Z",
+    "competitiveness": 8,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (12-9 vs 6-5).",
+    "source": "heuristic"
+  },
+  "mls-761798": {
+    "startTimeUtc": "2026-10-02T01:30:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (5-3 vs 7-7).",
+    "source": "heuristic"
+  },
+  "mlb-401816984": {
+    "startTimeUtc": "2026-09-18T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401816985": {
+    "startTimeUtc": "2026-09-18T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401816986": {
+    "startTimeUtc": "2026-09-18T23:05:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401816982": {
+    "startTimeUtc": "2026-09-18T23:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401816983": {
+    "startTimeUtc": "2026-09-18T23:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
+    "source": "heuristic"
+  },
+  "mlb-401816987": {
+    "startTimeUtc": "2026-09-18T23:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
+    "source": "heuristic"
+  },
+  "mlb-401816989": {
+    "startTimeUtc": "2026-09-18T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401816990": {
+    "startTimeUtc": "2026-09-19T00:05:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401816988": {
+    "startTimeUtc": "2026-09-19T00:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
+    "source": "heuristic"
+  },
+  "mlb-401816992": {
+    "startTimeUtc": "2026-09-19T00:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401816991": {
+    "startTimeUtc": "2026-09-19T00:15:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401816994": {
+    "startTimeUtc": "2026-09-19T01:38:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
+    "source": "heuristic"
+  },
+  "mlb-401816993": {
+    "startTimeUtc": "2026-09-19T01:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401816995": {
+    "startTimeUtc": "2026-09-19T01:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
+    "source": "heuristic"
+  },
+  "mlb-401816996": {
+    "startTimeUtc": "2026-09-19T02:10:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817001": {
+    "startTimeUtc": "2026-09-19T20:05:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401816998": {
+    "startTimeUtc": "2026-09-19T20:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
+    "source": "heuristic"
+  },
+  "mlb-401817002": {
+    "startTimeUtc": "2026-09-19T20:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
+    "source": "heuristic"
+  },
+  "mlb-401816997": {
+    "startTimeUtc": "2026-09-19T22:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401816999": {
+    "startTimeUtc": "2026-09-19T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817000": {
+    "startTimeUtc": "2026-09-19T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817005": {
+    "startTimeUtc": "2026-09-19T23:05:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817003": {
+    "startTimeUtc": "2026-09-19T23:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
+    "source": "heuristic"
+  },
+  "mlb-401817004": {
+    "startTimeUtc": "2026-09-19T23:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817006": {
+    "startTimeUtc": "2026-09-19T23:15:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817007": {
+    "startTimeUtc": "2026-09-20T00:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401817010": {
+    "startTimeUtc": "2026-09-20T00:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
+    "source": "heuristic"
+  },
+  "mlb-401817008": {
+    "startTimeUtc": "2026-09-20T00:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401817011": {
+    "startTimeUtc": "2026-09-20T01:10:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817009": {
+    "startTimeUtc": "2026-09-20T01:38:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
+    "source": "heuristic"
+  },
+  "mlb-401817017": {
+    "startTimeUtc": "2026-09-20T17:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
+    "source": "heuristic"
+  },
+  "mlb-401817015": {
+    "startTimeUtc": "2026-09-20T17:35:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817012": {
+    "startTimeUtc": "2026-09-20T17:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817013": {
+    "startTimeUtc": "2026-09-20T17:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
+    "source": "heuristic"
+  },
+  "mlb-401817014": {
+    "startTimeUtc": "2026-09-20T17:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817018": {
+    "startTimeUtc": "2026-09-20T18:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
+    "source": "heuristic"
+  },
+  "mlb-401817019": {
+    "startTimeUtc": "2026-09-20T18:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817021": {
+    "startTimeUtc": "2026-09-20T18:15:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817020": {
+    "startTimeUtc": "2026-09-20T18:35:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817022": {
+    "startTimeUtc": "2026-09-20T19:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401817024": {
+    "startTimeUtc": "2026-09-20T20:07:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
+    "source": "heuristic"
+  },
+  "mlb-401817023": {
+    "startTimeUtc": "2026-09-20T20:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401817025": {
+    "startTimeUtc": "2026-09-20T20:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
+    "source": "heuristic"
+  },
+  "mlb-401817026": {
+    "startTimeUtc": "2026-09-20T20:10:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817016": {
+    "startTimeUtc": "2026-09-20T23:20:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817027": {
+    "startTimeUtc": "2026-09-21T22:35:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817028": {
+    "startTimeUtc": "2026-09-21T22:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817029": {
+    "startTimeUtc": "2026-09-22T01:45:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401873648": {
+    "startTimeUtc": "2026-09-22T17:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817035": {
+    "startTimeUtc": "2026-09-22T22:35:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817032": {
+    "startTimeUtc": "2026-09-22T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817033": {
+    "startTimeUtc": "2026-09-22T22:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817036": {
+    "startTimeUtc": "2026-09-22T22:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817031": {
+    "startTimeUtc": "2026-09-22T22:45:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817034": {
+    "startTimeUtc": "2026-09-22T23:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817030": {
+    "startTimeUtc": "2026-09-22T23:15:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817037": {
+    "startTimeUtc": "2026-09-22T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817038": {
+    "startTimeUtc": "2026-09-22T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817039": {
+    "startTimeUtc": "2026-09-23T00:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817040": {
+    "startTimeUtc": "2026-09-23T00:40:00.000Z",
+    "competitiveness": 5,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401817041": {
+    "startTimeUtc": "2026-09-23T01:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817042": {
+    "startTimeUtc": "2026-09-23T01:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817043": {
+    "startTimeUtc": "2026-09-23T01:45:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401817044": {
+    "startTimeUtc": "2026-09-23T02:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817051": {
+    "startTimeUtc": "2026-09-23T17:10:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817058": {
+    "startTimeUtc": "2026-09-23T19:45:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401817050": {
+    "startTimeUtc": "2026-09-23T22:35:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
+    "source": "heuristic"
+  },
+  "mlb-401817047": {
+    "startTimeUtc": "2026-09-23T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817048": {
+    "startTimeUtc": "2026-09-23T22:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817046": {
+    "startTimeUtc": "2026-09-23T23:00:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817049": {
+    "startTimeUtc": "2026-09-23T23:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817045": {
+    "startTimeUtc": "2026-09-23T23:15:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817052": {
+    "startTimeUtc": "2026-09-23T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817053": {
+    "startTimeUtc": "2026-09-23T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817054": {
+    "startTimeUtc": "2026-09-24T00:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817055": {
+    "startTimeUtc": "2026-09-24T00:40:00.000Z",
+    "competitiveness": 5,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401817056": {
+    "startTimeUtc": "2026-09-24T01:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817057": {
+    "startTimeUtc": "2026-09-24T02:00:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817059": {
+    "startTimeUtc": "2026-09-24T02:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817063": {
+    "startTimeUtc": "2026-09-24T16:35:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817065": {
+    "startTimeUtc": "2026-09-24T18:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817066": {
+    "startTimeUtc": "2026-09-24T18:20:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817067": {
+    "startTimeUtc": "2026-09-24T18:35:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817068": {
+    "startTimeUtc": "2026-09-24T19:10:00.000Z",
+    "competitiveness": 5,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
+    "source": "heuristic"
+  },
+  "mlb-401817062": {
+    "startTimeUtc": "2026-09-24T22:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817061": {
+    "startTimeUtc": "2026-09-24T22:45:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817064": {
+    "startTimeUtc": "2026-09-24T23:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817060": {
+    "startTimeUtc": "2026-09-24T23:15:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817069": {
+    "startTimeUtc": "2026-09-25T01:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817070": {
+    "startTimeUtc": "2026-09-25T01:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817071": {
+    "startTimeUtc": "2026-09-25T02:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
+    "source": "heuristic"
+  },
+  "mlb-401817077": {
+    "startTimeUtc": "2026-09-25T22:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817078": {
+    "startTimeUtc": "2026-09-25T22:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817076": {
+    "startTimeUtc": "2026-09-25T22:45:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817073": {
+    "startTimeUtc": "2026-09-25T23:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817075": {
+    "startTimeUtc": "2026-09-25T23:07:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817072": {
+    "startTimeUtc": "2026-09-25T23:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817074": {
+    "startTimeUtc": "2026-09-25T23:10:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817079": {
+    "startTimeUtc": "2026-09-25T23:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817080": {
+    "startTimeUtc": "2026-09-25T23:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817081": {
+    "startTimeUtc": "2026-09-25T23:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
+    "source": "heuristic"
+  },
+  "mlb-401817082": {
+    "startTimeUtc": "2026-09-26T00:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817084": {
+    "startTimeUtc": "2026-09-26T01:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401817085": {
+    "startTimeUtc": "2026-09-26T01:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817083": {
+    "startTimeUtc": "2026-09-26T02:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817086": {
+    "startTimeUtc": "2026-09-26T02:15:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401817092": {
+    "startTimeUtc": "2026-09-26T17:10:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817090": {
+    "startTimeUtc": "2026-09-26T19:07:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817091": {
+    "startTimeUtc": "2026-09-26T20:05:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817101": {
+    "startTimeUtc": "2026-09-26T20:05:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401817087": {
+    "startTimeUtc": "2026-09-26T20:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817097": {
+    "startTimeUtc": "2026-09-26T20:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817094": {
+    "startTimeUtc": "2026-09-26T23:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817095": {
+    "startTimeUtc": "2026-09-26T23:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817096": {
+    "startTimeUtc": "2026-09-26T23:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
+    "source": "heuristic"
+  },
+  "mlb-401817088": {
+    "startTimeUtc": "2026-09-26T23:15:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401817089": {
+    "startTimeUtc": "2026-09-26T23:15:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817093": {
+    "startTimeUtc": "2026-09-26T23:15:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817099": {
+    "startTimeUtc": "2026-09-27T00:40:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401817098": {
+    "startTimeUtc": "2026-09-27T01:40:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817100": {
+    "startTimeUtc": "2026-09-27T01:40:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817104": {
+    "startTimeUtc": "2026-09-27T19:05:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
+    "source": "heuristic"
+  },
+  "mlb-401817106": {
+    "startTimeUtc": "2026-09-27T19:05:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817108": {
+    "startTimeUtc": "2026-09-27T19:05:00.000Z",
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
+    "source": "heuristic"
+  },
+  "mlb-401817115": {
+    "startTimeUtc": "2026-09-27T19:05:00.000Z",
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
+    "source": "heuristic"
+  },
+  "mlb-401817116": {
+    "startTimeUtc": "2026-09-27T19:05:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
+    "source": "heuristic"
+  },
+  "mlb-401817105": {
+    "startTimeUtc": "2026-09-27T19:07:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817102": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
+    "source": "heuristic"
+  },
+  "mlb-401817107": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
+    "source": "heuristic"
+  },
+  "mlb-401817109": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
+    "source": "heuristic"
+  },
+  "mlb-401817110": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
+    "source": "heuristic"
+  },
+  "mlb-401817111": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
+    "source": "heuristic"
+  },
+  "mlb-401817112": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817113": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 7,
+    "watchability": 4,
+    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
+    "source": "heuristic"
+  },
+  "mlb-401817114": {
+    "startTimeUtc": "2026-09-27T19:10:00.000Z",
+    "competitiveness": 8,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
+    "source": "heuristic"
+  },
+  "mlb-401817103": {
+    "startTimeUtc": "2026-09-27T19:20:00.000Z",
+    "competitiveness": 7,
+    "watchability": 5,
+    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
+    "source": "heuristic"
+  },
+  "mlb-401907896": {
+    "startTimeUtc": "2026-09-29T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907924": {
+    "startTimeUtc": "2026-09-29T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907965": {
+    "startTimeUtc": "2026-09-29T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907974": {
+    "startTimeUtc": "2026-09-29T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907897": {
+    "startTimeUtc": "2026-09-30T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907963": {
+    "startTimeUtc": "2026-09-30T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907972": {
+    "startTimeUtc": "2026-09-30T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907975": {
+    "startTimeUtc": "2026-09-30T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907898": {
+    "startTimeUtc": "2026-10-01T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907964": {
+    "startTimeUtc": "2026-10-01T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907973": {
+    "startTimeUtc": "2026-10-01T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "mlb-401907976": {
+    "startTimeUtc": "2026-10-01T04:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  },
+  "f1-600057444": {
+    "startTimeUtc": "2026-09-26T11:00:00.000Z",
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "No record data available for either side yet.",
+    "source": "heuristic"
+  }
+}
