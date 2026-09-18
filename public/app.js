@@ -64,13 +64,64 @@ const SPORT_LABELS_ZH = {
 // trademarked logo (this is a static site with no image-licensing story of
 // its own) - just enough to be visually recognizable and color-coded at a
 // glance, same spirit as the sport badges already on every card.
+// `logo` points at each service's real, official mark - hosted on
+// Wikimedia Commons (Special:FilePath, its own stable hotlink-friendly
+// redirect to the current file - confirmed live, not just assumed) rather
+// than reproduced/copied into this repo, same posture as the team/F1 logos
+// already pulled from ESPN's own CDN elsewhere in this file. `logoBg` is
+// the background the mark needs to actually be visible (several of these
+// are white- or dark-only artwork with no built-in backdrop). A service
+// with no real logo found on Commons (緯來, myVideo, MLB.TV) falls back to
+// the plain colored-initial `badge` design from before - buildMatchCard
+// below tries `logo` first and only falls back to `badge` on a load
+// failure (same onerror pattern as team logos) or when `logo` is absent.
 const SERVICES = [
-  { id: 'elta', pattern: /愛爾達|ELTA/i, label: '愛爾達體育台', badge: '達', color: '#ff7a3d' },
-  { id: 'appletv', pattern: /Apple\s*TV/i, label: 'Apple TV', badge: 'TV', color: '#1d1d1f' },
-  { id: 'netflix', pattern: /Netflix/i, label: 'Netflix', badge: 'N', color: '#e50914' },
+  {
+    id: 'elta',
+    pattern: /愛爾達|ELTA/i,
+    label: '愛爾達體育台',
+    badge: '達',
+    color: '#ff7a3d',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/ELTA_logo.svg',
+    logoBg: '#ffffff'
+  },
+  {
+    id: 'appletv',
+    pattern: /Apple\s*TV/i,
+    label: 'Apple TV',
+    badge: 'TV',
+    color: '#1d1d1f',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/AppleTVLogo.svg',
+    logoBg: '#1d1d1f'
+  },
+  {
+    id: 'netflix',
+    pattern: /Netflix/i,
+    label: 'Netflix',
+    badge: 'N',
+    color: '#e50914',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/Netflix_icon.svg',
+    logoBg: '#ffffff'
+  },
   { id: 'weilai', pattern: /緯來/i, label: '緯來體育台', badge: '緯', color: '#0068b7' },
-  { id: 'eleven', pattern: /ELEVEN\s*SPORTS/i, label: 'ELEVEN SPORTS', badge: '11', color: '#f2394c' },
-  { id: 'disneyplus', pattern: /Disney\+?/i, label: 'Disney+', badge: 'D+', color: '#113ccf' },
+  {
+    id: 'eleven',
+    pattern: /ELEVEN\s*SPORTS/i,
+    label: 'ELEVEN SPORTS',
+    badge: '11',
+    color: '#f2394c',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/ELEVEN_SPORTS_Logo.svg',
+    logoBg: '#000000'
+  },
+  {
+    id: 'disneyplus',
+    pattern: /Disney\+?/i,
+    label: 'Disney+',
+    badge: 'D+',
+    color: '#113ccf',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/Disney%2B_logo.svg',
+    logoBg: '#ffffff'
+  },
   { id: 'myvideo', pattern: /myVideo/i, label: 'myVideo', badge: 'MV', color: '#ff6600' },
   { id: 'mlbtv', pattern: /MLB\.?TV/i, label: 'MLB.TV', badge: 'MLB', color: '#041e42' }
 ];
@@ -355,6 +406,15 @@ const HIGH_SCORE_THRESHOLD = 8;
 // resolveViewingPlan) - deliberately a real "this is genuinely worth
 // watching" score, not just "the best of a bad day" for that sport.
 const DIVERSITY_MIN_SCORE = 6.5;
+// How good an overlapping-but-not-picked fixture has to be to join a
+// recommended match's swipeable stack (see the pass after the DP in
+// resolveViewingPlan) - lower than DIVERSITY_MIN_SCORE on purpose, since
+// browsing a stack is opt-in (a swipe), not something forced in front of
+// everyone by default.
+const STACK_MIN_SCORE = 5;
+// Caps how many alternatives one stack can hold - a "swipe to see what
+// else was on" gesture stops being quick past a handful of cards.
+const STACK_MAX_ALTERNATIVES = 3;
 
 function isQuietHours(match) {
   const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
@@ -497,6 +557,34 @@ function resolveViewingPlan(matches, priorityOrder = []) {
     }
   }
 
+  // Attaches a small set of overlapping-but-not-picked fixtures to each
+  // recommended match, for the swipeable card stack (see
+  // renderRecommendedSection) - unlike the always-expanded "show both at
+  // once" layout this replaced, browsing alternatives here is opt-in (a
+  // swipe), so this can afford to be more generous about what counts as
+  // worth surfacing than a forced side-by-side display could: any
+  // overlapping fixture that's still a genuinely decent watch
+  // (STACK_MIN_SCORE), not only a near-exact tie. Each alternative is
+  // claimed by at most one recommended match (whichever it overlaps that's
+  // processed first, in chronological order) so it never appears in two
+  // different stacks at once.
+  const claimedStackIds = new Set();
+  recommendedSorted.forEach(rec => {
+    const alternativeIds = rec.overlappingIds
+      .filter(id => {
+        if (claimedStackIds.has(id)) return false;
+        const other = withIntervals.find(m => m.id === id);
+        return other && !other.recommended && other.score >= STACK_MIN_SCORE;
+      })
+      .sort((a, b) => {
+        const scoreOf = id => withIntervals.find(m => m.id === id).score;
+        return scoreOf(b) - scoreOf(a);
+      })
+      .slice(0, STACK_MAX_ALTERNATIVES);
+    alternativeIds.forEach(id => claimedStackIds.add(id));
+    if (alternativeIds.length) rec.stackAlternativeIds = alternativeIds;
+  });
+
   return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
 }
 
@@ -535,7 +623,7 @@ function renderVenue(el, match) {
   el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
-function buildMatchCard(match) {
+function buildMatchCard(match, { isStackAlternative = false } = {}) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   const start = Date.parse(match.startTimeUtc);
   const end = start + match.durationMinutes * 60_000;
@@ -580,10 +668,40 @@ function buildMatchCard(match) {
     watchEl.hidden = false;
     watchEl.querySelector('.watch-text').textContent = match.whereToWatchTw;
     const badge = watchEl.querySelector('.watch-badge');
+    const badgeLogo = watchEl.querySelector('.watch-logo');
+    const badgeText = watchEl.querySelector('.watch-badge-text');
     const service = resolveService(match.whereToWatchTw);
-    if (service && service.badge) {
+    if (service && service.logo) {
       badge.hidden = false;
-      badge.textContent = service.badge;
+      badge.style.background = service.logoBg || '#fff';
+      badgeLogo.src = service.logo;
+      badgeLogo.alt = service.label;
+      badgeLogo.hidden = false;
+      badgeText.hidden = true;
+      // Same defensive fallback as team logos (buildTeamRow) - an
+      // external Commons hotlink can fail for reasons with nothing to do
+      // with this page (rate limiting, an outage, the file being moved),
+      // and the plain colored-initial badge is a fine fallback rather
+      // than an empty box.
+      badgeLogo.addEventListener(
+        'error',
+        () => {
+          badgeLogo.hidden = true;
+          if (service.badge) {
+            badgeText.hidden = false;
+            badgeText.textContent = service.badge;
+            badge.style.background = service.color;
+          } else {
+            badge.hidden = true;
+          }
+        },
+        { once: true }
+      );
+    } else if (service && service.badge) {
+      badge.hidden = false;
+      badgeLogo.hidden = true;
+      badgeText.hidden = false;
+      badgeText.textContent = service.badge;
       badge.style.background = service.color;
     } else {
       badge.hidden = true;
@@ -595,24 +713,40 @@ function buildMatchCard(match) {
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (match.recommended) recommendedTag.hidden = false;
+  if (isStackAlternative) {
+    recommendedTag.hidden = false;
+    recommendedTag.textContent = '同時段選擇';
+    recommendedTag.classList.add('is-alternative');
+  } else if (match.recommended) {
+    recommendedTag.hidden = false;
+  }
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
-  // Two cases: recommended (possibly overlapping the previous pick a
-  // little, kept anyway for its quality), or not - in which case, if it
-  // lost its slot to something recommended, say what to watch instead.
-  // Deliberately just one pick per slot, never several shown side by side
-  // - a longer list of "equally good" options was tried and dropped as
-  // too cluttered; this site would rather commit to one answer per slot.
+  // Three cases, deliberately not layered on top of each other:
+  //   1. Recommended, and it only made the cut by eating into the
+  //      previous pick's slot a little - say so, framed as a deliberate
+  //      trade-off.
+  //   2. Rendered as a card inside another match's swipeable stack (see
+  //      renderRecommendedSection/buildMatchStack) - shown at full
+  //      strength, no muting, since being offered as a swipe-to option is
+  //      already the point; the plain "所有賽事" listing further down
+  //      still mutes this same fixture on its own, unstacked card.
+  //   3. Genuinely lost its slot with nothing surfacing it as an
+  //      alternative anywhere - muted, with a note pointing at what's
+  //      recommended instead.
   const conflictNote = node.querySelector('.conflict-note');
   if (match.recommended && match.overlapsWithPrevious) {
     const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
     conflictNote.textContent = `與「${previous ? previous.name : '前一場推薦賽事'}」重疊約 ${match.overlapsWithPrevious.minutes} 分鐘——因賽事精彩仍納入推薦。`;
+  } else if (isStackAlternative) {
+    conflictNote.hidden = false;
+    conflictNote.classList.add('is-allowed-overlap');
+    conflictNote.textContent = '同一時段的另一個選擇——精彩程度也不差，滑動比較看看。';
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
@@ -621,7 +755,7 @@ function buildMatchCard(match) {
     }
     node.classList.add('is-muted');
   }
-  if (match.recommended) node.classList.add('is-recommended');
+  if (match.recommended || isStackAlternative) node.classList.add('is-recommended');
 
   const now = Date.now();
   if (!match.timeTbd && now >= start && now < end) node.classList.add('is-live');
@@ -715,6 +849,50 @@ function renderFilters() {
   );
 }
 
+// A recommended match plus its swipeable alternatives (see
+// resolveViewingPlan's stackAlternativeIds pass) - a native CSS
+// scroll-snap carousel (see .match-stack in styles.css), not custom touch
+// handling, so swiping works the same way it does anywhere else on this
+// page. Dots track scroll position via a plain scroll listener - good
+// enough at 2-4 cards, no need for an IntersectionObserver.
+function buildMatchStack(primary, alternatives, isPinned) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'match-stack';
+
+  const hint = document.createElement('p');
+  hint.className = 'match-stack-hint';
+  hint.textContent = `⟷ 這個時段還有 ${alternatives.length} 個選擇，左右滑動比較`;
+
+  const scroller = document.createElement('div');
+  scroller.className = 'match-stack-scroller';
+  const cards = [primary, ...alternatives];
+  cards.forEach((match, index) => {
+    const card = buildMatchCard(match, { isStackAlternative: index > 0 });
+    if (index === 0 && isPinned) card.classList.add('is-pinned');
+    scroller.appendChild(card);
+  });
+
+  const dots = document.createElement('div');
+  dots.className = 'match-stack-dots';
+  const dotEls = cards.map((_, index) => {
+    const dot = document.createElement('span');
+    dot.className = 'match-stack-dot' + (index === 0 ? ' is-active' : '');
+    dots.appendChild(dot);
+    return dot;
+  });
+  scroller.addEventListener(
+    'scroll',
+    () => {
+      const activeIndex = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
+      dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
+    },
+    { passive: true }
+  );
+
+  wrapper.append(hint, scroller, dots);
+  return wrapper;
+}
+
 function renderRecommendedSection() {
   const dayMatches = applySportFilter(matchesForSelectedDay().filter(m => m.recommended));
   dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
@@ -726,11 +904,24 @@ function renderRecommendedSection() {
     return;
   }
   recommendedEmptyEl.hidden = true;
+  // stackAlternativeIds can point at a fixture on a different (adjacent)
+  // local day if the recommended match's slot straddles midnight for this
+  // viewer - looked up from the full state.matches, not just today's
+  // bucket, so that edge case doesn't just silently drop the alternative.
+  const byId = new Map(state.matches.map(m => [m.id, m]));
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const card = buildMatchCard(match);
-    if (index === 0) card.classList.add('is-pinned');
-    fragment.appendChild(card);
+    const alternatives = (match.stackAlternativeIds || [])
+      .map(id => byId.get(id))
+      .filter(alt => alt && (state.activeSport === 'all' || alt.sport === state.activeSport));
+
+    if (!alternatives.length) {
+      const card = buildMatchCard(match);
+      if (index === 0) card.classList.add('is-pinned');
+      fragment.appendChild(card);
+      return;
+    }
+    fragment.appendChild(buildMatchStack(match, alternatives, index === 0));
   });
   recommendedListEl.replaceChildren(fragment);
 }

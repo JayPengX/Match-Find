@@ -93,9 +93,15 @@ Scoring and picking are split across two different places, deliberately:
 - No competitiveness/watchability meters on the card - just the one-sentence
   AI reason. The numbers still drive the scheduling and tie-breaking behind
   the scenes; the page itself only ever shows the recommendation, not the
-  data behind it. Exactly one pick per slot, never several shown side by
-  side as "equally good, pick whichever" - that was tried and dropped as
-  too cluttered.
+  data behind it.
+- A recommended fixture with genuinely decent overlapping alternatives (see
+  `STACK_MIN_SCORE` in `resolveViewingPlan`) renders as a **horizontally
+  swipeable card stack** (native CSS scroll-snap, the same kind of touch
+  swipe the day picker already uses) instead of either silently picking one
+  or showing several at once - only one card is ever on screen by default,
+  the others are a deliberate swipe away with dots marking how many there
+  are. A version of this that showed every alternative expanded at once was
+  tried first and dropped as too cluttered.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -104,11 +110,17 @@ Scoring and picking are split across two different places, deliberately:
   section at the bottom instead. A bracket slot with no real teams assigned
   yet ("TBD @ TBD") is skipped entirely rather than shown as a blank card.
 - F1 weekends surface **qualifying and (on a sprint weekend) the sprint
-  race** as their own fixtures, not just Sunday's race - each a genuinely
-  watchable event in its own right, keyed off ESPN's own per-session
-  abbreviation (`Race`/`Qual`/`SR`, confirmed stable across both ordinary
-  and sprint weekends) so there's no ambiguity about which session is
-  which.
+  race** as their own fixtures, not just Saturday/Sunday's race - each a
+  genuinely watchable event in its own right, keyed off ESPN's own
+  per-session abbreviation (`Race`/`Qual`/`SR`, confirmed stable across both
+  ordinary and sprint weekends). Session times were cross-checked against
+  Formula1.com's own official timetable and matched exactly. F1's Taiwan
+  broadcaster is always 愛爾達體育台 - the MLB-specific "Apple TV exclusive
+  slate" override (see "Broadcast service registry" below and Orbit's
+  `/match-recommend`) explicitly does not apply to F1, even though ESPN's
+  own `broadcast` field for F1 also happens to say Apple TV (its real
+  international rights holder - a genuinely different, unrelated fact from
+  who carries it in Taiwan).
 
 ## Sport priority (⚙ in the header)
 
@@ -145,13 +157,18 @@ most once per sport per day.
 ## Broadcast service registry (logos, and "do I actually have this?")
 
 `SERVICES` in `public/app.js` maps free-form `whereToWatchTw` text (Gemini's
-own wording, not a fixed enum) to a small color-coded badge per service
-(愛爾達, Apple TV, Netflix, 緯來, ELEVEN SPORTS, Disney+, myVideo, MLB.TV) -
-plain colored initials, not a reproduction of the real trademarked logo,
-since this is a static site with no image-licensing story of its own.
-Adding a new service later is one more entry in that list; nothing else in
-the file needs to know about it, same pattern as `SPORT_LABELS_ZH` for
-sports.
+own wording, not a fixed enum) to a small badge per service (愛爾達, Apple
+TV, Netflix, 緯來, ELEVEN SPORTS, Disney+, myVideo, MLB.TV). Where a
+service's real, official mark exists on Wikimedia Commons (confirmed live,
+not assumed - see each entry's `logo`/`logoBg`), that's used via Commons'
+own `Special:FilePath` hotlink redirect, same posture as the team/F1 logos
+already pulled from ESPN's CDN elsewhere in this file rather than
+reproduced into this repo; a service with no logo found there (緯來,
+myVideo, MLB.TV) falls back to a plain colored-initial badge, and any logo
+that fails to load (network hiccup, a moved file) falls back to that same
+badge automatically (same `onerror` pattern as team logos). Adding a new
+service later is one more entry in that list; nothing else in the file
+needs to know about it, same pattern as `SPORT_LABELS_ZH` for sports.
 
 `MY_SERVICE_IDS` names which of those the site's owner actually subscribes
 to right now (愛爾達, Apple TV, Netflix, as of writing) - matched fixtures
