@@ -749,6 +749,13 @@ async function main() {
     daysAhead: DAYS_AHEAD,
     lastAiFetchAt: meta.lastAiFetchAt || null,
     source: matches.length === 0 ? 'none' : usedAi ? (matches.every(m => m.source === 'ai') ? 'ai' : 'mixed') : 'heuristic',
+    // Baked in at build time so the browser knows where to send its own
+    // settings-sync calls (see public/app.js's sync section) - a plain
+    // variable, not a secret (same reasoning as PROXY_URL's own comment
+    // above): it's just a fetch target with no credential in it, and it's
+    // already effectively public the moment it ships in this static file
+    // regardless of where it came from.
+    proxyUrl: PROXY_URL || null,
     matches
   };
 

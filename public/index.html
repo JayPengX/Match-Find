@@ -42,14 +42,53 @@
   </header>
 
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>
-  <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="賽事優先順序設定">
+  <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="設定">
     <div class="settings-panel-header">
-      <h2>賽事優先順序</h2>
+      <h2>設定</h2>
       <button id="settings-close-btn" type="button" aria-label="關閉">✕</button>
     </div>
-    <p class="settings-hint">時間衝突、精彩程度相近時，排名較前的運動優先——用 ↑↓ 排序，會立即套用到推薦清單。</p>
-    <div id="settings-sport-list" class="settings-sport-list"></div>
-    <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設順序</button>
+
+    <section class="settings-section">
+      <h3>賽事優先順序</h3>
+      <p class="settings-hint">時間衝突、精彩程度相近時，排名較前的運動優先——用 ↑↓ 排序，會立即套用到推薦清單。</p>
+      <div id="settings-sport-list" class="settings-sport-list"></div>
+      <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設順序</button>
+    </section>
+
+    <section class="settings-section">
+      <h3>已啟用的運動</h3>
+      <p class="settings-hint">關閉的運動完全不會出現在網站上（推薦與所有賽事都不會）。至少要開啟一項。</p>
+      <div id="settings-enabled-sports" class="settings-chip-list"></div>
+    </section>
+
+    <section class="settings-section">
+      <h3>訂閱的頻道／服務</h3>
+      <p class="settings-hint">標記你實際訂閱的頻道或服務，這些賽事會加註「已訂閱」，衝突時也會稍微優先。</p>
+      <div id="settings-my-services" class="settings-chip-list"></div>
+    </section>
+
+    <section class="settings-section">
+      <h3>跨裝置同步</h3>
+      <p id="sync-status-text" class="settings-hint"></p>
+      <div id="sync-connected-view" hidden>
+        <p class="sync-code-display"><span id="sync-code-text"></span> <button id="sync-copy-btn" type="button">複製</button></p>
+        <button id="sync-disconnect-btn" type="button" class="settings-reset">停止同步（不會刪除雲端資料）</button>
+      </div>
+      <div id="sync-disconnected-view">
+        <button id="sync-create-btn" type="button" class="sync-action-btn">建立新的同步碼</button>
+        <div class="sync-connect-row">
+          <input id="sync-code-input" type="text" placeholder="輸入其他裝置的同步碼" maxlength="16" autocapitalize="characters" autocomplete="off" />
+          <button id="sync-connect-btn" type="button" class="sync-action-btn">連接</button>
+        </div>
+      </div>
+      <p id="sync-error-text" class="sync-error" hidden></p>
+    </section>
+  </div>
+
+  <div id="sync-prompt-banner" class="update-banner" hidden role="status">
+    <span>要跨裝置同步你的設定嗎？</span>
+    <button id="sync-prompt-open-btn" type="button">設定同步</button>
+    <button id="sync-prompt-dismiss-btn" type="button" class="sync-prompt-dismiss">先不要</button>
   </div>
 
   <main id="app" hidden>
