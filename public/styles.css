@@ -82,12 +82,11 @@ main#app {
   padding: 20px;
 }
 .spotlight-card .sport-badge { margin-bottom: 8px; }
-.spotlight-card .match-name {
-  display: block;
-  font-size: 1.35rem;
-  font-weight: 700;
-  margin: 4px 0 2px;
-}
+.spotlight-card .teams { margin: 8px 0 2px; gap: 6px; }
+.spotlight-card .team-logo { width: 34px; height: 34px; }
+.spotlight-card .team-name-en { font-size: 1.2rem; font-weight: 700; }
+.spotlight-card .team-name-zh { font-size: 0.9rem; }
+.spotlight-card .team-at { padding-left: 42px; }
 .spotlight-card .match-time-value {
   font-size: 1rem;
   font-weight: 600;
@@ -180,7 +179,39 @@ main#app {
 .sport-badge[data-sport="NBA"] { background: var(--sport-nba); }
 .sport-badge[data-sport="F1"] { background: var(--sport-f1); }
 
-.match-name { font-weight: 600; }
+.teams {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 6px 0 4px;
+}
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.team-logo {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  flex: none;
+}
+.team-name-en {
+  font-weight: 600;
+}
+.team-name-zh {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.team-at {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-left: 28px;
+}
 
 .recommended-tag {
   font-size: 0.68rem;
@@ -239,6 +270,9 @@ main#app {
   margin: 6px 0 0;
   font-size: 0.78rem;
   color: var(--warn);
+}
+.conflict-note.is-allowed-overlap {
+  color: var(--good);
 }
 
 .empty-state {

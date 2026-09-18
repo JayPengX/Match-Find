@@ -16,6 +16,7 @@ const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
 const cardTemplate = document.getElementById('match-card-template');
+const teamRowTemplate = document.getElementById('team-row-template');
 
 function localTimeFormatter() {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -54,6 +55,21 @@ function fillMeter(el, value) {
   el.style.width = `${Math.max(0, Math.min(10, value)) * 10}%`;
 }
 
+function buildTeamRow({ logo, name, nameZh }) {
+  const node = teamRowTemplate.content.firstElementChild.cloneNode(true);
+  const img = node.querySelector('.team-logo');
+  if (logo) {
+    img.src = logo;
+    img.alt = name;
+    img.addEventListener('error', () => { img.hidden = true; }, { once: true });
+  } else {
+    img.hidden = true;
+  }
+  node.querySelector('.team-name-en').textContent = name;
+  node.querySelector('.team-name-zh').textContent = nameZh || '';
+  return node;
+}
+
 function buildMatchCard(match, { compact = false } = {}) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   const start = new Date(match.startTimeUtc);
@@ -65,13 +81,23 @@ function buildMatchCard(match, { compact = false } = {}) {
   badge.textContent = match.sport;
   badge.dataset.sport = match.sport;
 
-  node.querySelector('.match-name').textContent = match.name;
+  const teamsEl = node.querySelector('[data-teams]');
+  if (match.competitors && match.competitors.length === 2) {
+    const [away, home] = match.competitors;
+    teamsEl.appendChild(buildTeamRow(away));
+    const at = document.createElement('span');
+    at.className = 'team-at';
+    at.textContent = '@';
+    teamsEl.appendChild(at);
+    teamsEl.appendChild(buildTeamRow(home));
+  } else {
+    teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
+  }
+
   node.querySelector('.match-venue').textContent = match.venue || '';
 
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (match.recommended && (match.conflictsWith || []).length) {
-    recommendedTag.hidden = false;
-  }
+  if (match.recommended) recommendedTag.hidden = false;
 
   fillMeter(node.querySelector('.competitiveness-fill'), match.competitiveness);
   fillMeter(node.querySelector('.watchability-fill'), match.watchability);
@@ -81,11 +107,16 @@ function buildMatchCard(match, { compact = false } = {}) {
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
   const conflictNote = node.querySelector('.conflict-note');
-  if (!match.recommended && (match.conflictsWith || []).length) {
-    const other = state.matches.find(m => match.conflictsWith.includes(m.id) && m.recommended);
-    if (other) {
+  if (match.recommended && match.overlapsWithPrevious) {
+    const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
+    conflictNote.hidden = false;
+    conflictNote.classList.add('is-allowed-overlap');
+    conflictNote.textContent = `Overlaps by about ${match.overlapsWithPrevious.minutes} min with ${previous ? previous.name : 'the previous pick'} — kept in the lineup anyway for its quality.`;
+  } else if (!match.recommended && (match.overlappingIds || []).length) {
+    const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
+    if (others.length) {
       conflictNote.hidden = false;
-      conflictNote.textContent = `Overlaps with ${other.name} — that one's the recommended pick for this time slot.`;
+      conflictNote.textContent = `Overlaps with ${others.map(m => m.name).join(', ')} — that's the recommended pick for this time slot.`;
     }
     node.classList.add('is-muted');
   }

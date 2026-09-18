@@ -15,7 +15,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -45,6 +45,30 @@ jobs:
           # still runs - see scripts/build-data.mjs's heuristic fallback.
           PROXY_URL: ${{ vars.PROXY_URL }}
         run: node scripts/build-data.mjs
+      - name: Commit updated AI score cache
+        # data/ai-cache.json (unlike public/data/matches.json, which is
+        # fully regenerated every run and never committed) is the persistent
+        # record of which matches Gemini has already scored - see
+        # build-data.mjs's "AI score cache" section. Committing it back is
+        # what makes that cache survive between separate scheduled runs, so
+        # a match already scored on an earlier run is never re-sent to
+        # Gemini. Only commits when the cache actually changed (i.e. a new
+        # fixture entered the window), so this doesn't add a commit every
+        # single run. contents: write (see permissions above) is what lets
+        # this push succeed; a commit made with the default GITHUB_TOKEN
+        # never re-triggers this same workflow, so this can't loop.
+        run: |
+          if ! git diff --quiet -- data/ai-cache.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/ai-cache.json
+            git commit -m "Update AI score cache"
+            git fetch origin "${{ github.ref_name }}"
+            git rebase "origin/${{ github.ref_name }}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          else
+            echo "AI score cache unchanged - nothing to commit."
+          fi
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

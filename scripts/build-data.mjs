@@ -1,9 +1,9 @@
 // ---- scripts/build-data.mjs ----
 // Fetches upcoming fixtures for the Premier League, MLS, MLB, NBA, and F1
 // from ESPN's public scoreboard API (no key required), scores each one for
-// competitiveness/watchability, resolves same-time conflicts by picking the
-// highest-scoring fixture per overlapping window, and writes the result to
-// public/data/matches.json for the static site to render.
+// competitiveness/watchability, builds one continuous "what to watch"
+// viewing plan for the window (see resolveViewingPlan), and writes the
+// result to public/data/matches.json for the static site to render.
 //
 // Runs at build time only (a scheduled GitHub Action, see
 // .github/workflows/deploy.yml) - never per page view. The site itself just
@@ -16,28 +16,48 @@
 // If PROXY_URL isn't configured, or the call fails, matches fall back to a
 // simple local heuristic (see heuristicScore) so the site still works, just
 // with less insightful picks.
+//
+// Gemini is only ever asked to score a given match ONCE, the first build
+// where that match appears inside the fetch window - see the AI score
+// cache section below. A scheduled run every 6 hours would otherwise
+// re-score the same ~30-hour-overlapping window of fixtures on every single
+// run, burning quota for a judgment that doesn't change between builds.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 
 const PROXY_URL = (process.env.PROXY_URL || '').trim().replace(/\/+$/, '');
 const OUTPUT_PATH = new URL('../public/data/matches.json', import.meta.url);
+// Committed to the repo (unlike matches.json, which is fully regenerated
+// every run) - this is the persistent record of which matches have already
+// been scored by Gemini, so it has to survive between separate workflow
+// runs. See .github/workflows/deploy.yml's "Commit updated AI score cache"
+// step for how it gets pushed back.
+const CACHE_PATH = new URL('../data/ai-cache.json', import.meta.url);
 
 // How far ahead to look for fixtures. 36 hours comfortably covers "today and
 // tomorrow" for every timezone without pulling in so much MLB/soccer volume
-// that the Gemini prompt (and the page) gets unwieldy.
+// that the page gets unwieldy.
 const WINDOW_HOURS = 36;
+// Cache entries for matches that started more than this long ago are
+// dropped on every run - once a match has aired there's no reason to keep
+// re-shipping its score in the cache file forever.
+const CACHE_RETENTION_HOURS = 12;
 
 // Team-sport leagues, all sharing the same ESPN scoreboard shape
 // (site.api.espn.com/apis/site/v2/sports/<sportKey>/<leagueKey>/scoreboard).
-// durationMinutes is a rough estimate of how long a live broadcast actually
-// occupies a viewer's evening - used only to detect time conflicts between
-// fixtures, not shown to the user.
+// durationMinutes is this script's only notion of "how long a match runs" -
+// ESPN's scoreboard never gives an end time, so every conflict/scheduling
+// decision below (see resolveViewingPlan) works off this per-sport AVERAGE
+// broadcast length, not any per-match actual duration.
 const TEAM_LEAGUES = [
   { id: 'epl', sportKey: 'soccer', leagueKey: 'eng.1', label: 'Premier League', durationMinutes: 115 },
   { id: 'mls', sportKey: 'soccer', leagueKey: 'usa.1', label: 'MLS', durationMinutes: 115 },
   { id: 'mlb', sportKey: 'baseball', leagueKey: 'mlb', label: 'MLB', durationMinutes: 190 },
   { id: 'nba', sportKey: 'basketball', leagueKey: 'nba', label: 'NBA', durationMinutes: 150 }
 ];
+
+const F1_LOGO = 'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png';
 
 function espnScoreboardUrl(sportKey, leagueKey, yyyymmdd) {
   const base = `https://site.api.espn.com/apis/site/v2/sports/${sportKey}/${leagueKey}/scoreboard`;
@@ -69,10 +89,21 @@ function parseOverallRecord(competitor) {
   return { wins: Number(match[1]), losses: Number(match[2]) };
 }
 
+function buildCompetitor(leagueId, c) {
+  const abbreviation = c.team?.abbreviation || '';
+  return {
+    name: c.team?.displayName || 'Unknown',
+    nameZh: teamNameZh(leagueId, abbreviation),
+    abbreviation,
+    logo: c.team?.logo || '',
+    homeAway: c.homeAway || '',
+    record: parseOverallRecord(c)
+  };
+}
+
 function competitorContext(competitor) {
-  const record = parseOverallRecord(competitor);
-  const name = competitor.team?.displayName || competitor.athlete?.displayName || 'Unknown';
-  return record ? `${name} (${record.wins}-${record.losses})` : name;
+  const record = competitor.record;
+  return record ? `${competitor.name} (${record.wins}-${record.losses})` : competitor.name;
 }
 
 async function fetchTeamLeagueMatches(league, now, windowEndMs) {
@@ -91,11 +122,17 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs) {
       const startMs = Date.parse(event.date);
       if (!Number.isFinite(startMs) || startMs < now.getTime() || startMs > windowEndMs) continue;
 
-      const competitors = (competition.competitors || []).map(c => ({
-        name: c.team?.displayName || 'Unknown',
-        homeAway: c.homeAway || '',
-        record: parseOverallRecord(c)
-      }));
+      // Always [away, home] regardless of the order ESPN happens to list
+      // them in, so `name`/`nameZh` below are built consistently as
+      // "AWAY @ HOME" for every sport - the same convention ESPN's own
+      // shortName uses, just under this script's own control so an English
+      // and a Chinese version can be built the same way.
+      const rawCompetitors = (competition.competitors || []).map(c => buildCompetitor(league.id, c));
+      const away = rawCompetitors.find(c => c.homeAway === 'away') || rawCompetitors[0];
+      const home = rawCompetitors.find(c => c.homeAway === 'home') || rawCompetitors[1];
+      const competitors = [away, home].filter(Boolean);
+      if (competitors.length !== 2) continue;
+
       const broadcast = (competition.broadcasts || [])
         .flatMap(b => b.names || [])
         .slice(0, 1)[0];
@@ -103,13 +140,15 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs) {
       matches.push({
         id: `${league.id}-${event.id}`,
         sport: league.label,
-        name: event.shortName || event.name,
+        name: `${away.name} @ ${home.name}`,
+        nameZh: away.nameZh && home.nameZh ? `${away.nameZh} @ ${home.nameZh}` : '',
         startTimeUtc: new Date(startMs).toISOString(),
         durationMinutes: league.durationMinutes,
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
+        logo: '',
         competitors,
-        context: (competition.competitors || []).map(competitorContext).join(' vs ')
+        context: competitors.map(competitorContext).join(' vs ')
       });
     }
   }
@@ -142,10 +181,12 @@ async function fetchF1Matches(now, windowEndMs) {
       id: `f1-${event.id}`,
       sport: 'F1',
       name: event.name,
+      nameZh: f1RaceNameZh(event.name),
       startTimeUtc: new Date(startMs).toISOString(),
       durationMinutes: 120,
       venue: event.circuit?.fullName || '',
       broadcast: '',
+      logo: F1_LOGO,
       competitors: [],
       context: `${event.name} - Formula 1 race`
     });
@@ -176,14 +217,40 @@ function heuristicScore(match) {
   };
 }
 
-// Sends the fixture list to Orbit's shared Cloudflare Worker, which owns
-// the actual Gemini prompt/schema (see that repo's cloudflare-worker/
-// orbit-worker.js, route /match-recommend) and holds the real API key -
-// this script only ever sends {id, sport, name, startTimeUtc, context}, the
-// same shape for every fixture regardless of sport.
-async function fetchAiScores(matches) {
-  if (!PROXY_URL) return new Map();
-  const payload = matches.map(m => ({
+// ---- AI score cache ---------------------------------------------------
+// Keyed by match id (stable across runs - see how ids are built above), so
+// a match already scored on an earlier run is never re-sent to Gemini. Only
+// startTimeUtc is kept alongside the score, purely so pruneCache can drop
+// entries for matches that have already aired without needing to re-fetch
+// anything.
+async function loadCache() {
+  try {
+    return JSON.parse(await readFile(CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function pruneCache(cache, now) {
+  const cutoff = now.getTime() - CACHE_RETENTION_HOURS * 60 * 60 * 1000;
+  const pruned = {};
+  for (const [id, entry] of Object.entries(cache)) {
+    if (Date.parse(entry.startTimeUtc) >= cutoff) pruned[id] = entry;
+  }
+  return pruned;
+}
+
+// Sends only the fixtures NOT already in the cache to Orbit's shared
+// Cloudflare Worker, which owns the actual Gemini prompt/schema (see that
+// repo's cloudflare-worker/orbit-worker.js, route /match-recommend) and
+// holds the real API key - this script only ever sends {id, sport, name,
+// startTimeUtc, context}, the same shape for every fixture regardless of
+// sport. This is the entire reason Gemini quota use stays flat no matter
+// how often the build runs: a match that was already scored on a previous
+// run simply isn't included in the request body at all.
+async function fetchAiScores(matchesNeedingScore) {
+  if (!PROXY_URL || !matchesNeedingScore.length) return new Map();
+  const payload = matchesNeedingScore.map(m => ({
     id: m.id,
     sport: m.sport,
     name: m.name,
@@ -210,40 +277,136 @@ async function fetchAiScores(matches) {
   }
 }
 
-// Groups matches whose live windows overlap (start to start+duration) into
-// clusters via a simple sorted sweep, then marks the single highest-scoring
-// match in each cluster as the recommended pick - this is what "if time
-// conflict it will choose based on competitiveness and watchability" means
-// in practice. A UTC overlap is the same overlap for every viewer
-// regardless of timezone (a local-time conversion doesn't change whether
-// two instants overlap), so this only ever needs to run once at build time,
-// not per viewer.
-function resolveConflicts(matches) {
-  const sorted = [...matches].sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
-  let clusterEnd = -Infinity;
-  let cluster = [];
-  const clusters = [];
-  for (const match of sorted) {
-    const start = Date.parse(match.startTimeUtc);
-    const end = start + match.durationMinutes * 60_000;
-    if (start < clusterEnd) {
-      cluster.push(match);
-    } else {
-      if (cluster.length) clusters.push(cluster);
-      cluster = [match];
-    }
-    clusterEnd = Math.max(clusterEnd, end);
-  }
-  if (cluster.length) clusters.push(cluster);
+// ---- Continuous viewing plan -------------------------------------------
+//
+// "Worth watching" alone isn't enough to build a day's recommendations from
+// - two great matches airing at the same time still only let a viewer
+// actually watch one of them. This picks the set of matches across the
+// WHOLE window (every sport combined - one plan, not one per league) that
+// maximizes total score while staying watchable back-to-back, using a
+// classic weighted-interval-scheduling-style DP generalized with a bit of
+// tolerance:
+//
+//   - A small base tolerance (OVERLAP_TOLERANCE_BASE_MINUTES) absorbs the
+//     fact that durationMinutes is only ever a per-sport AVERAGE, not this
+//     match's actual length - without it, a real match that overruns its
+//     sport's average by even a few minutes would look like a "conflict"
+//     with whatever the plan lined up right after it.
+//   - A much larger tolerance (OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES)
+//     applies whenever either match involved has a high score - this is
+//     the deliberate "allow overlap in certain scenarios" behavior: a
+//     must-watch match is allowed to eat into the next slot rather than
+//     being dropped from the plan, or dropping its neighbor, over a
+//     genuinely minor overlap.
+//
+// This is a good, cheap heuristic for a viewing plan, not a certified
+// globally-optimal schedule - with arbitrary (non-monotonic) compatibility
+// between matches, "pick the best plan" in general is the maximum-weight
+// independent set problem, which is NP-hard. At the scale this ever runs
+// at (well under 100 fixtures per window), checking every pair directly
+// (see compatible() below) is both fast enough and good enough.
+const OVERLAP_TOLERANCE_BASE_MINUTES = 10;
+const OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES = 40;
+const HIGH_SCORE_THRESHOLD = 8;
 
-  for (const group of clusters) {
-    const best = group.reduce((a, b) => (b.score > a.score ? b : a));
-    for (const match of group) {
-      match.recommended = match === best;
-      match.conflictsWith = group.filter(m => m !== match).map(m => m.id);
+function matchInterval(match) {
+  const start = Date.parse(match.startTimeUtc);
+  return { start, end: start + match.durationMinutes * 60_000 };
+}
+
+function overlapMinutes(a, b) {
+  const overlapStart = Math.max(a.interval.start, b.interval.start);
+  const overlapEnd = Math.min(a.interval.end, b.interval.end);
+  return overlapEnd > overlapStart ? (overlapEnd - overlapStart) / 60_000 : 0;
+}
+
+// `earlier` must end at or before `later` starts, within tolerance -
+// tolerance is decided by whichever of the two has the higher score, per
+// this function's own top-of-section comment.
+function compatible(later, earlier) {
+  const toleranceMinutes =
+    Math.max(later.competitiveness + later.watchability, earlier.competitiveness + earlier.watchability) / 2 >=
+    HIGH_SCORE_THRESHOLD
+      ? OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES
+      : OVERLAP_TOLERANCE_BASE_MINUTES;
+  const gapMinutes = (later.interval.start - earlier.interval.end) / 60_000;
+  return gapMinutes >= -toleranceMinutes;
+}
+
+export function resolveViewingPlan(matches) {
+  const sorted = [...matches]
+    .map(match => ({ ...match, interval: matchInterval(match) }))
+    .sort((a, b) => a.interval.end - b.interval.end);
+
+  // dp[i]: best total score of a valid plan that ends by taking sorted[i].
+  // best[i]: best total score achievable using only sorted[0..i] (may or
+  // may not include sorted[i]) - this is what lets "skip i entirely" stay
+  // on the table without a separate branch.
+  const dp = new Array(sorted.length).fill(0);
+  const predecessor = new Array(sorted.length).fill(-1);
+  const best = new Array(sorted.length).fill(0);
+
+  for (let i = 0; i < sorted.length; i++) {
+    let bestPredScore = 0;
+    let bestPredIndex = -1;
+    for (let j = 0; j < i; j++) {
+      if (compatible(sorted[i], sorted[j]) && best[j] > bestPredScore) {
+        bestPredScore = best[j];
+        bestPredIndex = j;
+      }
+    }
+    dp[i] = sorted[i].score + bestPredScore;
+    predecessor[i] = bestPredIndex;
+    best[i] = Math.max(i > 0 ? best[i - 1] : 0, dp[i]);
+  }
+
+  // Backtrack from whichever index actually achieves the final best[] value.
+  const selected = new Set();
+  let cursor = sorted.length - 1;
+  let target = sorted.length ? best[sorted.length - 1] : 0;
+  while (cursor >= 0) {
+    if (cursor > 0 && best[cursor - 1] === target) {
+      cursor -= 1;
+      continue;
+    }
+    selected.add(cursor);
+    target = dp[cursor] - sorted[cursor].score;
+    cursor = predecessor[cursor];
+  }
+
+  sorted.forEach((match, index) => {
+    match.recommended = selected.has(index);
+  });
+
+  // Informational only, independent of the plan above: which OTHER matches
+  // does this one's raw time window overlap, regardless of whether either
+  // is actually in the recommended plan. Powers the UI's "X overlaps with
+  // Y" notes for both the recommended side (an allowed high-score overlap)
+  // and the non-recommended side (why this one was left out).
+  sorted.forEach((match, index) => {
+    match.overlappingIds = sorted
+      .filter((other, otherIndex) => otherIndex !== index && overlapMinutes(match, other) > 0)
+      .map(other => other.id);
+  });
+
+  // Recommended matches whose plan neighbor still overlaps them (only
+  // possible via the high-score tolerance above) get a note naming the
+  // overlap explicitly, so a real, deliberate overlap is never silently
+  // indistinguishable from an ordinary back-to-back pick.
+  const recommendedSorted = sorted.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
+  for (let i = 1; i < recommendedSorted.length; i++) {
+    const minutes = overlapMinutes(recommendedSorted[i], recommendedSorted[i - 1]);
+    if (minutes > 0) {
+      recommendedSorted[i].overlapsWithPrevious = {
+        id: recommendedSorted[i - 1].id,
+        minutes: Math.round(minutes)
+      };
     }
   }
-  return sorted;
+
+  return sorted
+    .sort((a, b) => a.interval.start - b.interval.start)
+    .map(({ interval, ...match }) => match);
 }
 
 async function main() {
@@ -263,39 +426,54 @@ async function main() {
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
-  const aiPicks = await fetchAiScores(matches);
+  let cache = pruneCache(await loadCache(), now);
+  const needsScoring = matches.filter(m => !cache[m.id]);
+  const freshPicks = await fetchAiScores(needsScoring);
+
+  for (const match of needsScoring) {
+    const pick = freshPicks.get(match.id);
+    if (pick && Number.isFinite(pick.competitiveness) && Number.isFinite(pick.watchability)) {
+      cache[match.id] = {
+        startTimeUtc: match.startTimeUtc,
+        competitiveness: Math.max(1, Math.min(10, Math.round(pick.competitiveness))),
+        watchability: Math.max(1, Math.min(10, Math.round(pick.watchability))),
+        reason: String(pick.reason || '').slice(0, 300),
+        source: 'ai'
+      };
+    } else {
+      cache[match.id] = { startTimeUtc: match.startTimeUtc, ...heuristicScore(match), source: 'heuristic' };
+    }
+  }
+
   let usedAi = false;
   for (const match of matches) {
-    const pick = aiPicks.get(match.id);
-    if (pick && Number.isFinite(pick.competitiveness) && Number.isFinite(pick.watchability)) {
-      match.competitiveness = Math.max(1, Math.min(10, Math.round(pick.competitiveness)));
-      match.watchability = Math.max(1, Math.min(10, Math.round(pick.watchability)));
-      match.reason = String(pick.reason || '').slice(0, 300);
-      match.source = 'ai';
-      usedAi = true;
-    } else {
-      Object.assign(match, heuristicScore(match));
-      match.source = 'heuristic';
-    }
+    const scored = cache[match.id];
+    match.competitiveness = scored.competitiveness;
+    match.watchability = scored.watchability;
+    match.reason = scored.reason;
+    match.source = scored.source;
+    if (scored.source === 'ai') usedAi = true;
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
   }
 
-  const sorted = resolveConflicts(matches);
-  const spotlightId = sorted.length
-    ? sorted.reduce((a, b) => (b.score > a.score ? b : a)).id
-    : null;
+  const plan = resolveViewingPlan(matches);
+  const spotlightId = plan.length ? plan.reduce((a, b) => (b.score > a.score ? b : a)).id : null;
 
   const output = {
     generatedAt: now.toISOString(),
     windowHours: WINDOW_HOURS,
     source: matches.length === 0 ? 'none' : usedAi ? (matches.every(m => m.source === 'ai') ? 'ai' : 'mixed') : 'heuristic',
     spotlightId,
-    matches: sorted
+    matches: plan
   };
 
   await mkdir(new URL('.', OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, JSON.stringify(output, null, 2));
-  console.log(`Wrote ${sorted.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source})`);
+  await mkdir(new URL('.', CACHE_PATH), { recursive: true });
+  await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2) + '\n');
+  console.log(
+    `Wrote ${plan.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source}, ${needsScoring.length} newly scored, ${Object.keys(cache).length} cached)`
+  );
 }
 
 main().catch(error => {

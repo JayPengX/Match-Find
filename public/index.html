@@ -54,9 +54,9 @@
       <div class="match-body">
         <div class="match-heading">
           <span class="sport-badge"></span>
-          <span class="match-name"></span>
           <span class="recommended-tag" hidden>Recommended</span>
         </div>
+        <div class="teams" data-teams></div>
         <p class="match-venue"></p>
         <div class="score-row">
           <div class="score-meter">
@@ -72,6 +72,14 @@
         <p class="conflict-note" hidden></p>
       </div>
     </article>
+  </template>
+
+  <template id="team-row-template">
+    <div class="team-row">
+      <img class="team-logo" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      <span class="team-name-en"></span>
+      <span class="team-name-zh"></span>
+    </div>
   </template>
 
   <script src="./app.js"></script>
