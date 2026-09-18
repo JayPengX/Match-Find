@@ -1,0 +1,64 @@
+# Rebuilds public/data/matches.json from live fixtures on a schedule, then
+# deploys the whole public/ folder to GitHub Pages. See scripts/build-data.mjs
+# for what the build step actually does; this workflow just runs it and wires
+# the result to Pages (repo Settings -> Pages -> Source: GitHub Actions).
+name: Build match data and deploy to Pages
+
+on:
+  schedule:
+    # Every 6 hours. The anchor minute (17) is arbitrary - just off the
+    # top of the hour so this doesn't line up with every other repo's cron
+    # and hit GitHub's scheduling queue at the same instant.
+    - cron: '17 */6 * * *'
+  push:
+    branches: ['main']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Same reasoning as Orbit's static.yml: only one deployment in flight at a
+# time, but never cancel one that's already running.
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch fixtures and build match recommendations
+        env:
+          # Base URL of Orbit's shared Cloudflare Worker (no path suffix) -
+          # see README's "AI recommendations" section. A repo *variable*,
+          # not a secret: it ends up as a plain fetch target in this build
+          # step and holds no credential itself (the real Gemini key lives
+          # server-side in that Worker, never here). Left unset, the build
+          # still runs - see scripts/build-data.mjs's heuristic fallback.
+          PROXY_URL: ${{ vars.PROXY_URL }}
+        run: node scripts/build-data.mjs
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'public'
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

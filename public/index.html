@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Match Find — what to watch tonight</title>
+<meta name="description" content="Premier League, MLS, MLB, NBA, and F1 fixtures ranked by competitiveness and watchability, shown in your own local time." />
+<link rel="icon" href="data:," />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="page-header">
+    <div class="page-header-inner">
+      <h1>Match Find</h1>
+      <p class="tagline">The one match worth clearing your evening for.</p>
+      <p class="clock" id="local-clock" aria-live="off"></p>
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="spotlight-section" hidden>
+      <h2 class="section-label">Top pick</h2>
+      <article id="spotlight-card" class="spotlight-card"></article>
+    </section>
+
+    <section id="filters-section">
+      <h2 class="section-label">All upcoming fixtures</h2>
+      <div id="sport-filters" class="filter-row" role="group" aria-label="Filter by sport"></div>
+    </section>
+
+    <section id="list-section">
+      <div id="match-list"></div>
+    </section>
+
+    <p id="empty-state" class="empty-state" hidden>
+      No upcoming fixtures found in the next window. Check back soon.
+    </p>
+    <p id="error-state" class="empty-state" hidden>
+      Couldn't load match data. The site may still be building its first data set — try again shortly.
+    </p>
+  </main>
+
+  <footer class="page-footer">
+    <p id="generated-note"></p>
+    <p>Schedules from ESPN's public API · recommendations from Gemini via a shared proxy Worker · refreshes automatically every few hours.</p>
+  </footer>
+
+  <template id="match-card-template">
+    <article class="match-card">
+      <div class="match-time">
+        <span class="match-time-value"></span>
+        <span class="match-time-relative"></span>
+      </div>
+      <div class="match-body">
+        <div class="match-heading">
+          <span class="sport-badge"></span>
+          <span class="match-name"></span>
+          <span class="recommended-tag" hidden>Recommended</span>
+        </div>
+        <p class="match-venue"></p>
+        <div class="score-row">
+          <div class="score-meter">
+            <span class="score-label">Competitiveness</span>
+            <div class="meter"><div class="meter-fill competitiveness-fill"></div></div>
+          </div>
+          <div class="score-meter">
+            <span class="score-label">Watchability</span>
+            <div class="meter"><div class="meter-fill watchability-fill"></div></div>
+          </div>
+        </div>
+        <p class="match-reason"></p>
+        <p class="conflict-note" hidden></p>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>

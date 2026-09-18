@@ -1,0 +1,262 @@
+:root {
+  --bg: #0b0d12;
+  --bg-elevated: #12151c;
+  --border: #232733;
+  --text: #eef1f7;
+  --text-muted: #9aa3b5;
+  --accent: #5b8cff;
+  --accent-soft: rgba(91, 140, 255, 0.15);
+  --good: #3ddc97;
+  --warn: #ffb84d;
+  --radius: 14px;
+  --sport-epl: #5b8cff;
+  --sport-mls: #3ddc97;
+  --sport-mlb: #ff6b6b;
+  --sport-nba: #ff9f4d;
+  --sport-f1: #b98bff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f5f6fa;
+    --bg-elevated: #ffffff;
+    --border: #e1e4ec;
+    --text: #14161c;
+    --text-muted: #5c6270;
+    --accent-soft: rgba(91, 140, 255, 0.12);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.45;
+}
+
+.page-header {
+  padding: 32px 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.page-header-inner {
+  max-width: 760px;
+  margin: 0 auto;
+}
+.page-header h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  letter-spacing: -0.02em;
+}
+.tagline {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+}
+.clock {
+  margin: 12px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+main#app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+}
+
+.section-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 28px 0 12px;
+}
+#spotlight-section .section-label { margin-top: 0; }
+
+.spotlight-card {
+  background: linear-gradient(155deg, var(--accent-soft), transparent 65%), var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.spotlight-card .sport-badge { margin-bottom: 8px; }
+.spotlight-card .match-name {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 4px 0 2px;
+}
+.spotlight-card .match-time-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.spotlight-card .match-reason {
+  margin-top: 12px;
+  font-size: 1rem;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.filter-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.filter-chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.day-heading {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 24px 0 10px;
+  color: var(--text-muted);
+}
+
+.match-card {
+  display: flex;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  margin-bottom: 10px;
+}
+.match-card.is-recommended {
+  border-color: var(--accent);
+}
+.match-card.is-muted {
+  opacity: 0.6;
+}
+
+.match-time {
+  flex: 0 0 72px;
+  text-align: right;
+}
+.match-time-value {
+  display: block;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.match-time-relative {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.match-body { flex: 1; min-width: 0; }
+.match-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sport-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #0b0d12;
+  background: #ccc;
+}
+.sport-badge[data-sport="Premier League"] { background: var(--sport-epl); color: #0b0d12; }
+.sport-badge[data-sport="MLS"] { background: var(--sport-mls); }
+.sport-badge[data-sport="MLB"] { background: var(--sport-mlb); }
+.sport-badge[data-sport="NBA"] { background: var(--sport-nba); }
+.sport-badge[data-sport="F1"] { background: var(--sport-f1); }
+
+.match-name { font-weight: 600; }
+
+.recommended-tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--good);
+  border: 1px solid var(--good);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.match-venue {
+  margin: 2px 0 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.score-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.score-meter { flex: 1; min-width: 130px; }
+.score-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  margin-top: 4px;
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+.watchability-fill { background: var(--good); }
+
+.match-reason {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.match-reason.is-heuristic::after {
+  content: " (estimated, no AI recommendation)";
+  font-style: italic;
+}
+
+.conflict-note {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--warn);
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 16px;
+}
+
+.page-footer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 16px 40px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.page-footer p { margin: 4px 0; }
+
+@media (max-width: 480px) {
+  .match-card { gap: 10px; }
+  .match-time { flex-basis: 56px; }
+}

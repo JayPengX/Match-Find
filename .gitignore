@@ -1,0 +1,8 @@
+# Generated at build time by scripts/build-data.mjs - always rebuilt fresh
+# before each deploy, so committing a stale copy would be actively
+# misleading. See README for how to generate one locally to preview the
+# site.
+/public/data/matches.json
+
+node_modules/
+.env
