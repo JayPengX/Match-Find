@@ -44,6 +44,12 @@ jobs:
           # server-side in that Worker, never here). Left unset, the build
           # still runs - see scripts/build-data.mjs's heuristic fallback.
           PROXY_URL: ${{ vars.PROXY_URL }}
+          # Lets a tab left open across a deploy tell "the code actually
+          # changed" apart from "just a routine scheduled data refresh" -
+          # see build-data.mjs's BUILD_ID and public/app.js's update-check
+          # polling. A scheduled rerun with no new commit reuses this same
+          # sha every time, which is exactly the distinction that matters.
+          BUILD_ID: ${{ github.sha }}
         run: node scripts/build-data.mjs
       - name: Commit updated AI score cache
         # data/ai-cache.json (unlike public/data/matches.json, which is

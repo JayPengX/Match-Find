@@ -61,6 +61,9 @@ const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
 const cardTemplate = document.getElementById('match-card-template');
 const teamRowTemplate = document.getElementById('team-row-template');
+const updateBanner = document.getElementById('update-banner');
+const updateReloadBtn = document.getElementById('update-reload-btn');
+updateReloadBtn.addEventListener('click', () => location.reload());
 
 const LOCALE = 'zh-Hant';
 
@@ -510,40 +513,96 @@ function pickInitialDay(days, matches) {
   return todayKey;
 }
 
+// How often an already-open tab checks for something new. Deliberately a
+// real network request each time (cache: 'no-store', same as the initial
+// load) rather than relying on the browser to notice on its own - without
+// this, a tab left open just keeps showing whatever was current when it
+// was first loaded, for as long as the tab stays open, since nothing else
+// in this page ever re-fetches matches.json (see the 60s interval further
+// down, which only re-renders the data already in memory - it never asks
+// the network for anything new).
+const DATA_POLL_INTERVAL_MS = 5 * 60_000;
+
+// Applies a freshly-fetched matches.json payload to the page. Used both by
+// the initial load and by pollForUpdates() below, so "how a payload turns
+// into what's on screen" only exists in one place.
+function applyMatchData(data) {
+  const rawMatches = Array.isArray(data.matches) ? data.matches : [];
+
+  if (data.generatedAt) {
+    const generated = new Date(data.generatedAt);
+    generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
+  }
+
+  if (!rawMatches.length) {
+    emptyState.hidden = false;
+    return;
+  }
+
+  state.daysAhead = data.daysAhead;
+  state.matches = resolveViewingPlan(rawMatches);
+  state.days = buildDayList(state.matches);
+  // Keep whatever day the viewer is already looking at if it still exists
+  // in the refreshed window (a routine data refresh shouldn't yank someone
+  // back to "today" out from under them) - only fall back to picking a
+  // fresh default when their previous selection no longer has a match at
+  // all (e.g. it aged out of the rolling window).
+  if (!state.selectedDayKey || !state.days.some(d => d.key === state.selectedDayKey)) {
+    state.selectedDayKey = pickInitialDay(state.days, state.matches);
+  }
+
+  const selectedIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
+  if (selectedIndex >= state.visibleDayCount) state.visibleDayCount = selectedIndex + 1;
+
+  appEl.hidden = false;
+  emptyState.hidden = true;
+  renderDayScroller();
+  renderDayLabels();
+  renderFilters();
+  renderSections();
+}
+
+// Checks whether the deployed site has moved on since this tab loaded it,
+// and reacts in one of two ways depending on WHAT changed:
+//   - New data, same code (a routine scheduled rebuild - buildId, the git
+//     commit the build ran from, is unchanged): refresh silently. This is
+//     exactly as safe as the initial load, just triggered later.
+//   - New code (buildId changed - a real commit was deployed, not just a
+//     rebuild of the same one): this tab is still running the OLD
+//     JS/CSS/HTML no matter how fresh the data underneath it is, so
+//     applying new data can't actually pick up whatever changed in the
+//     code. Surface a small, dismissable-by-ignoring banner instead of
+//     silently reloading out from under someone mid-scroll or mid-tap.
+async function pollForUpdates() {
+  try {
+    const response = await fetch('./data/matches.json', { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (data.generatedAt === state.generatedAt) return; // nothing new
+    state.generatedAt = data.generatedAt;
+
+    applyMatchData(data);
+
+    if (state.buildId && data.buildId && data.buildId !== state.buildId) {
+      updateBanner.hidden = false;
+    }
+  } catch (error) {
+    console.error('update check failed', error);
+  }
+}
+
 async function init() {
   try {
     const response = await fetch('./data/matches.json', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    const rawMatches = Array.isArray(data.matches) ? data.matches : [];
-    state.daysAhead = data.daysAhead;
+    state.generatedAt = data.generatedAt;
+    state.buildId = data.buildId;
 
-    if (data.generatedAt) {
-      const generated = new Date(data.generatedAt);
-      generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
-    }
+    applyMatchData(data);
 
-    if (!rawMatches.length) {
-      emptyState.hidden = false;
-      return;
-    }
-
-    state.matches = resolveViewingPlan(rawMatches);
-    state.days = buildDayList(state.matches);
-    state.selectedDayKey = pickInitialDay(state.days, state.matches);
-
-    const selectedIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
-    if (selectedIndex >= state.visibleDayCount) state.visibleDayCount = selectedIndex + 1;
-
-    appEl.hidden = false;
-    renderDayScroller();
-    renderDayLabels();
-    renderFilters();
-    renderSections();
-
-    setInterval(() => {
-      renderSections();
-    }, 60_000);
+    setInterval(() => renderSections(), 60_000);
+    setInterval(pollForUpdates, DATA_POLL_INTERVAL_MS);
   } catch (error) {
     console.error(error);
     errorState.hidden = false;
