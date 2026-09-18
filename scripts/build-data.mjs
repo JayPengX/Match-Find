@@ -245,10 +245,20 @@ function heuristicScore(match) {
 
 // ---- AI score cache ---------------------------------------------------
 // Keyed by match id (stable across runs - see how ids are built above), so
-// a match already scored on an earlier run is never re-sent to Gemini. Only
-// startTimeUtc is kept alongside the score, purely so pruneCache can drop
-// entries for matches that have already aired without needing to re-fetch
-// anything.
+// a match already scored BY GEMINI on an earlier run is never re-sent.
+// Only startTimeUtc is kept alongside the score, purely so pruneCache can
+// drop entries for matches that have already aired without needing to
+// re-fetch anything.
+//
+// A cached entry with source:'heuristic' is deliberately NOT treated as
+// done (see needsScoring in main()) - it means an earlier run couldn't
+// reach the proxy (PROXY_URL unset, or the call failed) and fell back
+// locally, not that Gemini actually judged this match. Caching that as
+// final would permanently lock a match onto the heuristic the moment the
+// proxy happened to be unavailable for even one run, with no way to ever
+// pick up a real score later even after the proxy starts working - so
+// every build keeps retrying any match that hasn't been scored by Gemini
+// yet, for as long as it's still in the fetch window.
 async function loadCache() {
   try {
     return JSON.parse(await readFile(CACHE_PATH, 'utf8'));
@@ -333,7 +343,7 @@ async function main() {
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
   let cache = pruneCache(await loadCache(), now);
-  const needsScoring = matches.filter(m => !cache[m.id]);
+  const needsScoring = matches.filter(m => !cache[m.id] || cache[m.id].source !== 'ai');
   const freshPicks = await fetchAiScores(needsScoring);
 
   for (const match of needsScoring) {
