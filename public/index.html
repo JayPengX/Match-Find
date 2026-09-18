@@ -4,8 +4,21 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Match Find — 今晚看什麼</title>
-<meta name="description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度與競爭程度推薦，並換算成你的當地時間。" />
-<link rel="icon" href="data:," />
+<meta name="description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./icons/icon-180.png" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<meta name="theme-color" content="#0b0d12" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Match Find" />
+<meta property="og:title" content="Match Find — 今晚看什麼" />
+<meta property="og:description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<meta property="og:image" content="./og-image.png" />
+<meta property="og:url" content="https://jaypengx-collab.github.io/Match-Find/" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Match Find — 今晚看什麼" />
+<meta name="twitter:description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<meta name="twitter:image" content="./og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -15,9 +28,12 @@
   <header class="page-header">
     <div class="page-header-inner">
       <div class="page-header-row">
-        <div>
-          <h1>Match Find</h1>
-          <p class="tagline">值得你空出時間的那一場比賽</p>
+        <div class="brand">
+          <img class="brand-mark" src="./favicon.svg" alt="" width="34" height="34" />
+          <div>
+            <h1>Match Find</h1>
+            <p class="tagline">值得你空出時間的那一場比賽</p>
+          </div>
         </div>
         <button id="settings-btn" class="settings-btn" type="button" aria-label="設定">⚙</button>
       </div>
@@ -31,9 +47,9 @@
       <h2>賽事優先順序</h2>
       <button id="settings-close-btn" type="button" aria-label="關閉">✕</button>
     </div>
-    <p class="settings-hint">時間衝突、精彩程度相近時，優先顯示你偏好的運動。</p>
+    <p class="settings-hint">時間衝突、精彩程度相近時，排名較前的運動優先——用 ↑↓ 排序，會立即套用到推薦清單。</p>
     <div id="settings-sport-list" class="settings-sport-list"></div>
-    <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設值</button>
+    <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設順序</button>
   </div>
 
   <main id="app" hidden>
@@ -58,6 +74,12 @@
       <div id="all-match-list"></div>
       <p id="all-empty" class="empty-state" hidden>這一天沒有找到任何賽事。</p>
     </section>
+
+    <section id="tbd-section" hidden>
+      <h2 class="section-label">時間未定</h2>
+      <p class="section-sublabel">通常是季後賽——對戰組合已確定，實際開賽時間還沒公布。</p>
+      <div id="tbd-list"></div>
+    </section>
   </main>
 
   <p id="empty-state" class="empty-state" hidden>
@@ -69,7 +91,11 @@
 
   <footer class="page-footer">
     <p id="generated-note"></p>
-    <p>賽程資料來自 ESPN 公開 API．推薦內容由 Gemini AI 透過共用代理伺服器產生．每數小時自動更新一次。</p>
+    <p id="ai-status-note">
+      <span id="ai-status-text"></span>
+      <a id="ai-refetch-link" href="#" target="_blank" rel="noopener">重新查詢</a>
+    </p>
+    <p>賽程資料來自 ESPN 公開 API．推薦內容由 Gemini AI 透過共用代理伺服器產生。</p>
   </footer>
 
   <div id="update-banner" class="update-banner" hidden role="status">
@@ -79,32 +105,19 @@
 
   <template id="match-card-template">
     <article class="match-card">
-      <div class="match-time">
-        <span class="match-time-value"></span>
-        <span class="match-time-end"></span>
+      <div class="match-top">
+        <span class="match-time-range"></span>
         <span class="match-time-relative"></span>
       </div>
-      <div class="match-body">
-        <div class="match-heading">
-          <span class="sport-badge"></span>
-          <span class="recommended-tag" hidden>推薦</span>
-        </div>
-        <div class="teams" data-teams></div>
-        <p class="match-venue"></p>
-        <p class="match-watch" hidden><span class="watch-icon" aria-hidden="true">📺</span><span class="watch-text"></span></p>
-        <div class="score-row">
-          <div class="score-meter">
-            <span class="score-label">競爭度</span>
-            <div class="meter"><div class="meter-fill competitiveness-fill"></div></div>
-          </div>
-          <div class="score-meter">
-            <span class="score-label">精彩度</span>
-            <div class="meter"><div class="meter-fill watchability-fill"></div></div>
-          </div>
-        </div>
-        <p class="match-reason"></p>
-        <p class="conflict-note" hidden></p>
+      <div class="match-heading">
+        <span class="sport-badge"></span>
+        <span class="recommended-tag" hidden>推薦</span>
       </div>
+      <div class="teams" data-teams></div>
+      <p class="match-venue"></p>
+      <p class="match-watch" hidden><span class="watch-icon" aria-hidden="true">📺</span><span class="watch-text"></span></p>
+      <p class="match-reason"></p>
+      <p class="conflict-note" hidden></p>
     </article>
   </template>
 
