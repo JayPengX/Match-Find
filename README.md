@@ -79,7 +79,9 @@ Scoring and picking are split across two different places, deliberately:
   actually hidden — just not pushed as a pick.
 - Each fixture shows both teams with **home/away labels** (主/客), logo, and
   bilingual English/Traditional-Chinese name; the venue and (when known)
-  Taiwan broadcast channel are shown the same bilingual/Chinese way. MLB in
+  Taiwan broadcast channel are shown the same bilingual/Chinese way, with a
+  small color-coded badge per service (see "Broadcast service registry"
+  below) and a "已訂閱" mark when it's one you actually subscribe to. MLB in
   particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
   once - the prompt (see Orbit's `/match-recommend`) is told to always name
   愛爾達體育台 when both apply, rather than answering inconsistently.
@@ -91,19 +93,22 @@ Scoring and picking are split across two different places, deliberately:
 - No competitiveness/watchability meters on the card - just the one-sentence
   AI reason. The numbers still drive the scheduling and tie-breaking behind
   the scenes; the page itself only ever shows the recommendation, not the
-  data behind it.
-- When two fixtures land in the same slot and are close enough in quality
-  that picking a single "winner" would overstate how sure this site
-  actually is (see `CHOICE_SCORE_DELTA` in `resolveViewingPlan`), both are
-  shown together in one "這個時段有多個好選擇" cluster at full strength,
-  regardless of whether they're the same sport or different ones - not one
-  card muted underneath the other.
+  data behind it. Exactly one pick per slot, never several shown side by
+  side as "equally good, pick whichever" - that was tried and dropped as
+  too cluttered.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
   picker/recommended lineup at all, since there's no trustworthy time to
   schedule it against. It's listed once, separately, in a **時間未定**
-  section at the bottom instead.
+  section at the bottom instead. A bracket slot with no real teams assigned
+  yet ("TBD @ TBD") is skipped entirely rather than shown as a blank card.
+- F1 weekends surface **qualifying and (on a sprint weekend) the sprint
+  race** as their own fixtures, not just Sunday's race - each a genuinely
+  watchable event in its own right, keyed off ESPN's own per-session
+  abbreviation (`Race`/`Qual`/`SR`, confirmed stable across both ordinary
+  and sprint weekends) so there's no ambiguity about which session is
+  which.
 
 ## Sport priority (⚙ in the header)
 
@@ -122,6 +127,39 @@ stored in `localStorage` (per-browser, nothing sent anywhere) and only ever
 nudges `resolveViewingPlan`'s own scoring when picks are close - the AI's
 underlying scores never change, and re-ranking re-runs the whole plan and
 re-renders immediately, without closing the panel or reloading.
+
+**A diversity floor keeps a lower-ranked sport from disappearing entirely.**
+Ranking MLB above MLS doesn't mean "never show MLS" - but MLB's sheer
+volume (~15 games most evenings, all competing with EACH OTHER too) means
+it can end up winning nearly every slot on density alone, leaving a
+perfectly good MLS game with nothing to do with its evening even though it
+never actually lost a straight comparison - it just never got one. After
+the normal DP-based plan is built, `resolveViewingPlan` checks each day for
+any sport that ended up with zero picks despite having at least one
+fixture that clears a real "this is worth watching" bar
+(`DIVERSITY_MIN_SCORE`), and gives that sport's best such fixture a slot
+anyway. This never overrides a genuine priority preference or a real
+head-to-head loss - it only rescues a sport that got shut out entirely, at
+most once per sport per day.
+
+## Broadcast service registry (logos, and "do I actually have this?")
+
+`SERVICES` in `public/app.js` maps free-form `whereToWatchTw` text (Gemini's
+own wording, not a fixed enum) to a small color-coded badge per service
+(愛爾達, Apple TV, Netflix, 緯來, ELEVEN SPORTS, Disney+, myVideo, MLB.TV) -
+plain colored initials, not a reproduction of the real trademarked logo,
+since this is a static site with no image-licensing story of its own.
+Adding a new service later is one more entry in that list; nothing else in
+the file needs to know about it, same pattern as `SPORT_LABELS_ZH` for
+sports.
+
+`MY_SERVICE_IDS` names which of those the site's owner actually subscribes
+to right now (愛爾達, Apple TV, Netflix, as of writing) - matched fixtures
+get a small "已訂閱" mark, and a modest score nudge
+(`OWNED_SERVICE_SCORE_BONUS`) in `resolveViewingPlan`, same tie-breaking
+spirit as sport priority: a great game on a service you don't have still
+shows up and can still be recommended, this only tips a genuinely close
+call toward the one you can actually watch live right now.
 
 ## AI runs in the background, not on page load
 
@@ -187,6 +225,26 @@ take it; actually running it needs the repo owner's GitHub sign-in.
 The workflow commits both files back to the repo only when something
 actually changed (see `.github/workflows/deploy.yml`'s "Commit updated AI
 score cache" step).
+
+**Contested-cluster refinement (a second, comparative pass for close
+calls)**: the base scoring call above scores each fixture independently in
+one big batch, which is fine for "roughly how good is this" but weak at
+"which of these two SPECIFIC overlapping fixtures is actually the bigger
+story" - nothing about scoring them separately lets the model weigh them
+against each other. After the base pass, `findContestedClusters` groups
+fixtures that overlap in time AND scored within `CONTESTED_SCORE_DELTA` of
+each other (transitively, so a three-way pileup becomes one cluster, not
+three overlapping pairs) and sends each cluster - never the full fixture
+list - to Orbit's `/match-recommend-refine`, which is allowed to reach for
+a Pro-tier model specifically because it only ever sees a handful of
+fixtures a day this way. Only `competitiveness`/`watchability`/`reason` get
+overwritten by the refined answer; `venueZh`/`whereToWatchTw` stay whatever
+the base pass + grounded lookup already decided. Every fixture actually
+sent gets cache-stamped `refined: true` so the same cluster isn't resent
+forever, and `MAX_REFINE_CLUSTERS_PER_RUN` bounds worst-case Pro-tier spend
+per run - refinement runs on the same throttle as the base pass (see
+above), so it costs nothing extra on a routine scheduled run that's
+already within the cooldown window.
 
 ## Deployment
 

@@ -240,24 +240,6 @@ main#app {
   color: var(--text-faint);
 }
 
-/* A recommended match with a near-tied alternative (see app.js's
-   resolveViewingPlan/renderRecommendedSection) renders as one labeled
-   cluster rather than a single "winner" card, so both stay at full
-   strength instead of one looking like a downgrade of the other. */
-.choice-group { margin-bottom: 12px; }
-.choice-group-cards .match-card { margin-bottom: 0; }
-.choice-group-label {
-  margin: 0 0 8px 2px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--accent);
-}
-.choice-group-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .day-scroller {
   display: flex;
   gap: 8px;
@@ -441,11 +423,6 @@ main#app {
   border-radius: 999px;
   padding: 2px 9px;
 }
-.recommended-tag.is-alternative {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .match-venue {
   margin: 4px 0 0;
   font-size: 0.8rem;
@@ -465,7 +442,29 @@ main#app {
    toggled hidden (see app.js's buildMatchCard) - this explicitly restores
    the hide. */
 .match-watch[hidden] { display: none; }
-.watch-icon { font-size: 0.85rem; }
+.watch-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.watch-owned {
+  flex: none;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--good);
+  background: var(--good-soft);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
 
 .match-reason {
   margin: 10px 0 0;
