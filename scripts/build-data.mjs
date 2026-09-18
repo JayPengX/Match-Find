@@ -82,6 +82,36 @@ const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
 // always calls it regardless - see main()'s throttling check.
 const AI_FETCH_MIN_INTERVAL_HOURS = 20;
 
+// ---- Contested-cluster refinement (Orbit's /match-recommend-refine) ------
+//
+// The base scoring pass above scores every fixture independently, in one
+// big batch - fine for "roughly how good is this", weak at "which of these
+// two SPECIFIC overlapping fixtures is the bigger deal", since nothing
+// about that call lets the model weigh them against each other. Fixtures
+// that overlap in time AND land within CONTESTED_SCORE_DELTA of each
+// other's score are genuinely contesting the same viewing slot, and get a
+// second, comparative pass with Orbit's Pro-tier-first refine route (see
+// that repo's MATCH_RECOMMEND_REFINE_MODELS) - deliberately only THOSE
+// fixtures, never the full list, since a Pro-tier model's free-tier quota
+// is far smaller than Flash's and shared across every feature Orbit's
+// Worker serves, not just this one.
+const CONTESTED_SCORE_DELTA = 1;
+// Not worth refining two mediocre matches into a slightly-more-precisely-
+// ranked pair of mediocre matches - this keeps refinement calls spent on
+// slots that actually matter.
+const CONTESTED_MIN_SCORE = 6;
+// Hard cap on how many separate refine calls one run makes, regardless of
+// how many contested clusters exist - bounds worst-case Pro-tier quota use
+// per run even on an unusually contested day. Clusters beyond this cap
+// just keep their base-pass scores and get reconsidered on the next
+// eligible (unthrottled) run.
+const MAX_REFINE_CLUSTERS_PER_RUN = 5;
+// Mirrors Orbit's own MATCH_RECOMMEND_REFINE_MAX_ITEMS - kept as a
+// separate constant here (repos can't share code) purely so an unusually
+// large cluster gets trimmed to its own highest-scoring members before
+// sending, rather than firing a request the server would just 400 anyway.
+const REFINE_CLUSTER_MAX_ITEMS = 6;
+
 // How many calendar days ahead (from today, UTC) to fetch. The site's day
 // scroller shows the first 7 of these up front and reveals the rest on a
 // "load more" click - all client-side, no extra network request, since
@@ -263,12 +293,28 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
 
 // F1 has a completely different ESPN shape: one "event" is a whole race
 // weekend, and its "competitions" array is the individual sessions (FP1,
-// FP2, FP3, Qualifying, Race) rather than per-team competitors - see the
-// research notes in this repo's history. Only the Race session itself is
-// surfaced here; practice/qualifying sessions aren't "a match to watch" in
-// the sense this site recommends. Unlike the team leagues, this needs an
-// actual date-RANGE query (confirmed against the live API) to return more
-// than just the single nearest race weekend.
+// FP2, FP3, Qualifying, Sprint Shootout, Sprint, Race) rather than
+// per-team competitors - see the research notes in this repo's history.
+// Confirmed live across both ordinary and sprint weekends: `type.
+// abbreviation` is a stable, non-colliding key per session ("Race" is
+// always the main race even on a sprint weekend, which uses "SR"/"SS" for
+// its own sprint race/shootout instead) - unlike the team leagues, this
+// needs an actual date-RANGE query (confirmed against the live API) to
+// return more than just the single nearest race weekend.
+//
+// Practice sessions (FP1-3) and the sprint shootout (sprint-specific
+// qualifying, "SS") aren't included - not "a match to watch" in the sense
+// this site recommends, same reasoning as before. Qualifying and the
+// sprint race itself ARE included now: both are genuinely watchable
+// events in their own right, not just a preview of the race - a fast
+// qualifying lap or a 30-lap sprint has its own drama independent of
+// Sunday's race.
+const F1_SESSION_TYPES = [
+  { abbreviation: 'Race', labelSuffix: '', labelSuffixZh: '', durationMinutes: 120 },
+  { abbreviation: 'Qual', labelSuffix: ' Qualifying', labelSuffixZh: '排位賽', durationMinutes: 75 },
+  { abbreviation: 'SR', labelSuffix: ' Sprint', labelSuffixZh: '衝刺賽', durationMinutes: 60 }
+];
+
 async function fetchF1Matches(now, windowEndMs, daysAhead) {
   const rangeParam = `${yyyymmddUtc(now)}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
   let data;
@@ -279,27 +325,34 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
   }
   const matches = [];
   for (const event of data.events || []) {
-    const raceSession = (event.competitions || []).find(c => c.type?.abbreviation === 'Race');
-    if (!raceSession) continue;
-    const state = raceSession.status?.type?.state;
-    if (state !== 'pre') continue;
-    const startMs = Date.parse(raceSession.date || event.date);
-    if (!Number.isFinite(startMs) || startMs < now.getTime() || startMs > windowEndMs) continue;
+    const raceNameZh = f1RaceNameZh(event.name);
+    for (const sessionType of F1_SESSION_TYPES) {
+      const session = (event.competitions || []).find(c => c.type?.abbreviation === sessionType.abbreviation);
+      if (!session) continue; // e.g. no "SR" on a non-sprint weekend
+      const statusType = session.status?.type;
+      if (statusType?.state !== 'pre') continue;
+      const timeTbd = isTimeTbd(statusType);
+      const startMs = Date.parse(session.date || event.date);
+      if (!Number.isFinite(startMs)) continue;
+      if (!timeTbd && (startMs < now.getTime() || startMs > windowEndMs)) continue;
 
-    matches.push({
-      id: `f1-${event.id}`,
-      sport: 'F1',
-      name: event.name,
-      nameZh: f1RaceNameZh(event.name),
-      startTimeUtc: new Date(startMs).toISOString(),
-      timeTbd: false, // F1's calendar is fixed release-to-release - never TBD in practice
-      durationMinutes: 120,
-      venue: event.circuit?.fullName || '',
-      broadcast: '',
-      logo: F1_LOGO,
-      competitors: [],
-      context: `${event.name} - Formula 1 race`
-    });
+      const broadcast = (session.broadcasts || []).flatMap(b => b.names || []).slice(0, 1)[0];
+
+      matches.push({
+        id: `f1-${event.id}-${sessionType.abbreviation.toLowerCase()}`,
+        sport: 'F1',
+        name: `${event.name}${sessionType.labelSuffix}`,
+        nameZh: raceNameZh ? `${raceNameZh}${sessionType.labelSuffixZh ? '－' + sessionType.labelSuffixZh : ''}` : '',
+        startTimeUtc: new Date(startMs).toISOString(),
+        timeTbd,
+        durationMinutes: sessionType.durationMinutes,
+        venue: event.circuit?.fullName || '',
+        broadcast: broadcast || '',
+        logo: F1_LOGO,
+        competitors: [],
+        context: `${event.name}${sessionType.labelSuffix} - Formula 1${sessionType.labelSuffix ? ' ' + sessionType.labelSuffix.trim().toLowerCase() : ' race'}`
+      });
+    }
   }
   return matches;
 }
@@ -440,6 +493,131 @@ async function fetchAiScores(matchesNeedingScore) {
   return picks;
 }
 
+function matchInterval(match) {
+  const start = Date.parse(match.startTimeUtc);
+  return { start, end: start + match.durationMinutes * 60_000 };
+}
+
+function intervalsOverlap(a, b) {
+  return Math.max(a.start, b.start) < Math.min(a.end, b.end);
+}
+
+// Groups fixtures into connected clusters of "genuinely contesting the
+// same slot" - pairwise time overlap AND a close score, unioned
+// transitively (union-find) so a three- or four-way pileup becomes one
+// cluster rather than several overlapping pairs. TBD fixtures (no real
+// time - see isTimeTbd) and anything already marked `refined` in the cache
+// (a previous run already gave it the comparative treatment) are excluded
+// up front. Only returns clusters of 2+ - a fixture with no contested
+// neighbor has nothing to compare against.
+function findContestedClusters(matches, cache) {
+  const candidates = matches.filter(
+    m => !m.timeTbd && m.score >= CONTESTED_MIN_SCORE && !(cache[m.id] && cache[m.id].refined)
+  );
+  const intervalById = new Map(candidates.map(m => [m.id, matchInterval(m)]));
+  const parent = new Map(candidates.map(m => [m.id, m.id]));
+  function find(id) {
+    while (parent.get(id) !== id) {
+      parent.set(id, parent.get(parent.get(id)));
+      id = parent.get(id);
+    }
+    return id;
+  }
+  function union(a, b) {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      const a = candidates[i];
+      const b = candidates[j];
+      if (
+        intervalsOverlap(intervalById.get(a.id), intervalById.get(b.id)) &&
+        Math.abs(a.score - b.score) <= CONTESTED_SCORE_DELTA
+      ) {
+        union(a.id, b.id);
+      }
+    }
+  }
+  const groups = new Map();
+  for (const match of candidates) {
+    const root = find(match.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(match);
+  }
+  return [...groups.values()].filter(group => group.length >= 2);
+}
+
+// Sends each contested cluster (see findContestedClusters) to Orbit's
+// /match-recommend-refine as its own small request - mutates `cache`
+// directly (competitiveness/watchability/reason only; venueZh and
+// whereToWatchTw stay whatever the base pass + grounded lookup already
+// decided, since re-litigating the broadcast question isn't what this
+// pass is for). Every fixture actually sent - whether or not its
+// particular pick came back valid - is stamped `refined: true` so a
+// persistently-malformed response can't cause the same cluster to be
+// resent every single eligible run forever.
+async function refineContestedClusters(matches, cache) {
+  if (!PROXY_URL) return false;
+  const clusters = findContestedClusters(matches, cache)
+    // Closest, highest-scoring contests first - if the per-run cap (see
+    // MAX_REFINE_CLUSTERS_PER_RUN) leaves some clusters for next time,
+    // it's the lower-stakes ones that wait.
+    .sort((a, b) => {
+      const avg = group => group.reduce((sum, m) => sum + m.score, 0) / group.length;
+      return avg(b) - avg(a);
+    })
+    .slice(0, MAX_REFINE_CLUSTERS_PER_RUN);
+  if (!clusters.length) return false;
+
+  let anyAttempted = false;
+  for (const cluster of clusters) {
+    const picked = cluster
+      .slice()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, REFINE_CLUSTER_MAX_ITEMS);
+    const payload = picked.map(m => ({
+      id: m.id,
+      sport: m.sport,
+      name: m.name,
+      startTimeUtc: m.startTimeUtc,
+      context: m.context,
+      venue: m.venue,
+      broadcast: m.broadcast
+    }));
+    anyAttempted = true;
+    try {
+      const response = await fetch(`${PROXY_URL}/match-recommend-refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matches: payload }),
+        signal: AbortSignal.timeout(60_000)
+      });
+      if (!response.ok) {
+        console.warn(`/match-recommend-refine -> HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+        continue;
+      }
+      const data = await response.json();
+      const picks = new Map((Array.isArray(data.picks) ? data.picks : []).map(p => [p.id, p]));
+      for (const match of picked) {
+        const pick = picks.get(match.id);
+        const entry = cache[match.id];
+        if (!entry) continue;
+        if (pick && Number.isFinite(pick.competitiveness) && Number.isFinite(pick.watchability)) {
+          entry.competitiveness = Math.max(1, Math.min(10, Math.round(pick.competitiveness)));
+          entry.watchability = Math.max(1, Math.min(10, Math.round(pick.watchability)));
+          entry.reason = String(pick.reason || entry.reason || '').slice(0, 300);
+        }
+        entry.refined = true;
+      }
+    } catch (error) {
+      console.warn(`/match-recommend-refine request failed: ${error.message}`);
+    }
+  }
+  return anyAttempted;
+}
+
 async function main() {
   const now = new Date();
   const windowEndMs = now.getTime() + DAYS_AHEAD * 24 * 60 * 60 * 1000;
@@ -528,6 +706,24 @@ async function main() {
     match.source = scored.source;
     if (scored.source === 'ai') usedAi = true;
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
+  }
+
+  // Same throttle as the base scoring pass above - a comparative re-score
+  // is still a Gemini call (a Pro-tier one, at that), so it only ever runs
+  // as often as the base pass itself is allowed to.
+  if (!throttled) {
+    const refined = await refineContestedClusters(matches, cache);
+    if (refined) {
+      meta.lastAiFetchAt = now.toISOString();
+      for (const match of matches) {
+        const scored = cache[match.id];
+        if (!scored?.refined) continue;
+        match.competitiveness = scored.competitiveness;
+        match.watchability = scored.watchability;
+        match.reason = scored.reason;
+        match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
+      }
+    }
   }
 
   matches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));

@@ -26,7 +26,7 @@
 const state = {
   rawMatches: [], // the last fetched payload's matches with a real time, untouched - kept so a priority change can re-run resolveViewingPlan without re-fetching
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
-  matches: [], // every fetched (non-TBD) match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds/.closeAlternativeIds
+  matches: [], // every fetched (non-TBD) match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   visibleDayCount: 7,
   selectedDayKey: null,
@@ -49,6 +49,44 @@ const SPORT_LABELS_ZH = {
   NBA: 'NBA',
   F1: 'F1'
 };
+
+// ---- Broadcast service registry -------------------------------------------
+//
+// `whereToWatchTw` (see Orbit's /match-recommend) is free-form text written
+// by Gemini, not a fixed enum - this registry is what turns that text back
+// into something the UI can badge/color/reason about consistently, and
+// what OWNED (see MY_SERVICE_IDS below) means at all. Adding a new service
+// later is just one more entry here (id, matching pattern, badge/color) -
+// nothing else in this file needs to change, same reasoning as
+// SPORT_LABELS_ZH above for sports.
+//
+// `badge` is a short plain-text mark, not a reproduction of the real
+// trademarked logo (this is a static site with no image-licensing story of
+// its own) - just enough to be visually recognizable and color-coded at a
+// glance, same spirit as the sport badges already on every card.
+const SERVICES = [
+  { id: 'elta', pattern: /愛爾達|ELTA/i, label: '愛爾達體育台', badge: '達', color: '#ff7a3d' },
+  { id: 'appletv', pattern: /Apple\s*TV/i, label: 'Apple TV', badge: 'TV', color: '#1d1d1f' },
+  { id: 'netflix', pattern: /Netflix/i, label: 'Netflix', badge: 'N', color: '#e50914' },
+  { id: 'weilai', pattern: /緯來/i, label: '緯來體育台', badge: '緯', color: '#0068b7' },
+  { id: 'eleven', pattern: /ELEVEN\s*SPORTS/i, label: 'ELEVEN SPORTS', badge: '11', color: '#f2394c' },
+  { id: 'disneyplus', pattern: /Disney\+?/i, label: 'Disney+', badge: 'D+', color: '#113ccf' },
+  { id: 'myvideo', pattern: /myVideo/i, label: 'myVideo', badge: 'MV', color: '#ff6600' },
+  { id: 'mlbtv', pattern: /MLB\.?TV/i, label: 'MLB.TV', badge: 'MLB', color: '#041e42' }
+];
+// Which of the above the site owner actually subscribes to right now -
+// used only as a tie-breaking nudge in resolveViewingPlan (a match on a
+// service you don't have is still shown and can still be recommended, see
+// OWNED_SERVICE_SCORE_BONUS below) and as a small "你有訂閱" mark in the UI.
+// Plain data, not a setting - unlike sport priority, this isn't something
+// worth exposing per-viewer since this is a personal site with one real
+// owner; change this array directly if that ever stops being true.
+const MY_SERVICE_IDS = new Set(['elta', 'appletv', 'netflix']);
+
+function resolveService(whereToWatchTw) {
+  if (!whereToWatchTw) return null;
+  return SERVICES.find(s => s.pattern.test(whereToWatchTw)) || null;
+}
 
 const clockEl = document.getElementById('local-clock');
 const appEl = document.getElementById('app');
@@ -113,6 +151,14 @@ const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // swing a close call between two roughly-comparable fixtures, which is the
 // only case this is meant to affect.
 const PRIORITY_SCORE_DELTA = 1;
+// A small nudge (see resolveViewingPlan) toward a fixture shown on a
+// service in MY_SERVICE_IDS - "optimize for the services you actually
+// pay for" without turning this into a hard filter: a great game on a
+// service you don't have still shows up and can still be recommended
+// (you might catch a replay, a friend's account, whatever), this just
+// tips a genuinely close call toward the one you can actually watch live
+// right now.
+const OWNED_SERVICE_SCORE_BONUS = 0.5;
 
 const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABELS_ZH);
 
@@ -304,22 +350,11 @@ const QUIET_HOUR_END = 7;
 const OVERLAP_TOLERANCE_BASE_MINUTES = 10;
 const OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES = 40;
 const HIGH_SCORE_THRESHOLD = 8;
-// How close two overlapping matches' scores have to be for the loser of
-// that slot to still be shown alongside the winner as "just as good, pick
-// whichever you actually like" rather than being downgraded to a muted
-// "the other one won this slot" note - see the grouping pass in
-// resolveViewingPlan below. Deliberately tight: on a busy MLB night
-// several ordinary games can all land within a couple of points of each
-// other purely because none of them has much going on, and that's "this
-// slot is unremarkable across the board", not "these two are a genuine
-// toss-up" - the second is what this is actually meant to catch.
-const CHOICE_SCORE_DELTA = 0.5;
-// Caps how many alternatives one recommended match can pull into its
-// choice group - even a genuine near-tie stops being a quick "pick
-// whichever" choice once it's five cards deep. Anything past this cap
-// falls back to the ordinary muted treatment, ranked by how close its
-// score actually was.
-const CHOICE_GROUP_MAX_ALTERNATIVES = 2;
+// The bar a sport's best still-unpicked fixture has to clear to get a
+// diversity-floor slot for the day (see the pass right after the DP in
+// resolveViewingPlan) - deliberately a real "this is genuinely worth
+// watching" score, not just "the best of a bad day" for that sport.
+const DIVERSITY_MIN_SCORE = 6.5;
 
 function isQuietHours(match) {
   const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
@@ -369,8 +404,10 @@ function resolveViewingPlan(matches, priorityOrder = []) {
   const centerRank = (priorityOrder.length - 1) / 2;
   const withIntervals = matches.map(match => {
     const rank = priorityOrder.indexOf(match.sport);
-    const nudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
-    return { ...match, interval: matchInterval(match), effectiveScore: match.score + nudge };
+    const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
+    const service = resolveService(match.whereToWatchTw);
+    const serviceNudge = service && MY_SERVICE_IDS.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
+    return { ...match, interval: matchInterval(match), effectiveScore: match.score + priorityNudge + serviceNudge };
   });
   const eligible = withIntervals.filter(m => !isQuietHours(m)).sort((a, b) => a.interval.end - b.interval.end);
 
@@ -414,6 +451,44 @@ function resolveViewingPlan(matches, priorityOrder = []) {
       .map(other => other.id);
   });
 
+  // Diversity floor: the DP above picks the single highest-scoring option
+  // per slot, which is correct on its own terms, but a high-VOLUME sport
+  // (MLB fielding ~15 games most evenings) can end up winning nearly every
+  // slot on pure density alone - not because it's ranked higher, but
+  // because there's almost always SOME MLB game overlapping any given
+  // window, where a one-game-a-day sport only gets to compete for the one
+  // slot its single fixture happens to fall in. Left alone, that can mean
+  // a perfectly good MLS game never gets picked on a day it never
+  // genuinely lost a head-to-head comparison - it just never got a turn.
+  // This doesn't touch the DP's own math or override a real priority
+  // ranking - it only looks at what's LEFT OUT after the DP has run, and,
+  // once per calendar day, gives a sport with zero picks that day its
+  // single best-scoring eligible fixture anyway, but only if that fixture
+  // clears DIVERSITY_MIN_SCORE (a real "this is a good match" bar, not
+  // "the least bad option this sport had"). A sport that already won a
+  // slot today - including one boosted here on an earlier iteration of
+  // this same loop - is left alone.
+  const diversityByDay = new Map();
+  eligible.forEach(match => {
+    const dayKey = localDateKey(new Date(match.interval.start));
+    if (!diversityByDay.has(dayKey)) diversityByDay.set(dayKey, []);
+    diversityByDay.get(dayKey).push(match);
+  });
+  for (const dayMatches of diversityByDay.values()) {
+    const sportsToday = new Set(dayMatches.map(m => m.sport));
+    for (const sport of sportsToday) {
+      const sportMatches = dayMatches.filter(m => m.sport === sport);
+      if (sportMatches.some(m => m.recommended)) continue;
+      const best = sportMatches
+        .filter(m => m.score >= DIVERSITY_MIN_SCORE)
+        .sort((a, b) => b.score - a.score)[0];
+      if (best) {
+        best.recommended = true;
+        best.isDiversityPick = true;
+      }
+    }
+  }
+
   const recommendedSorted = withIntervals.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
   for (let i = 1; i < recommendedSorted.length; i++) {
     const minutes = overlapMinutes(recommendedSorted[i], recommendedSorted[i - 1]);
@@ -421,38 +496,6 @@ function resolveViewingPlan(matches, priorityOrder = []) {
       recommendedSorted[i].overlapsWithPrevious = { id: recommendedSorted[i - 1].id, minutes: Math.round(minutes) };
     }
   }
-
-  // Groups each recommended match with whichever of its overlapping
-  // non-recommended neighbors scored almost as well (see CHOICE_SCORE_DELTA)
-  // - the DP above still only ever picks ONE match per slot (it has to, for
-  // the rest of the plan's timing to make sense), but when the runner-up
-  // was basically a coin flip, showing only the "winner" and quietly
-  // muting the other one overstates how sure this site actually is. Each
-  // alternative is claimed by at most one recommended match (whichever it
-  // was compared against first, in chronological order) so it's never
-  // shown in two different groups at once.
-  const byId = new Map(withIntervals.map(m => [m.id, m]));
-  const claimedAlternativeIds = new Set();
-  recommendedSorted.forEach(rec => {
-    const closeAlternativeIds = rec.overlappingIds
-      .filter(id => {
-        if (claimedAlternativeIds.has(id)) return false;
-        const other = byId.get(id);
-        return other && !other.recommended && rec.effectiveScore - other.effectiveScore <= CHOICE_SCORE_DELTA;
-      })
-      // Closest score first, so a cap only ever drops the weakest
-      // near-ties, never the strongest one.
-      .sort((a, b) => byId.get(b).effectiveScore - byId.get(a).effectiveScore)
-      .slice(0, CHOICE_GROUP_MAX_ALTERNATIVES);
-    closeAlternativeIds.forEach(id => {
-      claimedAlternativeIds.add(id);
-      // Read by buildMatchCard to render this match at full strength (an
-      // "同時段選擇" tag, not the muted "lost its slot" treatment) even
-      // though the DP above didn't pick it.
-      byId.get(id).isCloseAlternative = true;
-    });
-    rec.closeAlternativeIds = closeAlternativeIds;
-  });
 
   return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
 }
@@ -536,40 +579,40 @@ function buildMatchCard(match) {
   if (match.whereToWatchTw && match.whereToWatchTw !== '無已知台灣轉播') {
     watchEl.hidden = false;
     watchEl.querySelector('.watch-text').textContent = match.whereToWatchTw;
+    const badge = watchEl.querySelector('.watch-badge');
+    const service = resolveService(match.whereToWatchTw);
+    if (service && service.badge) {
+      badge.hidden = false;
+      badge.textContent = service.badge;
+      badge.style.background = service.color;
+    } else {
+      badge.hidden = true;
+    }
+    // A quiet "you already have this" mark rather than hiding/muting
+    // anything without it - see MY_SERVICE_IDS's own comment on why this
+    // stays a nudge, not a filter.
+    watchEl.querySelector('.watch-owned').hidden = !(service && MY_SERVICE_IDS.has(service.id));
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (match.recommended) {
-    recommendedTag.hidden = false;
-  } else if (match.isCloseAlternative) {
-    recommendedTag.hidden = false;
-    recommendedTag.textContent = '同時段選擇';
-    recommendedTag.classList.add('is-alternative');
-  }
+  if (match.recommended) recommendedTag.hidden = false;
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
-  // Three distinct cases, deliberately not layered on top of each other:
-  //   1. Recommended, and it only made the cut by eating into the previous
-  //      pick's slot a little - say so, framed as a deliberate trade-off.
-  //   2. A near-tie with a recommended match (see resolveViewingPlan's
-  //      grouping pass) - shown at FULL strength, not muted, since this
-  //      site isn't actually confident enough in the winner to bury the
-  //      runner-up.
-  //   3. Genuinely lost its slot to a clearly better match - muted, with a
-  //      note pointing at what to watch instead.
+  // Two cases: recommended (possibly overlapping the previous pick a
+  // little, kept anyway for its quality), or not - in which case, if it
+  // lost its slot to something recommended, say what to watch instead.
+  // Deliberately just one pick per slot, never several shown side by side
+  // - a longer list of "equally good" options was tried and dropped as
+  // too cluttered; this site would rather commit to one answer per slot.
   const conflictNote = node.querySelector('.conflict-note');
   if (match.recommended && match.overlapsWithPrevious) {
     const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
     conflictNote.textContent = `與「${previous ? previous.name : '前一場推薦賽事'}」重疊約 ${match.overlapsWithPrevious.minutes} 分鐘——因賽事精彩仍納入推薦。`;
-  } else if (match.isCloseAlternative) {
-    conflictNote.hidden = false;
-    conflictNote.classList.add('is-allowed-overlap');
-    conflictNote.textContent = '同一時段的另一個好選擇——精彩程度相近，任選一場即可。';
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
@@ -578,7 +621,7 @@ function buildMatchCard(match) {
     }
     node.classList.add('is-muted');
   }
-  if (match.recommended || match.isCloseAlternative) node.classList.add('is-recommended');
+  if (match.recommended) node.classList.add('is-recommended');
 
   const now = Date.now();
   if (!match.timeTbd && now >= start && now < end) node.classList.add('is-live');
@@ -673,8 +716,7 @@ function renderFilters() {
 }
 
 function renderRecommendedSection() {
-  const dayAll = matchesForSelectedDay();
-  const dayMatches = applySportFilter(dayAll.filter(m => m.recommended));
+  const dayMatches = applySportFilter(matchesForSelectedDay().filter(m => m.recommended));
   dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
   const ordered = pinCurrentOrNext(dayMatches);
 
@@ -684,39 +726,11 @@ function renderRecommendedSection() {
     return;
   }
   recommendedEmptyEl.hidden = true;
-  // A recommended match with a genuinely close alternative (see
-  // resolveViewingPlan's grouping pass) renders together with it in one
-  // labeled cluster instead of silently picking a single "winner" - the
-  // sport filter still applies to which alternatives show, so switching to
-  // "only MLB" doesn't surface an NBA alternative that filter would
-  // otherwise hide everywhere else.
-  const byId = new Map(dayAll.map(m => [m.id, m]));
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const alternatives = (match.closeAlternativeIds || [])
-      .map(id => byId.get(id))
-      .filter(alt => alt && (state.activeSport === 'all' || alt.sport === state.activeSport));
-
-    if (!alternatives.length) {
-      const card = buildMatchCard(match);
-      if (index === 0) card.classList.add('is-pinned');
-      fragment.appendChild(card);
-      return;
-    }
-
-    const group = document.createElement('div');
-    group.className = 'choice-group';
-    const label = document.createElement('p');
-    label.className = 'choice-group-label';
-    label.textContent = '這個時段有多個好選擇，任選一場：';
-    const cards = document.createElement('div');
-    cards.className = 'choice-group-cards';
-    const primaryCard = buildMatchCard(match);
-    if (index === 0) primaryCard.classList.add('is-pinned');
-    cards.appendChild(primaryCard);
-    alternatives.forEach(alt => cards.appendChild(buildMatchCard(alt)));
-    group.append(label, cards);
-    fragment.appendChild(group);
+    const card = buildMatchCard(match);
+    if (index === 0) card.classList.add('is-pinned');
+    fragment.appendChild(card);
   });
   recommendedListEl.replaceChildren(fragment);
 }
