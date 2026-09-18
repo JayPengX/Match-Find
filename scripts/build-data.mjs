@@ -51,6 +51,36 @@ const OUTPUT_PATH = new URL('../public/data/matches.json', import.meta.url);
 // runs. See .github/workflows/deploy.yml's "Commit updated AI score cache"
 // step for how it gets pushed back.
 const CACHE_PATH = new URL('../data/ai-cache.json', import.meta.url);
+// Sibling to CACHE_PATH, committed the same way (see .github/workflows/
+// deploy.yml's "Commit updated AI score cache" step) - holds the one thing
+// that isn't keyed by match id: when Gemini was last actually called. Kept
+// out of ai-cache.json itself so that file stays a pure match-id map.
+const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
+
+// Bumped whenever a change to Orbit's /match-recommend prompt is worth
+// re-scoring already-cached matches for (e.g. teaching it to ground
+// whereToWatchTw in an actual search instead of guessing) - every cache
+// entry stamps the PROMPT_VERSION it was scored under, and needsScoring
+// below retries anything scored under an older one. A one-time full
+// re-score costs quota, but it's the only way an already-cached match ever
+// benefits from a prompt fix instead of keeping a stale answer forever.
+const PROMPT_VERSION = 2;
+
+// Which GitHub Actions event triggered this run - 'schedule' for the
+// routine 6-hourly rerun, 'push' for a real commit landing on main, or
+// 'workflow_dispatch' for someone manually clicking "Run workflow" (see
+// .github/workflows/deploy.yml). Empty string for a local run, which is
+// treated the same as an explicit request below - there's no "routine
+// background job" to throttle when a person is sitting there running it.
+const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
+// A scheduled run only actually calls Gemini if it's been at least this
+// long since the last real call - seeing a couple of newly-in-window
+// fixtures every 6 hours would otherwise mean several small Gemini calls a
+// day for no real benefit (see the top-of-file comment: quota only cares
+// about calling once per MATCH, but a steady trickle of small requests all
+// day is still more calls than one batched one). A push or manual dispatch
+// always calls it regardless - see main()'s throttling check.
+const AI_FETCH_MIN_INTERVAL_HOURS = 20;
 
 // How many calendar days ahead (from today, UTC) to fetch. The site's day
 // scroller shows the first 7 of these up front and reveals the rest on a
@@ -92,6 +122,20 @@ function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
 
 function yyyymmddUtc(date) {
   return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+// True when ESPN has a fixture on the schedule (a real event id, real
+// competitors) but hasn't nailed down a kickoff time yet - confirmed live
+// against the NFL's own flex-scheduled slate (same "state: pre,
+// STATUS_SCHEDULED" shape MLB postseason games use before a bracket/TV slot
+// is set): `date` still holds SOME timestamp, but it's a placeholder, not a
+// real kickoff, and ESPN's own signal for that is status.type.shortDetail/
+// detail containing "TBD" rather than a separate boolean flag. Most common
+// for MLB/NBA playoff games scheduled before their exact date and time is
+// announced - see fetchTeamLeagueMatches below for how this changes what
+// gets built.
+function isTimeTbd(statusType) {
+  return /\bTBD\b/i.test(statusType?.shortDetail || statusType?.detail || '');
 }
 
 async function fetchJson(url) {
@@ -145,10 +189,21 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
     for (const event of result.value.events || []) {
       if (seenIds.has(event.id)) continue; // a doubleheader's 2nd game can appear under both query dates near midnight UTC
       const competition = event.competitions?.[0];
-      const state = competition?.status?.type?.state;
-      if (state !== 'pre') continue; // already live or finished - not "upcoming"
+      const statusType = competition?.status?.type;
+      if (statusType?.state !== 'pre') continue; // already live or finished - not "upcoming"
+      const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(event.date);
-      if (!Number.isFinite(startMs) || startMs < now.getTime() || startMs > windowEndMs) continue;
+      if (!Number.isFinite(startMs)) continue;
+      // A TBD fixture's `date` is only a placeholder (see isTimeTbd's own
+      // comment) - it can read as already past, or outside the requested
+      // window, even though the fixture itself is real and upcoming. It was
+      // only ever returned here because this whole request was already
+      // scoped to one day inside [now, now+daysAhead) (see the `dates` loop
+      // above), so that alone is enough to know it belongs in this window -
+      // a non-TBD fixture still needs the precise bounds check since ESPN's
+      // per-day results occasionally spill a neighboring day's event across
+      // a UTC midnight boundary.
+      if (!timeTbd && (startMs < now.getTime() || startMs > windowEndMs)) continue;
       seenIds.add(event.id);
 
       // Always [away, home] regardless of the order ESPN happens to list
@@ -161,10 +216,27 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       const home = rawCompetitors.find(c => c.homeAway === 'home') || rawCompetitors[1];
       const competitors = [away, home].filter(Boolean);
       if (competitors.length !== 2) continue;
+      // A playoff slot ESPN has reserved but not yet assigned real teams to
+      // (confirmed live: MLB Wild Card slots show up as literally "TBD @
+      // TBD", weeks before either team is known) isn't a fixture this site
+      // can say anything useful about, and worse, caching a score for it
+      // under its event id would leave that stale "no info yet" answer
+      // stuck forever once ESPN DOES fill in the real teams later - this
+      // script has no signal that would ever invalidate it (same id, same
+      // PROMPT_VERSION, different opponents). Simplest correct fix: don't
+      // surface it at all until ESPN itself knows who's actually playing.
+      if (competitors.some(c => c.abbreviation === 'TBD' || c.name === 'TBD')) continue;
 
       const broadcast = (competition.broadcasts || [])
         .flatMap(b => b.names || [])
         .slice(0, 1)[0];
+      // ESPN's season.type is 2 for the regular season and 3 for the
+      // postseason (confirmed against the live API) - surfaced to Gemini as
+      // plain context, not scored locally, since "this is a playoff game"
+      // is exactly the kind of stakes judgment the AI prompt already asks
+      // for (see Orbit's buildMatchRecommendPrompt) and this script has no
+      // real basis to weigh it itself.
+      const isPostseason = event.season?.type === 3;
 
       matches.push({
         id: `${league.id}-${event.id}`,
@@ -172,12 +244,17 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         name: `${away.name} @ ${home.name}`,
         nameZh: away.nameZh && home.nameZh ? `${away.nameZh} @ ${home.nameZh}` : '',
         startTimeUtc: new Date(startMs).toISOString(),
+        // See isTimeTbd's own comment - when true, startTimeUtc above is
+        // only a placeholder and the client (public/app.js) knows not to
+        // schedule or display this fixture by clock time at all.
+        timeTbd,
         durationMinutes: league.durationMinutes,
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
         competitors,
-        context: competitors.map(competitorContext).join(' vs ')
+        context:
+          competitors.map(competitorContext).join(' vs ') + (isPostseason ? ' (postseason/playoff game)' : '')
       });
     }
   }
@@ -215,6 +292,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       name: event.name,
       nameZh: f1RaceNameZh(event.name),
       startTimeUtc: new Date(startMs).toISOString(),
+      timeTbd: false, // F1's calendar is fixed release-to-release - never TBD in practice
       durationMinutes: 120,
       venue: event.circuit?.fullName || '',
       broadcast: '',
@@ -277,6 +355,15 @@ function heuristicScore(match) {
 async function loadCache() {
   try {
     return JSON.parse(await readFile(CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+async function loadMeta() {
+  try {
+    const parsed = JSON.parse(await readFile(AI_META_PATH, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
   }
@@ -360,31 +447,43 @@ async function main() {
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
   let cache = pruneCache(await loadCache(), now);
-  // Also retries a cached AI entry from:
-  //   - before venueZh/whereToWatchTw existed (typeof check, not just
-  //     "in", since an older cache write - or a Gemini response that
-  //     genuinely returned "" - both leave the key present as a string);
-  //   - before the prompt was told to prefer 愛爾達體育台 over 緯來體育台
-  //     when a fixture is carried by both (common for MLB) - a one-time
-  //     nudge so already-cached matches get a chance at the corrected
-  //     answer too, not just fixtures scored from here on. Matches
-  //     genuinely only on 緯來體育台 will just get the same answer back.
-  // Otherwise every match already scored before one of these changes
-  // would keep the old answer forever, never re-sent because source:'ai'
-  // alone already marked it "done".
+  const meta = await loadMeta();
+
+  // Retries a cached entry that either was never scored by Gemini
+  // (source !== 'ai') or was scored under an older PROMPT_VERSION (see that
+  // constant's own comment) - the latter is what makes an already-cached
+  // match benefit from a prompt fix (e.g. teaching whereToWatchTw to
+  // actually search instead of guess) instead of keeping a stale answer
+  // forever, since source: 'ai' alone would otherwise mark it "done" for
+  // good.
   const needsScoring = matches.filter(m => {
     const cached = cache[m.id];
-    return (
-      !cached ||
-      cached.source !== 'ai' ||
-      typeof cached.venueZh !== 'string' ||
-      typeof cached.whereToWatchTw !== 'string' ||
-      cached.whereToWatchTw === '緯來體育台'
-    );
+    return !cached || cached.source !== 'ai' || cached.promptVersion !== PROMPT_VERSION;
   });
-  const freshPicks = await fetchAiScores(needsScoring);
 
-  for (const match of needsScoring) {
+  // A routine scheduled run skips calling Gemini at all when the last real
+  // call was recent (see AI_FETCH_MIN_INTERVAL_HOURS) - matches that still
+  // need scoring just stay on their current cached/heuristic answer for
+  // now and get retried on a later run, same as any other still-pending
+  // entry. A push or manual dispatch (or a local run, with no event name at
+  // all) always calls it: either one means someone specifically wants
+  // fresh data now, not "whatever's due on the usual schedule".
+  const lastAiFetchMs = Date.parse(meta.lastAiFetchAt || '');
+  const throttled =
+    GITHUB_EVENT_NAME === 'schedule' &&
+    Number.isFinite(lastAiFetchMs) &&
+    now.getTime() - lastAiFetchMs < AI_FETCH_MIN_INTERVAL_HOURS * 60 * 60 * 1000;
+  const toFetchNow = throttled ? [] : needsScoring;
+  if (throttled && needsScoring.length) {
+    console.log(
+      `Skipping Gemini this run (throttled, last called ${meta.lastAiFetchAt}) - ${needsScoring.length} match(es) still pending.`
+    );
+  }
+
+  if (toFetchNow.length && PROXY_URL) meta.lastAiFetchAt = now.toISOString();
+  const freshPicks = await fetchAiScores(toFetchNow);
+
+  for (const match of toFetchNow) {
     const pick = freshPicks.get(match.id);
     if (pick && Number.isFinite(pick.competitiveness) && Number.isFinite(pick.watchability)) {
       cache[match.id] = {
@@ -394,16 +493,22 @@ async function main() {
         reason: String(pick.reason || '').slice(0, 300),
         venueZh: String(pick.venueZh || '').slice(0, 100),
         whereToWatchTw: String(pick.whereToWatchTw || '').slice(0, 100),
-        source: 'ai'
+        source: 'ai',
+        promptVersion: PROMPT_VERSION
       };
-    } else {
-      cache[match.id] = { startTimeUtc: match.startTimeUtc, ...heuristicScore(match), source: 'heuristic' };
+    } else if (!cache[match.id]) {
+      // Only seeds a heuristic fallback for a match that's never been
+      // scored at all - a match that already has an older AI answer keeps
+      // that answer (still better than the heuristic) until Gemini is
+      // actually reachable again, rather than regressing it just because
+      // this run's re-score attempt didn't come back.
+      cache[match.id] = { startTimeUtc: match.startTimeUtc, ...heuristicScore(match), source: 'heuristic', promptVersion: PROMPT_VERSION };
     }
   }
 
   let usedAi = false;
   for (const match of matches) {
-    const scored = cache[match.id];
+    const scored = cache[match.id] || { ...heuristicScore(match), source: 'heuristic' };
     match.competitiveness = scored.competitiveness;
     match.watchability = scored.watchability;
     match.reason = scored.reason;
@@ -420,6 +525,7 @@ async function main() {
     generatedAt: now.toISOString(),
     buildId: BUILD_ID,
     daysAhead: DAYS_AHEAD,
+    lastAiFetchAt: meta.lastAiFetchAt || null,
     source: matches.length === 0 ? 'none' : usedAi ? (matches.every(m => m.source === 'ai') ? 'ai' : 'mixed') : 'heuristic',
     matches
   };
@@ -428,8 +534,9 @@ async function main() {
   await writeFile(OUTPUT_PATH, JSON.stringify(output, null, 2));
   await mkdir(new URL('.', CACHE_PATH), { recursive: true });
   await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2) + '\n');
+  await writeFile(AI_META_PATH, JSON.stringify(meta, null, 2) + '\n');
   console.log(
-    `Wrote ${matches.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source}, ${needsScoring.length} newly scored, ${Object.keys(cache).length} cached)`
+    `Wrote ${matches.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source}, ${toFetchNow.length} sent to Gemini this run, ${needsScoring.length - toFetchNow.length} still pending, ${Object.keys(cache).length} cached)`
   );
 }
 

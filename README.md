@@ -10,7 +10,9 @@ Taiwan (愛爾達體育台, Apple TV, ...), a horizontally-scrolling day picker
 (today through the next two weeks, auto-jumping past today if today's
 fixtures are already over), and a curated daily lineup picked so you can
 watch back-to-back without constant channel-hopping or being told to stay
-up for a 3am fixture.
+up for a 3am fixture. The page itself only ever shows the *recommendation* -
+a plain-language reason, not the raw competitiveness/watchability numbers
+behind it (see "Page layout" below).
 
 No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
 
@@ -81,11 +83,27 @@ Scoring and picking are split across two different places, deliberately:
   particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
   once - the prompt (see Orbit's `/match-recommend`) is told to always name
   愛爾達體育台 when both apply, rather than answering inconsistently.
-- Each fixture also shows its **expected end time** ("至 9:30 下午") next to
-  the start time, and a countdown that switches from hours to whole days
-  once a fixture is more than 24 hours out ("2 天 5 小時後", not "53 小時
-  後") - both computed from the sport's average broadcast length, same as
-  the scheduling logic above.
+- Each fixture shows one time range ("7:00 下午 – 9:35 下午") plus a short
+  relative countdown next to it, instead of three separate stacked labels -
+  the countdown switches from hours to whole days once a fixture is more
+  than 24 hours out ("2 天 5 小時後", not "53 小時後"), both computed from
+  the sport's average broadcast length, same as the scheduling logic above.
+- No competitiveness/watchability meters on the card - just the one-sentence
+  AI reason. The numbers still drive the scheduling and tie-breaking behind
+  the scenes; the page itself only ever shows the recommendation, not the
+  data behind it.
+- When two fixtures land in the same slot and are close enough in quality
+  that picking a single "winner" would overstate how sure this site
+  actually is (see `CHOICE_SCORE_DELTA` in `resolveViewingPlan`), both are
+  shown together in one "這個時段有多個好選擇" cluster at full strength,
+  regardless of whether they're the same sport or different ones - not one
+  card muted underneath the other.
+- A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
+  (almost always a playoff game whose bracket slot is set before its exact
+  date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
+  picker/recommended lineup at all, since there's no trustworthy time to
+  schedule it against. It's listed once, separately, in a **時間未定**
+  section at the bottom instead.
 
 ## Sport priority (⚙ in the header)
 
@@ -96,12 +114,14 @@ sport's ordinary fixture can end up looking like it's "always" the pick
 for that slot purely because it had less competition, not because this
 site favors it. There's no universally correct answer for which sport
 *should* win a close call, so instead of guessing, a small settings panel
-(the ⚙ button in the header) lets each viewer say which way they'd rather
-it lean: 較少/一般/較多 ("less/normal/more") per sport, stored in
-`localStorage` (per-browser, nothing sent anywhere). It only ever nudges
-`resolveViewingPlan`'s own scoring when picks are close - the
-competitiveness/watchability meters shown on every card always stay the
-true, un-nudged AI scores.
+(the ⚙ button in the header) lets each viewer rank the five sports
+best-to-least - the direct version of "if these two are equally good,
+which do you want?", which a per-sport "less/normal/more" dial always left
+ambiguous relative to every other sport at the same level. The order is
+stored in `localStorage` (per-browser, nothing sent anywhere) and only ever
+nudges `resolveViewingPlan`'s own scoring when picks are close - the AI's
+underlying scores never change, and re-ranking re-runs the whole plan and
+re-renders immediately, without closing the panel or reloading.
 
 ## AI runs in the background, not on page load
 
@@ -135,17 +155,38 @@ A scheduled run every 6 hours would, naively, re-score the same
 heavily-overlapping 14-day window of fixtures on every single run. Instead,
 `data/ai-cache.json` (a file *committed to the repo*, unlike the
 fully-regenerated `public/data/matches.json`) records every match Gemini has
-already scored, keyed by a stable match id. Each build only sends fixtures
-**not** already in that cache — so a given match is scored by Gemini exactly
-once, on whichever run first sees it inside the fetch window, no matter how
-many times the build runs afterward. Requests are batched under the shared
-Worker's 80-fixtures-per-call cap (see `AI_SCORE_BATCH_SIZE` — matters most
-on the very first run, when nothing is cached yet and a 14-day window can
-easily find several hundred new fixtures at once). The workflow commits the
-cache back to the repo only when it actually changed (see
-`.github/workflows/deploy.yml`'s "Commit updated AI score cache" step), and
-entries older than 12 hours past kickoff are pruned automatically so the
-file doesn't grow forever.
+already scored, keyed by a stable match id, along with the `PROMPT_VERSION`
+it was scored under. Each build only sends fixtures that either aren't in
+that cache yet or were scored under an older `PROMPT_VERSION` — so a given
+match is scored by Gemini exactly once *per meaningful prompt change*, not
+once ever, which is what lets an already-cached match still pick up a real
+fix (e.g. teaching Orbit's `/match-recommend` to actually search instead of
+guess a broadcaster) instead of keeping a stale answer forever. Requests are
+batched under the shared Worker's 80-fixtures-per-call cap (see
+`AI_SCORE_BATCH_SIZE` — matters most on the very first run, and on any run
+right after a `PROMPT_VERSION` bump, when a large batch of previously-cached
+fixtures all need re-scoring at once). Entries older than 12 hours past
+kickoff are pruned automatically so the file doesn't grow forever.
+
+**Throttling how often Gemini gets called**: even with per-match caching, a
+routine 6-hourly run can still find a couple of newly-in-window fixtures
+almost every time, meaning several small Gemini calls a day for no real
+benefit. `data/ai-meta.json` (committed the same way as `ai-cache.json`)
+records `lastAiFetchAt` — the last time this build actually called the
+proxy — and a `schedule`-triggered run (as opposed to a `push` or manual
+`workflow_dispatch` run — see `GITHUB_EVENT_NAME` in the workflow) skips
+calling Gemini entirely if that was less than `AI_FETCH_MIN_INTERVAL_HOURS`
+(20) ago; anything still pending just waits for the next eligible run. A
+push or a manual run always calls it, since either one means someone
+specifically wants fresh data now. The footer shows this same timestamp
+("AI 最後查詢於 ...") with a "重新查詢" link straight to the Actions run page,
+for exactly that manual case — there's no client-safe way for a static page
+to trigger a rebuild itself, so the link is as far as the page itself can
+take it; actually running it needs the repo owner's GitHub sign-in.
+
+The workflow commits both files back to the repo only when something
+actually changed (see `.github/workflows/deploy.yml`'s "Commit updated AI
+score cache" step).
 
 ## Deployment
 
@@ -166,7 +207,11 @@ The competitiveness/watchability scoring is served by the same shared
 Cloudflare Worker that the sibling repo [Orbit](https://github.com/jaypengx-collab/Orbit)
 already deploys for its own AI features (`cloudflare-worker/orbit-worker.js`,
 route `/match-recommend`) — this repo doesn't hold, and never needs, a
-Gemini API key of its own.
+Gemini API key of its own. `whereToWatchTw` in particular is grounded in an
+actual Google Search lookup on Orbit's side (broadcast rights are often
+team/game-specific, not sport-wide — e.g. some MLB teams' games air
+exclusively on Apple TV rather than the usual 愛爾達/緯來), rather than
+answered from the model's static training-time knowledge alone.
 
 To enable it:
 
@@ -194,6 +239,18 @@ npx serve public                   # or any static file server
 Set `PROXY_URL` in your shell first if you want AI-scored results locally
 instead of the heuristic fallback. Delete `data/ai-cache.json` (or an entry
 in it) if you want a match re-scored.
+
+## Icons and link previews
+
+`public/favicon.svg` is the one master mark; `public/icons/icon-180.png`
+(apple-touch-icon, e.g. "加入主畫面" on iOS Safari) and `icon-512.png`
+(`manifest.webmanifest`) are rasterized from it, and `public/og-image.png`
+(1200×630) is what a shared link's preview card shows (Messages, Slack,
+etc. — see the `og:image`/`twitter:image` tags in `index.html`). All three
+PNGs were generated once with headless Chromium screenshotting the SVG at
+each size/composition — see the render script referenced in this repo's
+commit history if the mark itself ever changes and they need regenerating;
+there's no build step that does this automatically.
 
 ## Fixing a team's Chinese name
 

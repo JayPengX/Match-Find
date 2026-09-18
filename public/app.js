@@ -24,13 +24,14 @@
 // nobody has a settled Chinese name for yet.
 
 const state = {
-  rawMatches: [], // the last fetched payload's matches, untouched - kept so a priority change can re-run resolveViewingPlan without re-fetching
-  matches: [], // every fetched match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
+  rawMatches: [], // the last fetched payload's matches with a real time, untouched - kept so a priority change can re-run resolveViewingPlan without re-fetching
+  tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
+  matches: [], // every fetched (non-TBD) match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds/.closeAlternativeIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   visibleDayCount: 7,
   selectedDayKey: null,
   activeSport: 'all',
-  priorities: {} // { [sport]: -1|0|1 } - see "Sport priority settings" below
+  priorityOrder: [] // sports ranked best-to-least - see "Sport priority settings" below
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -61,11 +62,23 @@ const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
+const aiStatusText = document.getElementById('ai-status-text');
+const aiRefetchLink = document.getElementById('ai-refetch-link');
+const tbdSection = document.getElementById('tbd-section');
+const tbdListEl = document.getElementById('tbd-list');
 const cardTemplate = document.getElementById('match-card-template');
 const teamRowTemplate = document.getElementById('team-row-template');
 const updateBanner = document.getElementById('update-banner');
 const updateReloadBtn = document.getElementById('update-reload-btn');
 updateReloadBtn.addEventListener('click', () => location.reload());
+
+// The manual "fetch again" affordance from the footer (see "Gemini usage
+// status" below) - only the repo owner can actually run this (GitHub asks
+// for sign-in and repo write access), but that matches who's ever going to
+// click it: this is a personal site, not a public tool, and there's no
+// client-safe way for a static page to trigger a GitHub Actions run
+// itself without embedding a credential in it.
+aiRefetchLink.href = 'https://github.com/jaypengx-collab/Match-Find/actions/workflows/deploy.yml';
 
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
@@ -85,74 +98,95 @@ const settingsSportList = document.getElementById('settings-sport-list');
 // less-crowded sport's ordinary fixture more easily comes out on top of
 // ITS slot. That's a real structural effect, not a bug to "fix" outright -
 // there's no one correct answer for which sport SHOULD win a close call -
-// so instead of guessing, this lets each viewer say which way they'd
-// rather it lean, applied only as a tie-breaking nudge (see
-// PRIORITY_SCORE_DELTA below), never a hard include/exclude.
-const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority';
-// Added to a match's score per priority level before it ever reaches the
-// DP - small next to the 1-10 score scale (a level does NOT let a mediocre
-// match beat a genuinely great one two levels differently ranked), but
-// large enough to reliably swing a close call between two roughly-
-// comparable fixtures, which is the only case this is meant to affect.
-const PRIORITY_SCORE_DELTA = 1.5;
-const PRIORITY_LEVELS = [
-  { level: -1, label: '較少' },
-  { level: 0, label: '一般' },
-  { level: 1, label: '較多' }
-];
+// so instead of guessing, this lets each viewer rank the sports in the
+// order they'd rather see win a close call, applied only as a tie-breaking
+// nudge (see PRIORITY_SCORE_DELTA below), never a hard include/exclude.
+// An explicit rank (1st, 2nd, 3rd, ...), rather than a per-sport "less/
+// normal/more" dial, is the more direct way to ask the actual question:
+// "if these two are roughly equally good, which do you want?" - a dial
+// still leaves every sport at the same level ambiguous relative to each
+// other, where a full order never is.
+const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
+// Every rank step adds/subtracts one of these - small next to the 1-10
+// score scale (being ranked a couple of spots higher does NOT let a
+// mediocre match beat a genuinely great one), but large enough to reliably
+// swing a close call between two roughly-comparable fixtures, which is the
+// only case this is meant to affect.
+const PRIORITY_SCORE_DELTA = 1;
 
-function loadPriorities() {
+const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABELS_ZH);
+
+function loadPriorityOrder() {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
-    return stored && typeof stored === 'object' ? stored : {};
+    if (!Array.isArray(stored)) return DEFAULT_SPORT_ORDER.slice();
+    // Tolerates the sport list itself changing between visits: keeps
+    // whatever stored order still applies, appends any brand new sport at
+    // the end (never assume a new sport, or leftover an unknown value in a
+    // stale write, means anything relative to today's ranking).
+    const known = stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
+    const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
+    return [...known, ...missing];
   } catch {
-    return {};
+    return DEFAULT_SPORT_ORDER.slice();
   }
 }
-function savePriorities(priorities) {
+function savePriorityOrder(order) {
   try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(priorities));
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(order));
   } catch {
     // Private browsing / blocked storage - the panel still works for this
     // page view, it just won't remember next time. Not worth surfacing.
   }
 }
-state.priorities = loadPriorities();
+state.priorityOrder = loadPriorityOrder();
 
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
-  state.matches = resolveViewingPlan(state.rawMatches, state.priorities);
+  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder);
   renderSections();
 }
 
 function renderSettingsPanel() {
   settingsSportList.replaceChildren(
-    ...Object.keys(SPORT_LABELS_ZH).map(sport => {
+    ...state.priorityOrder.map((sport, index) => {
       const row = document.createElement('div');
       row.className = 'settings-sport-row';
+      const rank = document.createElement('span');
+      rank.className = 'settings-sport-rank';
+      rank.textContent = String(index + 1);
       const label = document.createElement('span');
       label.className = 'settings-sport-label';
       label.textContent = SPORT_LABELS_ZH[sport];
-      const control = document.createElement('div');
-      control.className = 'settings-priority-control';
-      control.setAttribute('role', 'group');
-      control.setAttribute('aria-label', `${SPORT_LABELS_ZH[sport]}優先程度`);
-      const current = state.priorities[sport] || 0;
-      PRIORITY_LEVELS.forEach(({ level, label: levelLabel }) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = levelLabel;
-        btn.setAttribute('aria-pressed', String(level === current));
-        btn.addEventListener('click', () => {
-          if (level === 0) delete state.priorities[sport];
-          else state.priorities[sport] = level;
-          savePriorities(state.priorities);
-          renderSettingsPanel();
-          recomputeAndRender();
-        });
-        control.appendChild(btn);
-      });
-      row.append(label, control);
+      const moveGroup = document.createElement('div');
+      moveGroup.className = 'settings-move-group';
+
+      function move(delta) {
+        const from = state.priorityOrder.indexOf(sport);
+        const to = from + delta;
+        if (to < 0 || to >= state.priorityOrder.length) return;
+        [state.priorityOrder[from], state.priorityOrder[to]] = [state.priorityOrder[to], state.priorityOrder[from]];
+        savePriorityOrder(state.priorityOrder);
+        renderSettingsPanel();
+        recomputeAndRender();
+      }
+
+      const upBtn = document.createElement('button');
+      upBtn.type = 'button';
+      upBtn.setAttribute('aria-label', `將 ${SPORT_LABELS_ZH[sport]} 往上移`);
+      upBtn.textContent = '↑';
+      upBtn.disabled = index === 0;
+      upBtn.addEventListener('click', () => move(-1));
+
+      const downBtn = document.createElement('button');
+      downBtn.type = 'button';
+      downBtn.setAttribute('aria-label', `將 ${SPORT_LABELS_ZH[sport]} 往下移`);
+      downBtn.textContent = '↓';
+      downBtn.disabled = index === state.priorityOrder.length - 1;
+      downBtn.addEventListener('click', () => move(1));
+
+      moveGroup.append(upBtn, downBtn);
+      row.append(rank, label, moveGroup);
       return row;
     })
   );
@@ -171,8 +205,8 @@ settingsBtn.addEventListener('click', openSettingsPanel);
 settingsCloseBtn.addEventListener('click', closeSettingsPanel);
 settingsBackdrop.addEventListener('click', closeSettingsPanel);
 settingsResetBtn.addEventListener('click', () => {
-  state.priorities = {};
-  savePriorities(state.priorities);
+  state.priorityOrder = DEFAULT_SPORT_ORDER.slice();
+  savePriorityOrder(state.priorityOrder);
   renderSettingsPanel();
   recomputeAndRender();
 });
@@ -270,6 +304,22 @@ const QUIET_HOUR_END = 7;
 const OVERLAP_TOLERANCE_BASE_MINUTES = 10;
 const OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES = 40;
 const HIGH_SCORE_THRESHOLD = 8;
+// How close two overlapping matches' scores have to be for the loser of
+// that slot to still be shown alongside the winner as "just as good, pick
+// whichever you actually like" rather than being downgraded to a muted
+// "the other one won this slot" note - see the grouping pass in
+// resolveViewingPlan below. Deliberately tight: on a busy MLB night
+// several ordinary games can all land within a couple of points of each
+// other purely because none of them has much going on, and that's "this
+// slot is unremarkable across the board", not "these two are a genuine
+// toss-up" - the second is what this is actually meant to catch.
+const CHOICE_SCORE_DELTA = 0.5;
+// Caps how many alternatives one recommended match can pull into its
+// choice group - even a genuine near-tie stops being a quick "pick
+// whichever" choice once it's five cards deep. Anything past this cap
+// falls back to the ordinary muted treatment, ranked by how close its
+// score actually was.
+const CHOICE_GROUP_MAX_ALTERNATIVES = 2;
 
 function isQuietHours(match) {
   const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
@@ -305,18 +355,23 @@ function compatible(later, earlier) {
 // midnight) is considered as a whole rather than getting artificially cut
 // at each day's edge.
 //
-// `priorities` (see "Sport priority settings" above) nudges effectiveScore
-// away from the AI's own score - the displayed competitiveness/watchability
-// meters and .score always stay the true, un-nudged values; only the DP's
-// notion of "which match wins this slot" sees the adjusted number, so a
-// viewer's preference can tip a close call without pretending a mediocre
-// match is actually great.
-function resolveViewingPlan(matches, priorities = {}) {
-  const withIntervals = matches.map(match => ({
-    ...match,
-    interval: matchInterval(match),
-    effectiveScore: match.score + (priorities[match.sport] || 0) * PRIORITY_SCORE_DELTA
-  }));
+// `priorityOrder` (see "Sport priority settings" above) nudges
+// effectiveScore away from the AI's own score - the displayed reason/.score
+// always stay the true, un-nudged values; only the DP's notion of "which
+// match wins this slot" sees the adjusted number, so a viewer's preference
+// can tip a close call without pretending a mediocre match is actually
+// great. A sport ranked 1st gets the biggest positive nudge, the sport
+// ranked in the exact middle gets none, and the last-ranked sport gets the
+// biggest negative one - symmetric around the middle rank so "no
+// preference at all" (the default order) really does mean zero nudge for
+// everyone, not just for whichever sport happens to be first in the array.
+function resolveViewingPlan(matches, priorityOrder = []) {
+  const centerRank = (priorityOrder.length - 1) / 2;
+  const withIntervals = matches.map(match => {
+    const rank = priorityOrder.indexOf(match.sport);
+    const nudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
+    return { ...match, interval: matchInterval(match), effectiveScore: match.score + nudge };
+  });
   const eligible = withIntervals.filter(m => !isQuietHours(m)).sort((a, b) => a.interval.end - b.interval.end);
 
   const dp = new Array(eligible.length).fill(0);
@@ -367,14 +422,42 @@ function resolveViewingPlan(matches, priorities = {}) {
     }
   }
 
+  // Groups each recommended match with whichever of its overlapping
+  // non-recommended neighbors scored almost as well (see CHOICE_SCORE_DELTA)
+  // - the DP above still only ever picks ONE match per slot (it has to, for
+  // the rest of the plan's timing to make sense), but when the runner-up
+  // was basically a coin flip, showing only the "winner" and quietly
+  // muting the other one overstates how sure this site actually is. Each
+  // alternative is claimed by at most one recommended match (whichever it
+  // was compared against first, in chronological order) so it's never
+  // shown in two different groups at once.
+  const byId = new Map(withIntervals.map(m => [m.id, m]));
+  const claimedAlternativeIds = new Set();
+  recommendedSorted.forEach(rec => {
+    const closeAlternativeIds = rec.overlappingIds
+      .filter(id => {
+        if (claimedAlternativeIds.has(id)) return false;
+        const other = byId.get(id);
+        return other && !other.recommended && rec.effectiveScore - other.effectiveScore <= CHOICE_SCORE_DELTA;
+      })
+      // Closest score first, so a cap only ever drops the weakest
+      // near-ties, never the strongest one.
+      .sort((a, b) => byId.get(b).effectiveScore - byId.get(a).effectiveScore)
+      .slice(0, CHOICE_GROUP_MAX_ALTERNATIVES);
+    closeAlternativeIds.forEach(id => {
+      claimedAlternativeIds.add(id);
+      // Read by buildMatchCard to render this match at full strength (an
+      // "同時段選擇" tag, not the muted "lost its slot" treatment) even
+      // though the DP above didn't pick it.
+      byId.get(id).isCloseAlternative = true;
+    });
+    rec.closeAlternativeIds = closeAlternativeIds;
+  });
+
   return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
 }
 
 // ---- Rendering ------------------------------------------------------------
-
-function fillMeter(el, value) {
-  el.style.width = `${Math.max(0, Math.min(10, value)) * 10}%`;
-}
 
 function buildTeamRow({ logo, name, nameZh, homeAway }) {
   const node = teamRowTemplate.content.firstElementChild.cloneNode(true);
@@ -414,9 +497,21 @@ function buildMatchCard(match) {
   const start = Date.parse(match.startTimeUtc);
   const end = start + match.durationMinutes * 60_000;
 
-  node.querySelector('.match-time-value').textContent = localTimeFormatter().format(new Date(start));
-  node.querySelector('.match-time-end').textContent = `至 ${localTimeFormatter().format(new Date(end))}`;
-  node.querySelector('.match-time-relative').textContent = relativeLabel(start, end);
+  if (match.timeTbd) {
+    // startTimeUtc is only a placeholder for a TBD fixture (see
+    // build-data.mjs's isTimeTbd) - showing it as a real clock time would
+    // just be a confident-looking guess, so this says plainly that it
+    // isn't known yet instead.
+    node.querySelector('.match-time-range').textContent = '時間未定';
+    node.querySelector('.match-time-relative').textContent = '';
+  } else {
+    // One line, not three stacked labels - "7:00 – 9:35 下午" reads at a
+    // glance where a separate start time / end time / relative-countdown
+    // column used to take real hunting to parse, especially on a phone.
+    node.querySelector('.match-time-range').textContent =
+      `${localTimeFormatter().format(new Date(start))} – ${localTimeFormatter().format(new Date(end))}`;
+    node.querySelector('.match-time-relative').textContent = relativeLabel(start, end);
+  }
 
   const badge = node.querySelector('.sport-badge');
   badge.textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
@@ -444,21 +539,37 @@ function buildMatchCard(match) {
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (match.recommended) recommendedTag.hidden = false;
-
-  fillMeter(node.querySelector('.competitiveness-fill'), match.competitiveness);
-  fillMeter(node.querySelector('.watchability-fill'), match.watchability);
+  if (match.recommended) {
+    recommendedTag.hidden = false;
+  } else if (match.isCloseAlternative) {
+    recommendedTag.hidden = false;
+    recommendedTag.textContent = '同時段選擇';
+    recommendedTag.classList.add('is-alternative');
+  }
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
+  // Three distinct cases, deliberately not layered on top of each other:
+  //   1. Recommended, and it only made the cut by eating into the previous
+  //      pick's slot a little - say so, framed as a deliberate trade-off.
+  //   2. A near-tie with a recommended match (see resolveViewingPlan's
+  //      grouping pass) - shown at FULL strength, not muted, since this
+  //      site isn't actually confident enough in the winner to bury the
+  //      runner-up.
+  //   3. Genuinely lost its slot to a clearly better match - muted, with a
+  //      note pointing at what to watch instead.
   const conflictNote = node.querySelector('.conflict-note');
   if (match.recommended && match.overlapsWithPrevious) {
     const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
     conflictNote.textContent = `與「${previous ? previous.name : '前一場推薦賽事'}」重疊約 ${match.overlapsWithPrevious.minutes} 分鐘——因賽事精彩仍納入推薦。`;
+  } else if (match.isCloseAlternative) {
+    conflictNote.hidden = false;
+    conflictNote.classList.add('is-allowed-overlap');
+    conflictNote.textContent = '同一時段的另一個好選擇——精彩程度相近，任選一場即可。';
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
@@ -467,10 +578,10 @@ function buildMatchCard(match) {
     }
     node.classList.add('is-muted');
   }
-  if (match.recommended) node.classList.add('is-recommended');
+  if (match.recommended || match.isCloseAlternative) node.classList.add('is-recommended');
 
   const now = Date.now();
-  if (now >= start && now < end) node.classList.add('is-live');
+  if (!match.timeTbd && now >= start && now < end) node.classList.add('is-live');
 
   return node;
 }
@@ -562,7 +673,8 @@ function renderFilters() {
 }
 
 function renderRecommendedSection() {
-  const dayMatches = applySportFilter(matchesForSelectedDay().filter(m => m.recommended));
+  const dayAll = matchesForSelectedDay();
+  const dayMatches = applySportFilter(dayAll.filter(m => m.recommended));
   dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
   const ordered = pinCurrentOrNext(dayMatches);
 
@@ -572,11 +684,39 @@ function renderRecommendedSection() {
     return;
   }
   recommendedEmptyEl.hidden = true;
+  // A recommended match with a genuinely close alternative (see
+  // resolveViewingPlan's grouping pass) renders together with it in one
+  // labeled cluster instead of silently picking a single "winner" - the
+  // sport filter still applies to which alternatives show, so switching to
+  // "only MLB" doesn't surface an NBA alternative that filter would
+  // otherwise hide everywhere else.
+  const byId = new Map(dayAll.map(m => [m.id, m]));
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const card = buildMatchCard(match);
-    if (index === 0) card.classList.add('is-pinned');
-    fragment.appendChild(card);
+    const alternatives = (match.closeAlternativeIds || [])
+      .map(id => byId.get(id))
+      .filter(alt => alt && (state.activeSport === 'all' || alt.sport === state.activeSport));
+
+    if (!alternatives.length) {
+      const card = buildMatchCard(match);
+      if (index === 0) card.classList.add('is-pinned');
+      fragment.appendChild(card);
+      return;
+    }
+
+    const group = document.createElement('div');
+    group.className = 'choice-group';
+    const label = document.createElement('p');
+    label.className = 'choice-group-label';
+    label.textContent = '這個時段有多個好選擇，任選一場：';
+    const cards = document.createElement('div');
+    cards.className = 'choice-group-cards';
+    const primaryCard = buildMatchCard(match);
+    if (index === 0) primaryCard.classList.add('is-pinned');
+    cards.appendChild(primaryCard);
+    alternatives.forEach(alt => cards.appendChild(buildMatchCard(alt)));
+    group.append(label, cards);
+    fragment.appendChild(group);
   });
   recommendedListEl.replaceChildren(fragment);
 }
@@ -599,6 +739,25 @@ function renderAllMatchesSection() {
 function renderSections() {
   renderRecommendedSection();
   renderAllMatchesSection();
+}
+
+// Fixtures ESPN has on the schedule but hasn't set a real kickoff time for
+// yet (see build-data.mjs's isTimeTbd - almost always a playoff game whose
+// bracket slot is set before its exact date/time is) - these never carry a
+// trustworthy startTimeUtc, so they're kept entirely out of the day-picker/
+// DP pipeline (see applyMatchData) and just listed here once, independent
+// of whichever day is currently selected, with a "時間未定" label instead
+// of a clock time.
+function renderTbdSection() {
+  if (!state.tbdMatches.length) {
+    tbdSection.hidden = true;
+    tbdListEl.replaceChildren();
+    return;
+  }
+  tbdSection.hidden = false;
+  const fragment = document.createDocumentFragment();
+  state.tbdMatches.forEach(match => fragment.appendChild(buildMatchCard(match)));
+  tbdListEl.replaceChildren(fragment);
 }
 
 function buildDayList(matches) {
@@ -657,25 +816,56 @@ function pickInitialDay(days, matches) {
 // the network for anything new).
 const DATA_POLL_INTERVAL_MS = 5 * 60_000;
 
+// "Gemini last used" (see build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS) -
+// purely informational, so a viewer curious why a brand new fixture still
+// shows an "(估計，非 AI 推薦)" heuristic reason can see this isn't stuck,
+// just waiting for the next batched Gemini call. The "重新查詢" link next
+// to it (see its href, set once above) only opens the GitHub Actions run
+// page - actually triggering a rebuild needs repo write access, which only
+// this site's own owner has, so that's as far as a static page can safely
+// take it.
+function renderAiStatus(lastAiFetchAt) {
+  if (!lastAiFetchAt) {
+    aiStatusText.textContent = 'AI 尚未查詢過，將於下次建置時查詢。';
+    return;
+  }
+  const fetched = new Date(lastAiFetchAt);
+  aiStatusText.textContent = `AI 最後查詢於 ${localDayFormatter().format(fetched)} ${localTimeFormatter().format(fetched)}。`;
+}
+
 // Applies a freshly-fetched matches.json payload to the page. Used both by
 // the initial load and by pollForUpdates() below, so "how a payload turns
 // into what's on screen" only exists in one place.
 function applyMatchData(data) {
-  const rawMatches = Array.isArray(data.matches) ? data.matches : [];
+  const allMatches = Array.isArray(data.matches) ? data.matches : [];
+  // TBD fixtures (see build-data.mjs's isTimeTbd) never carry a real
+  // startTimeUtc, so they're split off here, before anything else touches
+  // the list - buildDayList/resolveViewingPlan both assume every match has
+  // a trustworthy clock time, and a placeholder would otherwise land them
+  // on an arbitrary day or mess with the DP's overlap math.
+  const rawMatches = allMatches.filter(m => !m.timeTbd);
+  state.tbdMatches = allMatches.filter(m => m.timeTbd);
 
   if (data.generatedAt) {
     const generated = new Date(data.generatedAt);
     generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
   }
+  renderAiStatus(data.lastAiFetchAt);
+  renderTbdSection();
 
   if (!rawMatches.length) {
-    emptyState.hidden = false;
+    // Still worth showing the app shell if there's nothing but TBD
+    // fixtures to show (renderTbdSection above already populated that
+    // section) - #tbd-section lives inside #app, so #app itself has to be
+    // unhidden for it to actually show up.
+    appEl.hidden = !state.tbdMatches.length;
+    emptyState.hidden = !!state.tbdMatches.length;
     return;
   }
 
   state.daysAhead = data.daysAhead;
   state.rawMatches = rawMatches;
-  state.matches = resolveViewingPlan(rawMatches, state.priorities);
+  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder);
   state.days = buildDayList(state.matches);
   // Keep whatever day the viewer is already looking at if it still exists
   // in the refreshed window (a routine data refresh shouldn't yank someone
