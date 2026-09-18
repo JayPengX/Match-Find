@@ -1,1339 +1,1339 @@
 {
   "epl-401879275": {
     "startTimeUtc": "2026-09-18T19:00:00.000Z",
-    "competitiveness": 1,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (2-1 vs 1-3).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Chelsea holds the edge in form, but Brentford at home makes this an intriguing London derby.",
+    "source": "ai"
   },
   "epl-401879269": {
     "startTimeUtc": "2026-09-19T11:30:00.000Z",
-    "competitiveness": 8,
-    "watchability": 1,
-    "reason": "Estimated from each side's current win-loss record (0-1 vs 0-2).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "Both teams are looking to kickstart their seasons in this competitive early-fixture clash.",
+    "source": "ai"
   },
   "epl-401879274": {
     "startTimeUtc": "2026-09-19T14:00:00.000Z",
-    "competitiveness": 3,
-    "watchability": 8,
-    "reason": "Estimated from each side's current win-loss record (4-0 vs 2-1).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Arsenal's strong form makes them favorites, though Brighton is always capable of an upset.",
+    "source": "ai"
   },
   "epl-401878778": {
     "startTimeUtc": "2026-09-19T14:00:00.000Z",
-    "competitiveness": 1,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (2-0 vs 1-3).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Everton seeks consistency against an Ipswich side that has shown early resilience.",
+    "source": "ai"
   },
   "epl-401879271": {
     "startTimeUtc": "2026-09-19T14:00:00.000Z",
-    "competitiveness": 5,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (2-2 vs 1-2).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Newcastle hosts Hull City in a match where both squads will push for crucial points.",
+    "source": "ai"
   },
   "epl-401879270": {
     "startTimeUtc": "2026-09-19T16:30:00.000Z",
-    "competitiveness": 3,
-    "watchability": 2,
-    "reason": "Estimated from each side's current win-loss record (0-0 vs 1-2).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Nottingham Forest looks to outplay a newly promoted Coventry side still finding its footing.",
+    "source": "ai"
   },
   "epl-401879276": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
-    "competitiveness": 4,
-    "watchability": 1,
-    "reason": "Estimated from each side's current win-loss record (1-3 vs 0-3).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Liverpool boasts superior quality, but Bournemouth will look to capitalize on home advantage.",
+    "source": "ai"
   },
   "epl-401879273": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
-    "competitiveness": 1,
-    "watchability": 8,
-    "reason": "Estimated from each side's current win-loss record (1-0 vs 2-2).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "A tightly matched fixture between Crystal Palace and Leeds United with unpredictable outcomes.",
+    "source": "ai"
   },
   "epl-401879272": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
-    "competitiveness": 1,
-    "watchability": 8,
-    "reason": "Estimated from each side's current win-loss record (1-1 vs 4-0).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "Manchester City is heavily favored against Sunderland given their dominant early form.",
+    "source": "ai"
   },
   "epl-401878777": {
     "startTimeUtc": "2026-09-20T15:30:00.000Z",
-    "competitiveness": 1,
-    "watchability": 3,
-    "reason": "Estimated from each side's current win-loss record (1-1 vs 0-1).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Manchester United travels to Fulham in search of a much-needed statement win.",
+    "source": "ai"
   },
   "mls-761815": {
     "startTimeUtc": "2026-09-18T23:30:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (8-6 vs 8-8).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "The Hudson River Derby brings high intensity and rivalry stakes between two close New York sides.",
+    "source": "ai"
   },
   "mls-761818": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (6-5 vs 5-6).",
-    "source": "heuristic"
+    "reason": "Columbus Crew faces CF Montréal in a mid-table clash with playoff positioning implications.",
+    "source": "ai"
   },
   "mls-761819": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
-    "competitiveness": 4,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (11-7 vs 6-11).",
-    "source": "heuristic"
+    "reason": "Charlotte FC holds better form over a struggling D.C. United side.",
+    "source": "ai"
   },
   "mls-761816": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (10-4 vs 13-4).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "New England Revolution faces Orlando City in a battle between two competitive Eastern Conference teams.",
+    "source": "ai"
   },
   "mls-761817": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (11-7 vs 12-5).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "LAFC travels to San Jose for a Western Conference matchup featuring strong attacking talent.",
+    "source": "ai"
   },
   "mls-761822": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 5,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (7-8 vs 12-7).",
-    "source": "heuristic"
+    "reason": "FC Dallas holds the standings advantage over Austin FC in this regional rivalry.",
+    "source": "ai"
   },
   "mls-761820": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 4,
+    "competitiveness": 5,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (8-8 vs 13-4).",
-    "source": "heuristic"
+    "reason": "Houston Dynamo has been strong at home against an inconsistent FC Cincinnati.",
+    "source": "ai"
   },
   "mls-761821": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 7,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (7-9 vs 7-8).",
-    "source": "heuristic"
+    "reason": "An evenly matched contest between LA Galaxy and Minnesota United in the West.",
+    "source": "ai"
   },
   "mls-761823": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 8,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (9-6 vs 5-3).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Philadelphia Union takes on Sporting Kansas City in an inter-conference style battle.",
+    "source": "ai"
   },
   "mls-761824": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 4,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (6-11 vs 11-8).",
-    "source": "heuristic"
+    "reason": "St. Louis CITY SC looks to defend home turf against Toronto FC.",
+    "source": "ai"
   },
   "mls-761826": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
-    "competitiveness": 2,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (7-7 vs 11-2).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Colorado Rapids has been in great form, hosting a solid Seattle Sounders squad.",
+    "source": "ai"
   },
   "mls-761827": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (11-6 vs 16-6).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Nashville SC faces Chicago Fire in a match featuring two teams near the top of their conference.",
+    "source": "ai"
   },
   "mls-761825": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
-    "competitiveness": 5,
+    "competitiveness": 6,
     "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (14-4 vs 8-5).",
-    "source": "heuristic"
+    "reason": "Vancouver Whitecaps' strong season meets a tough test away against Real Salt Lake.",
+    "source": "ai"
   },
   "mls-761828": {
     "startTimeUtc": "2026-09-20T02:30:00.000Z",
     "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (6-5 vs 9-5).",
-    "source": "heuristic"
+    "reason": "Portland Timbers host Atlanta United in what should be an open, entertaining affair.",
+    "source": "ai"
   },
   "mls-761829": {
     "startTimeUtc": "2026-09-20T23:00:00.000Z",
-    "competitiveness": 8,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (8-6 vs 12-9).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "Inter Miami's star power draws heavy attention as they host expansion side San Diego FC.",
+    "source": "ai"
   },
   "mls-761543": {
     "startTimeUtc": "2026-09-24T01:30:00.000Z",
     "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (8-5 vs 7-7).",
-    "source": "heuristic"
+    "reason": "A tight rematch between Real Salt Lake and Seattle Sounders with playoff implications.",
+    "source": "ai"
   },
   "mls-761830": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (8-8 vs 6-5).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "New York City FC travels to Atlanta for a competitive late-September fixture.",
+    "source": "ai"
   },
   "mls-761831": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (8-8 vs 5-6).",
-    "source": "heuristic"
+    "reason": "CF Montréal hosts FC Cincinnati in a closely contested Eastern Conference matchup.",
+    "source": "ai"
   },
   "mls-761832": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
     "competitiveness": 7,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (11-6 vs 11-7).",
-    "source": "heuristic"
+    "reason": "Chicago Fire and Charlotte FC meet in a tightly matched battle of similar-tier teams.",
+    "source": "ai"
   },
   "mls-761834": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (10-4 vs 9-6).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Orlando City and Philadelphia Union clash in a high-stakes fixture near the playoff line.",
+    "source": "ai"
   },
   "mls-761833": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (11-8 vs 8-6).",
-    "source": "heuristic"
+    "reason": "St. Louis CITY SC visits Red Bull New York for an inter-conference test.",
+    "source": "ai"
   },
   "mls-761839": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (8-6 vs 7-8).",
-    "source": "heuristic"
+    "reason": "San Diego FC travels to Austin FC for a developing cross-conference matchup.",
+    "source": "ai"
   },
   "mls-761835": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (11-7 vs 12-7).",
-    "source": "heuristic"
+    "reason": "LAFC and FC Dallas renew hostilities in a critical Western Conference showdown.",
+    "source": "ai"
   },
   "mls-761836": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (5-3 vs 13-4).",
-    "source": "heuristic"
+    "watchability": 5,
+    "reason": "Houston Dynamo hosts Sporting Kansas City with playoff seeding on the line.",
+    "source": "ai"
   },
   "mls-761838": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
-    "competitiveness": 2,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (6-11 vs 16-6).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 6,
+    "reason": "Nashville SC enters as favorites at home against a struggling Toronto FC side.",
+    "source": "ai"
   },
   "mls-761837": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (7-8 vs 7-7).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Minnesota United and Seattle Sounders play a crucial late-season match for playoff positioning.",
+    "source": "ai"
   },
   "mls-761840": {
     "startTimeUtc": "2026-09-27T01:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (13-4 vs 8-5).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "New England Revolution faces a difficult road test against Real Salt Lake.",
+    "source": "ai"
   },
   "mls-761841": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
-    "competitiveness": 1,
+    "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (11-2 vs 7-9).",
-    "source": "heuristic"
+    "reason": "Colorado Rapids' impressive form faces a test away against the LA Galaxy.",
+    "source": "ai"
   },
   "mls-761843": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 7,
-    "reason": "Estimated from each side's current win-loss record (9-5 vs 12-5).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Portland Timbers travel to San Jose for a hard-fought Cascadia-region adjacent battle.",
+    "source": "ai"
   },
   "mls-761842": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
-    "competitiveness": 1,
+    "competitiveness": 5,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (6-11 vs 14-4).",
-    "source": "heuristic"
+    "reason": "Vancouver Whitecaps are heavily favored at home against D.C. United.",
+    "source": "ai"
   },
   "mls-761844": {
     "startTimeUtc": "2026-09-27T23:00:00.000Z",
-    "competitiveness": 8,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (12-9 vs 6-5).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "Inter Miami travels to Columbus Crew for a high-profile matchup featuring elite talent.",
+    "source": "ai"
   },
   "mls-761798": {
     "startTimeUtc": "2026-10-02T01:30:00.000Z",
     "competitiveness": 6,
     "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (5-3 vs 7-7).",
-    "source": "heuristic"
+    "reason": "Sporting Kansas City and Seattle Sounders meet in a familiar Western Conference pairing.",
+    "source": "ai"
   },
   "mlb-401816984": {
     "startTimeUtc": "2026-09-18T22:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "The Cubs push for postseason positioning in a divisional matchup against the Reds.",
+    "source": "ai"
   },
   "mlb-401816985": {
     "startTimeUtc": "2026-09-18T22:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
-    "source": "heuristic"
+    "reason": "Kansas City and Pittsburgh meet late in the season with little playoff drama.",
+    "source": "ai"
   },
   "mlb-401816986": {
     "startTimeUtc": "2026-09-18T23:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Milwaukee boasts an elite record as they visit Baltimore for late September baseball.",
+    "source": "ai"
   },
   "mlb-401816982": {
     "startTimeUtc": "2026-09-18T23:10:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Cleveland chases the postseason while hosting the rebuilding Athletics.",
+    "source": "ai"
   },
   "mlb-401816983": {
     "startTimeUtc": "2026-09-18T23:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "A high-stakes AL East battle between two 90-win caliber teams in Boston and Tampa Bay.",
+    "source": "ai"
   },
   "mlb-401816987": {
     "startTimeUtc": "2026-09-18T23:10:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "NL East rivals Philadelphia and New York meet in a classic rivalry series.",
+    "source": "ai"
   },
   "mlb-401816989": {
     "startTimeUtc": "2026-09-18T23:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Detroit visits the White Sox in an AL Central divisional contest.",
+    "source": "ai"
   },
   "mlb-401816990": {
     "startTimeUtc": "2026-09-19T00:05:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Blue Jays and Rangers face off with identical records in a tight matchup.",
+    "source": "ai"
   },
   "mlb-401816988": {
     "startTimeUtc": "2026-09-19T00:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Atlanta Braves bring a strong record into Houston to face the Astros.",
+    "source": "ai"
   },
   "mlb-401816992": {
     "startTimeUtc": "2026-09-19T00:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Seattle plays the Rockies in Coors Field, though both teams are struggling for consistency.",
+    "source": "ai"
   },
   "mlb-401816991": {
     "startTimeUtc": "2026-09-19T00:15:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
-    "source": "heuristic"
+    "reason": "Nationals and Cardinals play a late-season series with comparable records.",
+    "source": "ai"
   },
   "mlb-401816994": {
     "startTimeUtc": "2026-09-19T01:38:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Minnesota visits the Angels in a low-stakes matchup.",
+    "source": "ai"
   },
   "mlb-401816993": {
     "startTimeUtc": "2026-09-19T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "San Diego holds strong playoff positioning as they host the Marlins.",
+    "source": "ai"
   },
   "mlb-401816995": {
     "startTimeUtc": "2026-09-19T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "The Yankees bring star power to Arizona to face a competitive Diamondbacks squad.",
+    "source": "ai"
   },
   "mlb-401816996": {
     "startTimeUtc": "2026-09-19T02:10:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "The Dodgers lead the division as they host the struggling Giants in a historic rivalry.",
+    "source": "ai"
   },
   "mlb-401817001": {
     "startTimeUtc": "2026-09-19T20:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Continuation of the Brewers and Orioles series with Milwaukee playing dominant baseball.",
+    "source": "ai"
   },
   "mlb-401816998": {
     "startTimeUtc": "2026-09-19T20:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Red Sox and Rays continue their intense AL East battle down the stretch.",
+    "source": "ai"
   },
   "mlb-401817002": {
     "startTimeUtc": "2026-09-19T20:10:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Philadelphia and the Mets square off again in another divisional clash.",
+    "source": "ai"
   },
   "mlb-401816997": {
     "startTimeUtc": "2026-09-19T22:10:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Cleveland hosts the Athletics in the second game of their series.",
+    "source": "ai"
   },
   "mlb-401816999": {
     "startTimeUtc": "2026-09-19T22:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Cubs and Reds meet again in Cincinnati as Chicago chases October.",
+    "source": "ai"
   },
   "mlb-401817000": {
     "startTimeUtc": "2026-09-19T22:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
-    "source": "heuristic"
+    "reason": "Pirates and Royals continue their series in Pittsburgh.",
+    "source": "ai"
   },
   "mlb-401817005": {
     "startTimeUtc": "2026-09-19T23:05:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 6,
+    "reason": "Blue Jays and Rangers play a closely matched game in Texas.",
+    "source": "ai"
   },
   "mlb-401817003": {
     "startTimeUtc": "2026-09-19T23:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Braves and Astros provide high-level late-season baseball entertainment.",
+    "source": "ai"
   },
   "mlb-401817004": {
     "startTimeUtc": "2026-09-19T23:10:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Tigers and White Sox clash in Chicago.",
+    "source": "ai"
   },
   "mlb-401817006": {
     "startTimeUtc": "2026-09-19T23:15:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
-    "source": "heuristic"
+    "reason": "Cardinals host the Nationals in a familiar National League matchup.",
+    "source": "ai"
   },
   "mlb-401817007": {
     "startTimeUtc": "2026-09-20T00:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Mariners travel to Colorado for interleague play at Coors Field.",
+    "source": "ai"
   },
   "mlb-401817010": {
     "startTimeUtc": "2026-09-20T00:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "Yankees and Diamondbacks face off in an exciting cross-league series.",
+    "source": "ai"
   },
   "mlb-401817008": {
     "startTimeUtc": "2026-09-20T00:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 7,
+    "reason": "Padres host the Marlins with playoff stakes on the line for San Diego.",
+    "source": "ai"
   },
   "mlb-401817011": {
     "startTimeUtc": "2026-09-20T01:10:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "Dodgers host Giants in a classic West Coast rivalry game.",
+    "source": "ai"
   },
   "mlb-401817009": {
     "startTimeUtc": "2026-09-20T01:38:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 5,
+    "reason": "Twins and Angels wrap up their series in Anaheim.",
+    "source": "ai"
   },
   "mlb-401817017": {
     "startTimeUtc": "2026-09-20T17:10:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 69-84).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Weekend afternoon baseball featuring the Phillies and Mets.",
+    "source": "ai"
   },
   "mlb-401817015": {
     "startTimeUtc": "2026-09-20T17:35:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (67-86 vs 76-77).",
-    "source": "heuristic"
+    "reason": "Royals and Pirates conclude their weekend series.",
+    "source": "ai"
   },
   "mlb-401817012": {
     "startTimeUtc": "2026-09-20T17:40:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (61-92 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Guardians host the Athletics in a weekend matchup.",
+    "source": "ai"
   },
   "mlb-401817013": {
     "startTimeUtc": "2026-09-20T17:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (83-70 vs 93-59).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Two strong AL teams battling late in the season with postseason implications.",
+    "source": "ai"
   },
   "mlb-401817014": {
     "startTimeUtc": "2026-09-20T17:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Cubs have a solid record while Reds are struggling below five hundred.",
+    "source": "ai"
   },
   "mlb-401817018": {
     "startTimeUtc": "2026-09-20T18:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 77-76).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Braves bring a great record against an Astros squad fighting for momentum.",
+    "source": "ai"
   },
   "mlb-401817019": {
     "startTimeUtc": "2026-09-20T18:10:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (72-81 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Late September matchup between two teams out of the primary race.",
+    "source": "ai"
   },
   "mlb-401817021": {
     "startTimeUtc": "2026-09-20T18:15:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 75-78).",
-    "source": "heuristic"
+    "reason": "Both teams sit below five hundred in the National League.",
+    "source": "ai"
   },
   "mlb-401817020": {
     "startTimeUtc": "2026-09-20T18:35:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 76-77).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Identical records make this a closely matched series opener.",
+    "source": "ai"
   },
   "mlb-401817022": {
     "startTimeUtc": "2026-09-20T19:10:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 4,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 56-97).",
-    "source": "heuristic"
+    "reason": "Rockies are having a difficult season against a struggling Mariners side.",
+    "source": "ai"
   },
   "mlb-401817024": {
     "startTimeUtc": "2026-09-20T20:07:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 59-94).",
-    "source": "heuristic"
+    "reason": "Two teams near the bottom of their respective divisions.",
+    "source": "ai"
   },
   "mlb-401817023": {
     "startTimeUtc": "2026-09-20T20:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 84-69).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Padres hold a strong playoff position against a competitive Marlins team.",
+    "source": "ai"
   },
   "mlb-401817025": {
     "startTimeUtc": "2026-09-20T20:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (88-64 vs 80-73).",
-    "source": "heuristic"
+    "competitiveness": 8,
+    "watchability": 8,
+    "reason": "Yankees star power meets a strong Diamondbacks playoff contender.",
+    "source": "ai"
   },
   "mlb-401817026": {
     "startTimeUtc": "2026-09-20T20:10:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (64-89 vs 93-60).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 6,
+    "reason": "Lopsided records in this classic rivalry game.",
+    "source": "ai"
   },
   "mlb-401817016": {
     "startTimeUtc": "2026-09-20T23:20:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 75-78).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "League-leading Brewers face an Orioles team needing wins.",
+    "source": "ai"
   },
   "mlb-401817027": {
     "startTimeUtc": "2026-09-21T22:35:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Evenly matched records should lead to a tight contest.",
+    "source": "ai"
   },
   "mlb-401817028": {
     "startTimeUtc": "2026-09-21T22:40:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
-    "source": "heuristic"
+    "reason": "Two teams with similar records fighting to finish the year strong.",
+    "source": "ai"
   },
   "mlb-401817029": {
     "startTimeUtc": "2026-09-22T01:45:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
-    "source": "heuristic"
+    "reason": "Late season game between two struggling franchises.",
+    "source": "ai"
   },
   "mlb-401873648": {
     "startTimeUtc": "2026-09-22T17:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 8,
+    "watchability": 9,
+    "reason": "High-stakes matchup between top-tier American League contenders.",
+    "source": "ai"
   },
   "mlb-401817035": {
     "startTimeUtc": "2026-09-22T22:35:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Closely matched records point toward a competitive game.",
+    "source": "ai"
   },
   "mlb-401817032": {
     "startTimeUtc": "2026-09-22T22:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Elite Brewers team faces a dangerous Phillies playoff squad.",
+    "source": "ai"
   },
   "mlb-401817033": {
     "startTimeUtc": "2026-09-22T22:40:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Virtually identical records in this divisional matchup.",
+    "source": "ai"
   },
   "mlb-401817036": {
     "startTimeUtc": "2026-09-22T22:40:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
-    "source": "heuristic"
+    "reason": "Two rebuilding or struggling teams playing out the string.",
+    "source": "ai"
   },
   "mlb-401817031": {
     "startTimeUtc": "2026-09-22T22:45:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Guardians and Red Sox both feature in the playoff picture.",
+    "source": "ai"
   },
   "mlb-401817034": {
     "startTimeUtc": "2026-09-22T23:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 8,
+    "watchability": 9,
+    "reason": "Late September clash featuring two powerhouse American League rosters.",
+    "source": "ai"
   },
   "mlb-401817030": {
     "startTimeUtc": "2026-09-22T23:15:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Strong Braves team hosts a struggling Reds squad.",
+    "source": "ai"
   },
   "mlb-401817037": {
     "startTimeUtc": "2026-09-22T23:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "reason": "White Sox hold a slight edge in the standings over the Royals.",
+    "source": "ai"
   },
   "mlb-401817038": {
     "startTimeUtc": "2026-09-22T23:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Cubs look to secure a postseason spot against the Marlins.",
+    "source": "ai"
   },
   "mlb-401817039": {
     "startTimeUtc": "2026-09-23T00:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Mets and Rangers are both fighting to finish above water.",
+    "source": "ai"
   },
   "mlb-401817040": {
     "startTimeUtc": "2026-09-23T00:40:00.000Z",
-    "competitiveness": 5,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 5,
+    "reason": "Diamondbacks are heavily favored against the struggling Rockies.",
+    "source": "ai"
   },
   "mlb-401817041": {
     "startTimeUtc": "2026-09-23T01:40:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 61-92).",
-    "source": "heuristic"
+    "reason": "Battle between two lower-tier American League West teams.",
+    "source": "ai"
   },
   "mlb-401817042": {
     "startTimeUtc": "2026-09-23T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Astros hold a better record as they visit Seattle.",
+    "source": "ai"
   },
   "mlb-401817043": {
     "startTimeUtc": "2026-09-23T01:45:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
-    "source": "heuristic"
+    "reason": "Late-season fixture between two teams out of contention.",
+    "source": "ai"
   },
   "mlb-401817044": {
     "startTimeUtc": "2026-09-23T02:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
-    "source": "heuristic"
+    "watchability": 9,
+    "reason": "Heavyweight NL West rivalry with major postseason seeding implications.",
+    "source": "ai"
   },
   "mlb-401817051": {
     "startTimeUtc": "2026-09-23T17:10:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 72-81).",
-    "source": "heuristic"
+    "reason": "Closely matched records between two non-playoff teams.",
+    "source": "ai"
   },
   "mlb-401817058": {
     "startTimeUtc": "2026-09-23T19:45:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 64-89).",
-    "source": "heuristic"
+    "reason": "Low stakes game between two struggling clubs.",
+    "source": "ai"
   },
   "mlb-401817050": {
     "startTimeUtc": "2026-09-23T22:35:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 75-78).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Similar records ensure a competitive series dynamic.",
+    "source": "ai"
   },
   "mlb-401817047": {
     "startTimeUtc": "2026-09-23T22:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Brewers and Phillies are both prominent postseason contenders.",
+    "source": "ai"
   },
   "mlb-401817048": {
     "startTimeUtc": "2026-09-23T22:40:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Very tight records make this an unpredictable matchup.",
+    "source": "ai"
   },
   "mlb-401817046": {
     "startTimeUtc": "2026-09-23T23:00:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Important late-season game for two teams in the playoff hunt.",
+    "source": "ai"
   },
   "mlb-401817049": {
     "startTimeUtc": "2026-09-23T23:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 8,
+    "watchability": 9,
+    "reason": "Top American League teams face off in a potential playoff preview.",
+    "source": "ai"
   },
   "mlb-401817045": {
     "startTimeUtc": "2026-09-23T23:15:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Braves host the Reds in a game with clear league hierarchy.",
+    "source": "ai"
   },
   "mlb-401817052": {
     "startTimeUtc": "2026-09-23T23:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "reason": "White Sox face the Royals in an AL Central clash.",
+    "source": "ai"
   },
   "mlb-401817053": {
     "startTimeUtc": "2026-09-23T23:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Cubs chase a postseason spot against the Marlins.",
+    "source": "ai"
   },
   "mlb-401817054": {
     "startTimeUtc": "2026-09-24T00:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Two teams looking to salvage pride late in the season.",
+    "source": "ai"
   },
   "mlb-401817055": {
     "startTimeUtc": "2026-09-24T00:40:00.000Z",
-    "competitiveness": 5,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 5,
+    "reason": "Diamondbacks are favored heavily on the road in Colorado.",
+    "source": "ai"
   },
   "mlb-401817056": {
     "startTimeUtc": "2026-09-24T01:40:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 61-92).",
-    "source": "heuristic"
+    "reason": "Two struggling teams playing out the final week.",
+    "source": "ai"
   },
   "mlb-401817057": {
     "startTimeUtc": "2026-09-24T02:00:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Astros and Mariners battle for divisional positioning.",
+    "source": "ai"
   },
   "mlb-401817059": {
     "startTimeUtc": "2026-09-24T02:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
-    "source": "heuristic"
+    "watchability": 9,
+    "reason": "High-profile NL West showdown featuring star players.",
+    "source": "ai"
   },
   "mlb-401817063": {
     "startTimeUtc": "2026-09-24T16:35:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 76-77).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Virtually even records point to a closely contested game.",
+    "source": "ai"
   },
   "mlb-401817065": {
     "startTimeUtc": "2026-09-24T18:10:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "reason": "Mid-tier AL matchup with little postseason impact.",
+    "source": "ai"
   },
   "mlb-401817066": {
     "startTimeUtc": "2026-09-24T18:20:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Cubs host the Marlins as they push for October.",
+    "source": "ai"
   },
   "mlb-401817067": {
     "startTimeUtc": "2026-09-24T18:35:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Mets and Rangers meet for an interleague series.",
+    "source": "ai"
   },
   "mlb-401817068": {
     "startTimeUtc": "2026-09-24T19:10:00.000Z",
-    "competitiveness": 5,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 56-97).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 5,
+    "reason": "Diamondbacks have a significant advantage over the Rockies.",
+    "source": "ai"
   },
   "mlb-401817062": {
     "startTimeUtc": "2026-09-24T22:05:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (95-58 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Two elite National League playoff teams go head-to-head.",
+    "source": "ai"
   },
   "mlb-401817061": {
     "startTimeUtc": "2026-09-24T22:45:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 83-70).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Guardians and Red Sox battle for crucial seeding.",
+    "source": "ai"
   },
   "mlb-401817064": {
     "startTimeUtc": "2026-09-24T23:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 8,
+    "watchability": 9,
+    "reason": "Critical matchup between two powerhouse American League contenders.",
+    "source": "ai"
   },
   "mlb-401817060": {
     "startTimeUtc": "2026-09-24T23:15:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 89-64).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Braves look to dominate a weaker Reds side.",
+    "source": "ai"
   },
   "mlb-401817069": {
     "startTimeUtc": "2026-09-25T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Mariners host the Angels in the Pacific Northwest.",
+    "source": "ai"
   },
   "mlb-401817070": {
     "startTimeUtc": "2026-09-25T01:40:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Astros travel to face the Athletics.",
+    "source": "ai"
   },
   "mlb-401817071": {
     "startTimeUtc": "2026-09-25T02:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (84-69 vs 93-60).",
-    "source": "heuristic"
+    "watchability": 9,
+    "reason": "Star-studded NL West rivalry game late in the year.",
+    "source": "ai"
   },
   "mlb-401817077": {
     "startTimeUtc": "2026-09-25T22:40:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
-    "source": "heuristic"
+    "reason": "Two lower-tier teams finishing up their schedules.",
+    "source": "ai"
   },
   "mlb-401817078": {
     "startTimeUtc": "2026-09-25T22:40:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Rays bring their elite record into Philadelphia.",
+    "source": "ai"
   },
   "mlb-401817076": {
     "startTimeUtc": "2026-09-25T22:45:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
-    "source": "heuristic"
+    "reason": "Battle between two non-contending franchises.",
+    "source": "ai"
   },
   "mlb-401817073": {
     "startTimeUtc": "2026-09-25T23:05:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Orioles take on the Yankees in a high-profile division game.",
+    "source": "ai"
   },
   "mlb-401817075": {
     "startTimeUtc": "2026-09-25T23:07:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Reds visit Toronto for an interleague matchup.",
+    "source": "ai"
   },
   "mlb-401817072": {
     "startTimeUtc": "2026-09-25T23:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Braves face the Marlins in a late-season series.",
+    "source": "ai"
   },
   "mlb-401817074": {
     "startTimeUtc": "2026-09-25T23:10:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "Cubs and Red Sox feature two historic franchises fighting for position.",
+    "source": "ai"
   },
   "mlb-401817079": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Guardians host the Royals in the AL Central.",
+    "source": "ai"
   },
   "mlb-401817080": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 4,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Rockies visit the White Sox in a game with minimal stakes.",
+    "source": "ai"
   },
   "mlb-401817081": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "Cardinals face the league-leading Brewers on the road.",
+    "source": "ai"
   },
   "mlb-401817082": {
     "startTimeUtc": "2026-09-26T00:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Rangers and Twins meet in a battle of similar records.",
+    "source": "ai"
   },
   "mlb-401817084": {
     "startTimeUtc": "2026-09-26T01:40:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "Crucial late-season NL playoff race matchup in San Diego.",
+    "source": "ai"
   },
   "mlb-401817085": {
     "startTimeUtc": "2026-09-26T01:40:00.000Z",
     "competitiveness": 6,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
-    "source": "heuristic"
+    "watchability": 6,
+    "reason": "Astros are favored against the Athletics.",
+    "source": "ai"
   },
   "mlb-401817083": {
     "startTimeUtc": "2026-09-26T02:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Angels travel to Seattle for an AL West game.",
+    "source": "ai"
   },
   "mlb-401817086": {
     "startTimeUtc": "2026-09-26T02:15:00.000Z",
     "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
-    "source": "heuristic"
+    "watchability": 7,
+    "reason": "Dodgers bring their powerhouse roster into San Francisco.",
+    "source": "ai"
   },
   "mlb-401817092": {
     "startTimeUtc": "2026-09-26T17:10:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 5,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
-    "source": "heuristic"
+    "reason": "Two teams playing out the final days of the season.",
+    "source": "ai"
   },
   "mlb-401817090": {
     "startTimeUtc": "2026-09-26T19:07:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Reds and Blue Jays close out their series in Toronto.",
+    "source": "ai"
   },
   "mlb-401817091": {
     "startTimeUtc": "2026-09-26T20:05:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
-    "source": "heuristic"
+    "reason": "Two teams out of postseason contention playing a late-season series with little pressure.",
+    "source": "ai"
   },
   "mlb-401817101": {
     "startTimeUtc": "2026-09-26T20:05:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "The Dodgers boast star power, but the Giants lag behind significantly in the standings.",
+    "source": "ai"
   },
   "mlb-401817087": {
     "startTimeUtc": "2026-09-26T20:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "The Braves hold a strong record while the Marlins are hovering near a .500 mark.",
+    "source": "ai"
   },
   "mlb-401817097": {
     "startTimeUtc": "2026-09-26T20:10:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
-    "source": "heuristic"
+    "reason": "Both teams are near the .500 mark and fighting to finish the season strongly.",
+    "source": "ai"
   },
   "mlb-401817094": {
     "startTimeUtc": "2026-09-26T23:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Guardians are having a solid campaign whereas the Royals are well below .500.",
+    "source": "ai"
   },
   "mlb-401817095": {
     "startTimeUtc": "2026-09-26T23:10:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
-    "source": "heuristic"
+    "reason": "A low-stakes matchup featuring the struggling Rockies and the mid-tier White Sox.",
+    "source": "ai"
   },
   "mlb-401817096": {
     "startTimeUtc": "2026-09-26T23:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "The Brewers have been dominant this season, facing a mediocre Cardinals side.",
+    "source": "ai"
   },
   "mlb-401817088": {
     "startTimeUtc": "2026-09-26T23:15:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "A historic AL East rivalry featuring the strong Yankees against the Orioles.",
+    "source": "ai"
   },
   "mlb-401817089": {
     "startTimeUtc": "2026-09-26T23:15:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "Two competitive postseason contenders clash in a marquee interleague series.",
+    "source": "ai"
   },
   "mlb-401817093": {
     "startTimeUtc": "2026-09-26T23:15:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "A high-profile clash between two powerhouse teams heading toward the postseason.",
+    "source": "ai"
   },
   "mlb-401817099": {
     "startTimeUtc": "2026-09-27T00:40:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "A tight divisional rivalry with both the Diamondbacks and Padres in playoff contention.",
+    "source": "ai"
   },
   "mlb-401817098": {
     "startTimeUtc": "2026-09-27T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Mariners hold a better record, but both teams are largely out of the spotlight.",
+    "source": "ai"
   },
   "mlb-401817100": {
     "startTimeUtc": "2026-09-27T01:40:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
-    "source": "heuristic"
+    "reason": "The Astros look to secure their positioning against an out-of-contention Athletics squad.",
+    "source": "ai"
   },
   "mlb-401817104": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
-    "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (85-68 vs 83-70).",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "A continuation of the competitive interleague series between the Cubs and Red Sox.",
+    "source": "ai"
   },
   "mlb-401817106": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (69-84 vs 71-82).",
-    "source": "heuristic"
+    "reason": "A repeat matchup between two NL opponents playing out the string.",
+    "source": "ai"
   },
   "mlb-401817108": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (93-59 vs 85-68).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "High-powered playoff contenders face off in the second game of their weekend series.",
+    "source": "ai"
   },
   "mlb-401817115": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
     "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (77-76 vs 61-92).",
-    "source": "heuristic"
+    "reason": "Another game in the series between the Astros and the rebuilding Athletics.",
+    "source": "ai"
   },
   "mlb-401817116": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (93-60 vs 64-89).",
-    "source": "heuristic"
+    "competitiveness": 4,
+    "watchability": 7,
+    "reason": "Classic NL West rivalry featuring the dominant Dodgers and the struggling Giants.",
+    "source": "ai"
   },
   "mlb-401817105": {
     "startTimeUtc": "2026-09-27T19:07:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (71-82 vs 76-77).",
-    "source": "heuristic"
+    "reason": "Two evenly matched teams outside the primary playoff picture meeting in Toronto.",
+    "source": "ai"
   },
   "mlb-401817102": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (89-64 vs 76-77).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Braves continue their push against a divisional opponent in Miami.",
+    "source": "ai"
   },
   "mlb-401817107": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 8,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 72-81).",
-    "source": "heuristic"
+    "reason": "A tightly matched pair of teams trying to finish with respectable records.",
+    "source": "ai"
   },
   "mlb-401817109": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (78-75 vs 67-86).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 6,
+    "reason": "Guardians and Royals meet for another late-season divisional showdown.",
+    "source": "ai"
   },
   "mlb-401817110": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 5,
     "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (56-97 vs 78-75).",
-    "source": "heuristic"
+    "reason": "Rockies face the White Sox in a game with little national significance.",
+    "source": "ai"
   },
   "mlb-401817111": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 95-58).",
-    "source": "heuristic"
+    "competitiveness": 5,
+    "watchability": 7,
+    "reason": "Brewers are heavily favored at home against the Cardinals.",
+    "source": "ai"
   },
   "mlb-401817112": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (76-77 vs 71-82).",
-    "source": "heuristic"
+    "reason": "Rangers and Twins lock horns in an evenly matched middle-of-the-pack series.",
+    "source": "ai"
   },
   "mlb-401817113": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 7,
-    "watchability": 4,
-    "reason": "Estimated from each side's current win-loss record (59-94 vs 71-82).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 5,
+    "reason": "Mariners host the Angels as they battle through the final stretch.",
+    "source": "ai"
   },
   "mlb-401817114": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
     "competitiveness": 8,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (80-73 vs 84-69).",
-    "source": "heuristic"
+    "watchability": 8,
+    "reason": "Crucial late-season NL West battle carrying heavy postseason implications.",
+    "source": "ai"
   },
   "mlb-401817103": {
     "startTimeUtc": "2026-09-27T19:20:00.000Z",
-    "competitiveness": 7,
-    "watchability": 5,
-    "reason": "Estimated from each side's current win-loss record (75-78 vs 88-64).",
-    "source": "heuristic"
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "Another installment of the storied Orioles-Yankees American League rivalry.",
+    "source": "ai"
   },
   "mlb-401907896": {
     "startTimeUtc": "2026-09-29T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907924": {
     "startTimeUtc": "2026-09-29T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907965": {
     "startTimeUtc": "2026-09-29T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907974": {
     "startTimeUtc": "2026-09-29T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907897": {
     "startTimeUtc": "2026-09-30T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907963": {
     "startTimeUtc": "2026-09-30T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907972": {
     "startTimeUtc": "2026-09-30T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907975": {
     "startTimeUtc": "2026-09-30T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907898": {
     "startTimeUtc": "2026-10-01T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907964": {
     "startTimeUtc": "2026-10-01T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907973": {
     "startTimeUtc": "2026-10-01T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "mlb-401907976": {
     "startTimeUtc": "2026-10-01T04:00:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "reason": "TBD postseason matchups cannot be evaluated for competitiveness or watchability yet.",
+    "source": "ai"
   },
   "f1-600057444": {
     "startTimeUtc": "2026-09-26T11:00:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "No record data available for either side yet.",
-    "source": "heuristic"
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "Baku street circuit guarantees high drama, chaotic safety cars, and unpredictable F1 racing action.",
+    "source": "ai"
   }
 }
