@@ -558,6 +558,10 @@ function findContestedClusters(matches, cache) {
 // particular pick came back valid - is stamped `refined: true` so a
 // persistently-malformed response can't cause the same cluster to be
 // resent every single eligible run forever.
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function refineContestedClusters(matches, cache) {
   if (!PROXY_URL) return false;
   const clusters = findContestedClusters(matches, cache)
@@ -572,7 +576,18 @@ async function refineContestedClusters(matches, cache) {
   if (!clusters.length) return false;
 
   let anyAttempted = false;
-  for (const cluster of clusters) {
+  for (const [index, cluster] of clusters.entries()) {
+    // Confirmed live: the Pro-tier models in MATCH_RECOMMEND_REFINE_MODELS
+    // aren't currently reachable on this account (each attempt falls
+    // through to the same gemini-3.7-flash the base scoring pass already
+    // uses, near-instantly), so a burst of refine calls fired back-to-back
+    // right after the base pass's own calls can blow straight through
+    // Gemini's free-tier requests-PER-MINUTE cap even though the total
+    // count for the whole run is small - a real 429 seen live confirmed
+    // this. Spacing calls out costs a few seconds of build time, which is
+    // free; retrying every eligible run forever because of a rate limit
+    // that was entirely avoidable is not.
+    if (index > 0) await sleep(4000);
     const picked = cluster
       .slice()
       .sort((a, b) => b.score - a.score)
