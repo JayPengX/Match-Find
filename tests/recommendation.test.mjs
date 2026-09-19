@@ -29,7 +29,19 @@ import {
   resolveService,
   BROADCAST_QUALITY_WEIGHT,
   PRIORITY_SCORE_DELTA,
-  OWNED_SERVICE_SCORE_BONUS
+  OWNED_SERVICE_SCORE_BONUS,
+  resolveSportTiming,
+  schedulingDurationMinutes,
+  schedulingInterval,
+  canWatchSequentially,
+  SPORT_TIMING,
+  DURATION_UNCERTAINTY_BY_RELIABILITY,
+  TRANSITION_BUFFER_MINUTES,
+  matchupKey,
+  daysBetweenDayKeys,
+  recentRepeatPenalty,
+  applyRecentRepeatPenalties,
+  computeWindowPlan
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -324,6 +336,13 @@ describe('resolveViewingPlan', () => {
     assert.equal(out.confidence, 0.9);
     assert.equal(out.effectiveScore, out.scoreBreakdown.effectiveScore);
   });
+
+  test('eventScore/viewerScore are the same numbers as baseScore/effectiveScore, under the audit\'s own names', () => {
+    const [out] = resolveViewingPlan([makeMatch({ sport: 'MLB' })], ['NBA', 'MLB']);
+    assert.equal(out.eventScore, out.scoreBreakdown.baseScore);
+    assert.equal(out.viewerScore, out.effectiveScore);
+    assert.notEqual(out.eventScore, out.viewerScore); // priority nudge actually moved it
+  });
 });
 
 describe('resolveService', () => {
@@ -334,5 +353,281 @@ describe('resolveService', () => {
   test('unrecognized or empty broadcast text resolves to no service', () => {
     assert.equal(resolveService(''), null);
     assert.equal(resolveService('緯來體育台'), null);
+  });
+});
+
+// ---- Scheduling correctness regression tests -------------------------------
+// docs/recommendation-engine-audit.md section 35 - one test per reported
+// bug, not just per function, so a future change that re-breaks the
+// BEHAVIOR (not just some internal helper's own return value) gets caught
+// even if it technically routes through different code.
+
+// A high-reliability, fixed-length fixture with full endurance (enduranceScore
+// 10 => effectiveDurationMinutes === durationMinutes exactly) and no viewer
+// nudges, so its schedulingInterval is fully predictable by hand:
+// start + durationMinutes + TRANSITION_BUFFER_MINUTES.
+function footballMatch(overrides = {}) {
+  return makeMatch({ sport: 'Premier League', durationMinutes: 115, enduranceScore: 10, ...overrides });
+}
+function mlbMatch(overrides = {}) {
+  return makeMatch({ sport: 'MLB', durationMinutes: 190, enduranceScore: 10, ...overrides });
+}
+
+describe('schedulingInterval / canWatchSequentially (canonical duration model)', () => {
+  test('a high-reliability sport gets no uncertainty shrink - schedulingInterval is just duration + the transition buffer', () => {
+    const a = footballMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z' });
+    const interval = schedulingInterval(a);
+    assert.equal(interval.start, Date.parse('2026-09-19T18:00:00.000Z'));
+    assert.equal(interval.end, Date.parse('2026-09-19T18:00:00.000Z') + (115 + TRANSITION_BUFFER_MINUTES) * 60_000);
+  });
+
+  test('MLB (low reliability) schedulingInterval ends earlier than its full nominal length would suggest', () => {
+    const game = mlbMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z' });
+    const nominalEnd = Date.parse('2026-09-19T18:00:00.000Z') + 190 * 60_000;
+    assert.ok(schedulingInterval(game).end < nominalEnd);
+  });
+
+  test('resolveSportTiming falls back to a medium default for an unlisted sport', () => {
+    assert.equal(resolveSportTiming('Curling').durationReliability, 'medium');
+    assert.equal(DURATION_UNCERTAINTY_BY_RELIABILITY[resolveSportTiming('Curling').durationReliability], 0.1);
+  });
+
+  test('canWatchSequentially is symmetric - argument order never changes the answer', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z' });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T20:20:00.000Z' });
+    assert.equal(canWatchSequentially(a, b), canWatchSequentially(b, a));
+    assert.ok(canWatchSequentially(a, b));
+  });
+});
+
+describe('Test 1 - obvious continuation', () => {
+  test('a match ending before another begins selects BOTH, not just the higher scorer', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T20:10:00.000Z', effectiveScore: 8 });
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.deepEqual(plan.map(m => m.id).sort(), ['a', 'b']);
+    assert.ok(a.recommended && b.recommended);
+  });
+});
+
+describe('Test 2 - three-event continuation', () => {
+  test('A -> B -> C all get selected when each genuinely fits after the last', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', effectiveScore: 7 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T14:10:00.000Z', effectiveScore: 7 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T16:20:00.000Z', effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    assert.deepEqual(plan.map(m => m.id), ['a', 'b', 'c']);
+  });
+});
+
+describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () => {
+  test('the scheduler compares "A alone" against "B then C", not just each match\'s own score', () => {
+    // A (score 10) overlaps both B and C individually, but B ends early
+    // enough to let C follow it - see this file's own worked timing in the
+    // audit response. B + C (9 + 9 = 18) beats A alone (10).
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    assert.ok(!canWatchSequentially(a, c)); // A genuinely blocks C
+    assert.ok(canWatchSequentially(b, c)); // B genuinely allows C
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    assert.deepEqual(plan.map(m => m.id), ['b', 'c']);
+    assert.equal(a.recommended, false);
+    // A is still visible to the viewer as a real alternative, never deleted
+    // (Invariant: a diversity/sequencing loss can't delete the event).
+    assert.ok(b.alternativeIds?.includes('a') || c.alternativeIds?.includes('a'));
+  });
+});
+
+describe('Test 4 - one winner per genuine conflict window', () => {
+  test('three mutually near-totally overlapping matches produce exactly one recommended pick', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 8 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:04:00.000Z', effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].id, 'a');
+    assert.deepEqual(new Set(a.alternativeIds), new Set(['b', 'c']));
+  });
+});
+
+describe('Test 5 - MLB continuation (duration uncertainty)', () => {
+  test('a later match can follow an MLB game once its uncertainty-adjusted end has passed, even though the nominal 190-minute length has not', () => {
+    const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
+    // 20:30 is well before MLB's nominal end (21:10) but after its
+    // schedulingInterval end (~20:23, see the worked example above).
+    const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T20:30:00.000Z', effectiveScore: 7 });
+    assert.ok(canWatchSequentially(game, next));
+    const plan = computeDayPlan('2026-09-19', [game, next]);
+    assert.deepEqual(plan.map(m => m.id).sort(), ['mlb', 'next']);
+  });
+});
+
+describe('Test 6 - football/F1 keep their tighter timing (no blanket permissiveness)', () => {
+  test('the same gap that works after an MLB game is still a genuine conflict between two football matches', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T19:30:00.000Z', effectiveScore: 7 }); // well inside A's 115+10min window
+    assert.ok(!canWatchSequentially(a, b));
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.equal(plan.length, 1);
+  });
+});
+
+describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', () => {
+  test('a close alternative wins the day after its rival matchup was already recommended', () => {
+    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8 })];
+    const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' });
+    const b = footballMatch({ id: 'b2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 7.8, name: 'Different Matchup' });
+    day1[0].name = 'Same Matchup';
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-20', [a2, b]]
+      ])
+    );
+    assert.deepEqual(plan.get('2026-09-19').map(m => m.id), ['a1']);
+    // a2's own matchup was just recommended yesterday (penalty 1.5) -
+    // 8 - 1.5 = 6.5 < b's 7.8, so the alternative wins.
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['b2']);
+    assert.equal(a2.recentRepeatPenalty, 1.5);
+  });
+
+  test('a dramatically better repeat still wins - the penalty is soft, never a hard ban', () => {
+    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9, name: 'Great Matchup' })];
+    const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 9, name: 'Great Matchup' });
+    const b = footballMatch({ id: 'b2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 3, name: 'Mediocre Matchup' });
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-20', [a2, b]]
+      ])
+    );
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['a2']);
+  });
+
+  test('recentRepeatPenalty decays with distance and disappears after 3 days', () => {
+    assert.equal(recentRepeatPenalty(1), 1.5);
+    assert.equal(recentRepeatPenalty(2), 0.75);
+    assert.equal(recentRepeatPenalty(3), 0.25);
+    assert.equal(recentRepeatPenalty(4), 0);
+    assert.equal(recentRepeatPenalty(0), 0);
+    assert.equal(recentRepeatPenalty(null), 0);
+  });
+
+  test('matchupKey is order-independent and keeps F1 session types distinct', () => {
+    const a = makeMatch({ sport: 'MLB', competitors: [{ name: 'Rays' }, { name: 'Yankees' }] });
+    const b = makeMatch({ sport: 'MLB', competitors: [{ name: 'Yankees' }, { name: 'Rays' }] });
+    assert.equal(matchupKey(a), matchupKey(b));
+    const qual = makeMatch({ sport: 'F1', name: 'GP Qualifying', competitors: [] });
+    const race = makeMatch({ sport: 'F1', name: 'GP', competitors: [] });
+    assert.notEqual(matchupKey(qual), matchupKey(race));
+  });
+
+  test('daysBetweenDayKeys diffs two local calendar date strings as whole days', () => {
+    assert.equal(daysBetweenDayKeys('2026-09-20', '2026-09-19'), 1);
+    assert.equal(daysBetweenDayKeys('2026-09-22', '2026-09-19'), 3);
+    assert.equal(daysBetweenDayKeys('2026-09-19', '2026-09-19'), 0);
+  });
+
+  test('applyRecentRepeatPenalties never touches effectiveScore itself, only the new planningScore field', () => {
+    const match = footballMatch({ id: 'a', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8 });
+    applyRecentRepeatPenalties([match], '2026-09-20', new Map([[matchupKey(match), '2026-09-19']]));
+    assert.equal(match.effectiveScore, 8);
+    assert.equal(match.planningScore, 6.5);
+  });
+});
+
+describe('Test 9 - deterministic planning', () => {
+  test('the same input always produces the same plan', () => {
+    const build = () => [
+      footballMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', effectiveScore: 7 }),
+      footballMatch({ id: 'b', startTimeUtc: '2026-09-19T12:05:00.000Z', effectiveScore: 6.5 }),
+      footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8 })
+    ];
+    const runs = Array.from({ length: 5 }, () => computeDayPlan('2026-09-19', build()).map(m => m.id));
+    runs.forEach(run => assert.deepEqual(run, runs[0]));
+  });
+});
+
+describe('Test 10 - an unselected alternative stays visible, never deleted', () => {
+  test('the losing member of a conflict window is still in the returned day list, flagged as an alternative', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 7 });
+    const dayMatches = [a, b];
+    computeDayPlan('2026-09-19', dayMatches);
+    assert.equal(dayMatches.length, 2); // nothing removed from the input array
+    assert.equal(b.recommended, false);
+    assert.deepEqual(a.alternativeIds, ['b']);
+  });
+});
+
+describe('Invariant checks', () => {
+  test('Invariant 1: a match is never both recommended and listed as someone else\'s alternative', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', effectiveScore: 7 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T14:10:00.000Z', effectiveScore: 7 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T14:12:00.000Z', effectiveScore: 6 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    const recommendedIds = new Set(plan.map(m => m.id));
+    [a, b, c].forEach(m => {
+      (m.alternativeIds || []).forEach(altId => assert.ok(!recommendedIds.has(altId)));
+    });
+  });
+
+  test('Invariant 2: no two selected matches have a genuine scheduling conflict', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', effectiveScore: 7 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T14:10:00.000Z', effectiveScore: 7 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T16:20:00.000Z', effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    for (let i = 0; i < plan.length; i++) {
+      for (let j = i + 1; j < plan.length; j++) {
+        assert.ok(canWatchSequentially(plan[i], plan[j]));
+      }
+    }
+  });
+
+  test('Invariant 3: a valid continuation is never discarded merely because another match won an EARLIER conflict', () => {
+    // Same setup as Test 3 - A "won" its own head-to-head against B on raw
+    // score, but the scheduler still finds B->C over A alone.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    assert.deepEqual(plan.map(m => m.id), ['b', 'c']);
+  });
+
+  test('Invariant 4: a diversity penalty reduces planningScore but never deletes the match or corrupts effectiveScore', () => {
+    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8, name: 'X' })];
+    const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'X' });
+    const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [a2]]]));
+    assert.ok(plan.get('2026-09-20').some(m => m.id === 'a2')); // still recommended - no rival to lose to
+    assert.equal(a2.effectiveScore, 8); // never mutated
+    assert.equal(a2.planningScore, 6.5); // only planningScore carries the penalty
+  });
+});
+
+describe('groupIntoSlots is anchor-independent (docs bug #7)', () => {
+  test('the resulting clusters do not depend on the input array\'s order', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 5 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:04:00.000Z', effectiveScore: 7 });
+    const forward = groupIntoSlots([a, b, c]);
+    const reversed = groupIntoSlots([c, b, a]);
+    const normalize = clusters => clusters.map(s => s.members.map(m => m.id).sort().join(',')).sort();
+    assert.deepEqual(normalize(forward), normalize(reversed));
+  });
+});
+
+describe('a pinned choice only excludes matches it directly conflicts with', () => {
+  test('pinning one member of a wider cluster leaves an unrelated free candidate schedulable', () => {
+    // a-b near-totally overlap, b-c near-totally overlap, but a-c do not -
+    // one transitive presentational cluster, but pinning b should only
+    // hard-exclude a and c if THEY individually conflict with b.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:01:00.000Z', effectiveScore: 8 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 7 });
+    const pinnedForDay = new Map([[[a.id, b.id, c.id].sort().join('|'), 'b']]);
+    const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
+    assert.deepEqual(plan.map(m => m.id), ['b']);
+    assert.equal(b.recommended, true);
   });
 });

@@ -38,7 +38,9 @@ import {
   computeDayPlan,
   resolveViewingPlan,
   slotKeyFromMembers,
-  computeOverlapRange
+  computeOverlapRange,
+  computeWindowPlan,
+  applyRecentRepeatPenalties
 } from './lib/recommendation.mjs';
 
 const state = {
@@ -61,7 +63,16 @@ const state = {
   // session-only (never persisted to localStorage/synced): it's "what I'm
   // watching today", not a durable preference, and naturally stops
   // mattering once the day's matches are over.
-  pinnedChoices: new Map()
+  pinnedChoices: new Map(),
+  // Map<matchupKey, dayKey> - the most recent day, across the WHOLE fetched
+  // window regardless of the current sport filter, that matchup actually
+  // won its day's plan. Recomputed by renderSections (see
+  // computeWindowPlan) before every render, so a soft cross-day repeat
+  // penalty (applyRecentRepeatPenalties) can see "did we already
+  // recommend this exact matchup on an earlier day" no matter which day
+  // or sport filter the viewer currently has open - see docs/
+  // recommendation-engine-audit.md's "cross-day repetition" finding.
+  recommendationHistory: new Map()
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -906,28 +917,44 @@ function dayLabelFor(date, { short = false } = {}) {
 // Direct user feedback on both: the first one silently hid good games,
 // the second stopped being an actual PLAN.
 //
-// This version is a real (if simplified vs. the earliest, bug-prone
-// attempt - see groupIntoSlots' own comment) weighted-interval-scheduling
-// chain: the maximum-total-effectiveScore set of non-overlapping matches
-// for the day. Two matches that overlap so much you genuinely can't
-// sequence them (see isNearTotalOverlap) become one "slot" - a swipeable
-// choice, not two separate picks - and swiping to a different member PINS
-// it: the plan rebuilds itself around that fixed choice, both before and
-// after it (see computeDayPlan). enduranceScore feeds directly into how
-// long a pick actually blocks the next one from starting (see
-// effectiveDurationMinutes) - a fixture unlikely to stay watchable to the
-// end frees up the schedule sooner than its full nominal length would
-// suggest, letting the plan fit a next pick in earlier.
+// This version is a real weighted-interval-scheduling chain: the
+// maximum-total-score set of non-overlapping matches for the day, where
+// EVERY individual candidate is a scheduling input, never just one
+// representative chosen per conflict window ahead of time (see
+// computeDayPlan's own comment in recommendation.mjs for why an earlier,
+// pre-grouped version of this could silently throw away the globally best
+// plan). Two matches that overlap so much you genuinely can't sequence
+// them (see isNearTotalOverlap) still only ever end up as one "slot" in
+// the final result - a swipeable choice, not two separate picks - but
+// that grouping is now a PRESENTATION label computed after scheduling, not
+// something that gates what the scheduler itself gets to consider.
+// Swiping to a different member PINS it: the plan rebuilds itself around
+// that fixed choice, both before and after it (see computeDayPlan).
+// enduranceScore feeds directly into how long a pick actually blocks the
+// next one from starting (see effectiveDurationMinutes) - a fixture
+// unlikely to stay watchable to the end frees up the schedule sooner than
+// its full nominal length would suggest. A sport's own duration
+// UNCERTAINTY (see SPORT_TIMING/schedulingInterval - MLB has no clock, so
+// its 190-minute nominal length is trusted far less than football's or
+// F1's) shrinks that block further before it's allowed to hold up
+// anything scheduled after it, plus a small fixed transition buffer
+// between any two back-to-back picks.
+//
 // isQuietHours/matchInterval/computeOverlapRange/overlapMinutes/
 // isNearTotalOverlap/effectiveDurationMinutes/effectiveInterval/
-// groupIntoSlots/slotKeyFromMembers/bestMember/weightedIntervalSchedule/
-// computeDayPlan/resolveViewingPlan all now live in ./lib/recommendation.mjs
-// (imported at the top of this file) - see that module for the "one
-// continuous back-to-back plan, not independent picks" model this section
-// used to document inline, and docs/recommendation-engine-audit.md for how
+// schedulingInterval/canWatchSequentially/groupIntoSlots/
+// slotKeyFromMembers/weightedIntervalSchedule/computeDayPlan/
+// computeWindowPlan/applyRecentRepeatPenalties/matchupKey/
+// resolveViewingPlan all now live in ./lib/recommendation.mjs (imported at
+// the top of this file) - see that module for the "one continuous
+// back-to-back plan, not independent picks" model this section used to
+// document inline, and docs/recommendation-engine-audit.md for how
 // effectiveScore's adjustments are now exposed for debugging
-// (computeRecommendationScore/scoreBreakdown). computeOverlapRange is still
-// used directly below, in buildMatchCard's own overlap note.
+// (computeRecommendationScore/scoreBreakdown), and for the soft cross-day
+// repeat penalty (planningScore) computeWindowPlan/renderSections apply so
+// the same matchup doesn't default to winning every day of a series.
+// computeOverlapRange is still used directly below, in buildMatchCard's
+// own overlap note.
 
 // The actual "I will watch this" commitment (see buildMatchStack) - records
 // the pin and triggers a full re-render, which recomputes computeDayPlan
@@ -1319,7 +1346,15 @@ function renderRecommendedSection() {
   // (day, sport filter, pins) - see computeDayPlan's own comment. Picking
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
-  const dayPlan = computeDayPlan(dayKey, applySportFilter(matchesForDay(dayKey)), state.pinnedChoices.get(dayKey));
+  //
+  // state.recommendationHistory (see renderSections) is built from the
+  // FULL, unfiltered window regardless of today's sport filter - a soft
+  // repeat penalty on "did we recommend this matchup yesterday" has to be
+  // asking about what was ACTUALLY recommended, not what a differently
+  // filtered view would have picked.
+  const dayCandidates = applySportFilter(matchesForDay(dayKey));
+  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory);
+  const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {
@@ -1363,6 +1398,16 @@ function renderAllMatchesSection() {
 }
 
 function renderSections() {
+  // Rebuilds state.recommendationHistory from a fresh, UNFILTERED (every
+  // enabled sport, every fetched day) computeWindowPlan pass, in
+  // chronological order, before either section below reads it - see
+  // renderRecommendedSection's own comment on why this has to stay
+  // independent of the viewer's current sport filter. Cheap enough to
+  // redo on every render (a 14-day window's own DP, not a network call);
+  // its `plan` half is intentionally discarded here since it's this
+  // unfiltered plan, not necessarily what actually renders below.
+  const matchesByDayKey = new Map(state.days.map(day => [day.key, matchesForDay(day.key)]));
+  state.recommendationHistory = computeWindowPlan(matchesByDayKey, state.pinnedChoices).lastRecommendedDayKey;
   renderRecommendedSection();
   renderAllMatchesSection();
 }
@@ -1649,7 +1694,11 @@ refreshDataBtn.addEventListener('click', () => checkForUpdate());
 // showing on screen), respecting whatever's already pinned, so every
 // day's matches carry a real decision by the time this serializes them.
 function exportRecommendationData() {
-  state.days.forEach(day => computeDayPlan(day.key, matchesForDay(day.key), state.pinnedChoices.get(day.key)));
+  // computeWindowPlan (not a bare per-day computeDayPlan loop) so the
+  // exported .recommended/.planningScore/.recentRepeatPenalty reflect the
+  // SAME cross-day repeat-penalty-aware decision renderRecommendedSection
+  // itself makes, chronologically ordered - see that function's own comment.
+  computeWindowPlan(new Map(state.days.map(day => [day.key, matchesForDay(day.key)])), state.pinnedChoices);
   const payload = {
     exportedAt: new Date().toISOString(),
     dataGeneratedAt: state.generatedAt || null,

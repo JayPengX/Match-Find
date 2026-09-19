@@ -19,6 +19,16 @@
 // isQuietHours/effectiveInterval's own use of the current wall clock via
 // `new Date`, which is inherent to "is this match on right now", not a
 // hidden dependency on outside state).
+//
+// The viewing-plan pipeline (see docs/recommendation-engine-audit.md for
+// the fuller writeup this follows) is deliberately one straight line:
+//   raw AI scores -> effectiveScore (viewer preference) -> planningScore
+//   (+ cross-day repeat penalty) -> schedulingInterval (duration
+//   uncertainty + transition buffer) -> computeDayPlan's scheduler -> the
+//   day's picks -> conflict clusters (presentation only, computed AFTER
+//   scheduling, never before it)
+// No step secretly does another step's job: scoring never decides
+// timing, and the scheduler never re-judges how good a match is.
 
 // ---- Broadcast service registry -------------------------------------------
 //
@@ -193,7 +203,19 @@ export function computeRecommendationScore(match, context = {}) {
     baseScore: breakdown.baseScore,
     adjustments: breakdown.adjustments,
     finalScore: breakdown.effectiveScore,
-    confidence: computeConfidence(match)
+    confidence: computeConfidence(match),
+    // Same numbers as baseScore/finalScore above, under the names
+    // docs/recommendation-engine-audit.md's "score architecture" section
+    // asks for so a caller doesn't have to know "baseScore" means "the
+    // AI's objective judgment of the event itself" and "finalScore" means
+    // "...after this viewer's own preferences" - eventScore never reflects
+    // priorityOrder/myServiceIds/recommendStyle, viewerScore always does.
+    // There's deliberately no third `planningScore` here - that one also
+    // needs same-day scheduling context and cross-day repeat history
+    // (see applyRecentRepeatPenalties below), which a single match has no
+    // way to know on its own.
+    eventScore: breakdown.baseScore,
+    viewerScore: breakdown.effectiveScore
   };
 }
 
@@ -243,6 +265,88 @@ export function effectiveInterval(match) {
   return { start, end: start + effectiveDurationMinutes(match) * 60_000 };
 }
 
+// ---- Sport timing profiles (duration uncertainty + transition buffer) -----
+//
+// Not every sport's nominal durationMinutes (see build-data.mjs's
+// TEAM_LEAGUES/F1_SESSION_TYPES) deserves the same confidence. Football and
+// F1 run to a scheduled clock/session window; MLB has no clock at all - a
+// tied game goes to extra innings, a rain delay adds an unplannable hour -
+// so treating its 190-minute nominal estimate as exact was the direct
+// cause of missed continuations into whatever came on right after (see
+// docs/recommendation-engine-audit.md's bug #4/#8/#9): the scheduler saw
+// "still running" long after the game plausibly already ended and refused
+// to schedule anything into that time. `durationReliability` is a coarse,
+// three-tier stand-in for the fuller {earliestLikelyEnd, latestLikelyEnd}
+// model the audit describes - deliberately not that model itself, since a
+// single confidence tier per sport is all this pipeline has real grounds
+// to assert (same reasoning as computeConfidence's own comment above: no
+// fabricated precision this codebase doesn't actually have evidence for).
+export const SPORT_TIMING = {
+  MLB: { durationReliability: 'low' },
+  NBA: { durationReliability: 'medium' },
+  'Premier League': { durationReliability: 'high' },
+  MLS: { durationReliability: 'high' },
+  F1: { durationReliability: 'high' }
+};
+const DEFAULT_SPORT_TIMING = { durationReliability: 'medium' };
+export function resolveSportTiming(sport) {
+  return SPORT_TIMING[sport] || DEFAULT_SPORT_TIMING;
+}
+
+// How much a low/medium-reliability sport's own effective viewing window
+// (effectiveDurationMinutes) gets shrunk before it's allowed to block
+// anything scheduled after it - NOT a claim that an MLB game usually ends
+// 30% early, just an acknowledgment that it easily COULD have, which is
+// reason enough to still offer a strong later match as a continuation
+// rather than silently dropping it (see docs/recommendation-engine-audit.md
+// section 9: "MLB should be more permissive - but not blindly"). A
+// high-reliability sport gets 0 - its own nominal length is trusted as-is.
+export const DURATION_UNCERTAINTY_BY_RELIABILITY = { high: 0, medium: 0.1, low: 0.3 };
+
+// A small, deliberately flat realism buffer between two back-to-back picks
+// (see docs/recommendation-engine-audit.md's "no transition buffer" bug) -
+// two matches that are technically non-overlapping down to the minute
+// (one ends exactly when the next starts) still aren't a plan a real
+// viewer can execute. Kept small and sport-independent on purpose - the
+// goal is closing that one gap, not making scheduling broadly conservative.
+export const TRANSITION_BUFFER_MINUTES = 10;
+
+// How much of a match's schedule block a LATER pick actually has to wait
+// out - effectiveDurationMinutes (viewer engagement), shrunk further by
+// this sport's own duration uncertainty. This is deliberately the ONLY
+// duration figure the scheduler itself ever reads (see schedulingInterval)
+// - there is no second, separately-tuned notion of "how long is this event"
+// anywhere else in the planner, which is exactly the "two different
+// duration models" bug docs/recommendation-engine-audit.md flags.
+export function schedulingDurationMinutes(match) {
+  const uncertainty = DURATION_UNCERTAINTY_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
+  return effectiveDurationMinutes(match) * (1 - uncertainty);
+}
+
+// The canonical scheduling representation every planner operation below
+// (weightedIntervalSchedule via computeDayPlan, canWatchSequentially) reads
+// - {start, end}, where `end` already bakes in this sport's own duration
+// uncertainty AND the transition buffer. Nothing downstream needs to know
+// either of those exist; they just see one interval two matches either do
+// or don't overlap.
+export function schedulingInterval(match) {
+  const start = Date.parse(match.startTimeUtc);
+  return { start, end: start + schedulingDurationMinutes(match) * 60_000 + TRANSITION_BUFFER_MINUTES * 60_000 };
+}
+
+// The explicit conflict relation docs/recommendation-engine-audit.md asks
+// for in place of anchor-dependent grouping (section 7) - true when the
+// earlier of the two matches's own schedulingInterval leaves enough room
+// before the later one starts. A consistent pairwise definition, not
+// dependent on which match happens to be considered "first" or which
+// other matches are in play, unlike the old anchor-claiming grouping.
+export function canWatchSequentially(a, b) {
+  const aStart = Date.parse(a.startTimeUtc);
+  const bStart = Date.parse(b.startTimeUtc);
+  const [earlier, later] = aStart <= bStart ? [a, b] : [b, a];
+  return schedulingInterval(earlier).end <= Date.parse(later.startTimeUtc);
+}
+
 // ---- Quiet hours ------------------------------------------------------------
 
 export const QUIET_HOUR_START = 0;
@@ -255,49 +359,75 @@ export function isQuietHours(match) {
     : hour >= QUIET_HOUR_START || hour < QUIET_HOUR_END;
 }
 
-// ---- Slot grouping (near-total-overlap dedup within one day) --------------
+// ---- Conflict clusters (near-total-overlap grouping within one day) -------
 //
-// Groups a day's candidate matches into "slots" - anchor-claiming,
-// highest-effectiveScore-first: an unclaimed match becomes a slot's anchor,
-// and only matches that are near-totally overlapping THAT SPECIFIC anchor
-// join it and get claimed. This IS the "duplicate recommendation" guard for
-// same-day fixtures - two fixtures that overlap so much you couldn't
-// actually watch both become one slot (a swipeable choice), never two
-// separate "recommended: true" picks. See docs/recommendation-engine-audit.md
-// for why cross-DAY repeats of the same two teams (e.g. a 4-game series) are
-// a different, deliberate thing this function does NOT dedupe - each date's
-// game is a distinct, real event with its own plan.
+// Groups a day's candidate matches into clusters of mutually near-totally
+// overlapping fixtures - PRESENTATION grouping only (the swipeable card
+// stack, and the stable key pinning a choice within it), never an input to
+// the scheduler itself (see computeDayPlan, and docs/
+// recommendation-engine-audit.md's "the slot system can destroy the
+// globally best plan" finding: an earlier version of this function decided
+// ONE representative per group and handed the scheduler only that,
+// silently discarding every other candidate before the DP ever got a
+// chance to compare full sequences against each other). The scheduler now
+// always sees every individual candidate; this function only labels which
+// of them are each other's swipeable alternatives once picks are known.
+//
+// Built via union-find over the plain pairwise isNearTotalOverlap relation,
+// not by claiming matches around a highest-score anchor - the old
+// anchor-based version could produce different groups depending on which
+// match happened to become the anchor (docs/recommendation-engine-audit.md
+// bug #7: "slot grouping is anchor-dependent"). This version doesn't care
+// about iteration order at all: two matches end up in the same cluster
+// exactly when they're connected by a chain of pairwise near-total overlaps,
+// full stop.
 export function groupIntoSlots(dayMatches) {
-  const claimed = new Set();
-  const slots = [];
-  dayMatches
-    .slice()
-    .sort((a, b) => b.effectiveScore - a.effectiveScore)
-    .forEach(anchor => {
-      if (claimed.has(anchor.id)) return;
-      claimed.add(anchor.id);
-      const members = dayMatches.filter(m => !claimed.has(m.id) && isNearTotalOverlap(anchor, m));
-      members.forEach(m => claimed.add(m.id));
-      slots.push({ members: [anchor, ...members] });
-    });
-  return slots;
+  const parent = new Map(dayMatches.map(m => [m.id, m.id]));
+  function find(id) {
+    while (parent.get(id) !== id) {
+      parent.set(id, parent.get(parent.get(id)));
+      id = parent.get(id);
+    }
+    return id;
+  }
+  function union(a, b) {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  for (let i = 0; i < dayMatches.length; i++) {
+    for (let j = i + 1; j < dayMatches.length; j++) {
+      if (isNearTotalOverlap(dayMatches[i], dayMatches[j])) union(dayMatches[i].id, dayMatches[j].id);
+    }
+  }
+  const groups = new Map();
+  dayMatches.forEach(m => {
+    const root = find(m.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(m);
+  });
+  return [...groups.values()].map(members => ({ members }));
 }
 
 export function slotKeyFromMembers(members) {
   return members.map(m => m.id).sort().join('|');
 }
 
-export function bestMember(members) {
-  return members.slice().sort((a, b) => b.effectiveScore - a.effectiveScore)[0];
-}
-
 // ---- Weighted interval scheduling ------------------------------------------
 //
-// Classic weighted interval scheduling: the maximum-total-choice.effectiveScore
+// Classic weighted interval scheduling: the maximum-total-getScore(choice)
 // subset of `items` (each {interval, choice}) whose intervals don't
 // overlap. O(n^2) in the inner "find the latest compatible previous item"
 // scan - fine at the scale one day's fixture list ever reaches.
-export function weightedIntervalSchedule(items) {
+//
+// `getScore` defaults to effectiveScore (the plain viewer-relative score,
+// see computeEffectiveScore) but computeDayPlan can pass planningScore
+// instead (see applyRecentRepeatPenalties) so a soft cross-day repeat
+// penalty can steer WHICH sequence wins without needing a second copy of
+// this function, or mutating effectiveScore itself (see Invariant 4 in
+// docs/recommendation-engine-audit.md - a diversity penalty can reduce a
+// score, never delete the event or corrupt the score it's derived from).
+export function weightedIntervalSchedule(items, getScore = choice => choice.effectiveScore) {
   const sorted = items.slice().sort((a, b) => a.interval.end - b.interval.end);
   const dp = [];
   for (let i = 0; i < sorted.length; i++) {
@@ -309,7 +439,7 @@ export function weightedIntervalSchedule(items) {
         break;
       }
     }
-    const withCur = { score: prevBest.score + cur.choice.effectiveScore, picks: [...prevBest.picks, cur] };
+    const withCur = { score: prevBest.score + getScore(cur.choice), picks: [...prevBest.picks, cur] };
     const without = i > 0 ? dp[i - 1] : { score: 0, picks: [] };
     dp[i] = withCur.score >= without.score ? withCur : without;
   }
@@ -328,7 +458,20 @@ export function weightedIntervalSchedule(items) {
 // explicitly rather than read from any global/module state, so this
 // function stays a pure function of its arguments - app.js's own
 // `state.pinnedChoices.get(dayKey)` is what a caller passes here.
-export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null) {
+//
+// Every individual candidate goes into the scheduler below - NOT one
+// representative per near-total-overlap cluster. An earlier version chose
+// each cluster's highest-effectiveScore member BEFORE scheduling and only
+// ever handed the DP that one representative per cluster; that meant a
+// slightly-lower-scoring match that would have allowed a great continuation
+// right after it could lose to a higher-scoring match that blocked the
+// continuation entirely, without the scheduler ever getting a chance to
+// compare "A alone" against "B then C" (see docs/
+// recommendation-engine-audit.md, "the slot system can destroy the
+// globally best plan"). Conflict clusters (groupIntoSlots) still exist, but
+// only as a presentation label computed AFTER scheduling, from whichever
+// picks the DP actually made.
+export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'effectiveScore' } = {}) {
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
@@ -336,42 +479,175 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null) {
   const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
   if (!candidates.length) return [];
 
-  const slots = groupIntoSlots(candidates);
-  const resolved = slots.map(slot => {
-    const pinnedId = pinnedForDay && pinnedForDay.get(slotKeyFromMembers(slot.members));
-    const pinnedMember = pinnedId ? slot.members.find(m => m.id === pinnedId) : null;
-    const choice = pinnedMember || bestMember(slot.members);
-    return { members: slot.members, choice, interval: effectiveInterval(choice), isPinned: !!pinnedMember };
+  const getScore = match => (Number.isFinite(match[scoreField]) ? match[scoreField] : match.effectiveScore);
+
+  // Presentational conflict clusters (see groupIntoSlots' own comment) -
+  // used below only to (a) look up a pinned choice by its stable slot key
+  // and (b) label the final alternativeIds, never to decide what the
+  // scheduler itself is allowed to consider.
+  const clusters = groupIntoSlots(candidates);
+  const clusterByMatchId = new Map();
+  clusters.forEach(cluster => cluster.members.forEach(m => clusterByMatchId.set(m.id, cluster)));
+
+  // A pinned choice is a hard user override (see app.js's pinSlotChoice) -
+  // it alone represents its conflict cluster now. Every OTHER match that
+  // genuinely can't be watched alongside it (a direct pairwise
+  // isNearTotalOverlap, not just "somewhere in the same transitive
+  // cluster") is excluded from the scheduler entirely; anything else stays
+  // a normal free candidate the planner is still free to schedule around
+  // the pin (see docs/recommendation-engine-audit.md section 26).
+  const forcedIds = new Set();
+  const excludedIds = new Set();
+  clusters.forEach(cluster => {
+    const pinnedId = pinnedForDay && pinnedForDay.get(slotKeyFromMembers(cluster.members));
+    if (!pinnedId) return;
+    const pinnedMatch = cluster.members.find(m => m.id === pinnedId);
+    if (!pinnedMatch) return;
+    forcedIds.add(pinnedMatch.id);
+    cluster.members.forEach(m => {
+      if (m.id !== pinnedMatch.id && isNearTotalOverlap(m, pinnedMatch)) excludedIds.add(m.id);
+    });
   });
 
-  // Pinned slots split the day into independent gaps - the free (unpinned)
-  // slots in each gap get their own scheduling run, bounded so nothing
-  // scheduled there can creep into a pinned pick's own fixed window.
-  const forced = resolved.filter(r => r.isPinned).sort((a, b) => a.interval.start - b.interval.start);
-  const free = resolved.filter(r => !r.isPinned);
+  const toItem = match => ({ interval: schedulingInterval(match), choice: match });
+  const forced = candidates
+    .filter(m => forcedIds.has(m.id))
+    .map(toItem)
+    .sort((a, b) => a.interval.start - b.interval.start);
+  const free = candidates.filter(m => !forcedIds.has(m.id) && !excludedIds.has(m.id)).map(toItem);
+
+  // Pinned picks split the day into independent gaps - the free candidates
+  // in each gap get their own scheduling run, bounded so nothing scheduled
+  // there can creep into a pinned pick's own fixed window.
   const picks = [];
   let cursor = -Infinity;
   forced.forEach(f => {
-    picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start)));
+    picks.push(
+      ...weightedIntervalSchedule(
+        free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start),
+        getScore
+      )
+    );
     picks.push(f);
     cursor = f.interval.end;
   });
-  picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor)));
+  picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor), getScore));
 
   picks.sort((a, b) => a.interval.start - b.interval.start);
-  picks.forEach(({ members, choice }) => {
+  picks.forEach(({ choice }) => {
     choice.recommended = true;
-    if (members.length > 1) choice.alternativeIds = members.filter(m => m.id !== choice.id).map(m => m.id);
   });
+
+  // alternativeIds is purely presentational, computed AFTER scheduling:
+  // every other member of a picked match's own conflict cluster that the
+  // scheduler didn't also independently pick. A match is never both
+  // recommended and listed as someone else's alternative (docs/
+  // recommendation-engine-audit.md's Invariant 1).
+  picks.forEach(({ choice }) => {
+    const cluster = clusterByMatchId.get(choice.id);
+    if (!cluster || cluster.members.length < 2) return;
+    const alternatives = cluster.members.filter(m => m.id !== choice.id && !m.recommended);
+    if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
+  });
+
   return picks.map(p => p.choice);
+}
+
+// ---- Cross-day variety (soft recent-repeat penalty) ------------------------
+//
+// computeDayPlan only ever sees one calendar day, so left alone the same
+// highest-scoring matchup can win every single day of a multi-game series
+// even when a comparably good alternative exists (docs/
+// recommendation-engine-audit.md's "cross-day repetition needs to become a
+// real planning input" finding). This section is what lets a caller feed
+// "what did we already recommend on an EARLIER day" into today's plan,
+// without computeDayPlan itself needing to know anything about other days.
+//
+// A team-sport matchup's identity, independent of which side is home/away
+// or which export produced it (so "A @ B" and "B @ A" - a return leg, or
+// just a different [away, home] ordering - count as the same matchup). An
+// F1 session has no `competitors` (see build-data.mjs's fetchF1Matches), so
+// it falls back to its own name, which already includes the session suffix
+// - qualifying and the race itself are correctly two different keys, never
+// folded together as "the same event recommended twice". The one
+// definition of "same matchup" this codebase has - scripts/
+// evaluate-recommendations.mjs's own descriptive report uses this same
+// function rather than a second copy of this logic.
+export function matchupKey(match) {
+  if (Array.isArray(match.competitors) && match.competitors.length === 2) {
+    const names = match.competitors.map(c => c.name || c.abbreviation || '?').sort();
+    return `${match.sport}: ${names.join(' vs ')}`;
+  }
+  return `${match.sport}: ${match.name || match.id}`;
+}
+
+// How many local calendar days apart two "YYYY-MM-DD" day keys are -
+// parsed as UTC midnight purely so the arithmetic is exact; the keys
+// themselves already represent a viewer's own local calendar date (see
+// app.js's localDateKey), this just diffs two date strings, not instants.
+export function daysBetweenDayKeys(laterDayKey, earlierDayKey) {
+  return Math.round((Date.parse(`${laterDayKey}T00:00:00Z`) - Date.parse(`${earlierDayKey}T00:00:00Z`)) / 86_400_000);
+}
+
+// Small and DECAYING, never a hard ban (docs/recommendation-engine-audit.md
+// section 14 is explicit about this) - a genuinely great matchup can still
+// win on consecutive days, this just stops it from winning by default
+// every time an alternative is close. Anything 4+ days back is
+// indistinguishable from "not recently recommended" at this scale.
+export const RECENT_REPEAT_PENALTY_BY_GAP_DAYS = { 1: 1.5, 2: 0.75, 3: 0.25 };
+export function recentRepeatPenalty(daysSinceLastRecommended) {
+  if (!Number.isFinite(daysSinceLastRecommended) || daysSinceLastRecommended <= 0) return 0;
+  return RECENT_REPEAT_PENALTY_BY_GAP_DAYS[daysSinceLastRecommended] || 0;
+}
+
+// Sets `.planningScore`/`.recentRepeatPenalty` on every match in
+// `dayMatches` from `lastRecommendedDayKey` (a Map<matchupKey, dayKey> -
+// see computeWindowPlan). Deliberately a separate field from
+// effectiveScore, never overwritten in place: effectiveScore stays the
+// viewer's own true, un-penalized judgment of the match (docs/
+// recommendation-engine-audit.md's Invariant 4 - a diversity penalty can
+// reduce a score, never delete or corrupt the one it's derived from);
+// planningScore is only what the scheduler's DP weighs picks by (see
+// computeDayPlan's `scoreField` option).
+export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey) {
+  dayMatches.forEach(match => {
+    const lastDayKey = lastRecommendedDayKey.get(matchupKey(match));
+    const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
+    const penalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
+    match.recentRepeatPenalty = penalty;
+    match.planningScore = (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - penalty;
+  });
+}
+
+// Runs computeDayPlan once per day, IN CHRONOLOGICAL ORDER, across a whole
+// fetched window - the only way a later day's plan can actually know what
+// an earlier day already recommended. `matchesByDayKey` is a
+// Map<dayKey, matches> (app.js's own per-day buckets); `pinnedChoices` is
+// state.pinnedChoices as-is (a Map<dayKey, Map<slotKey, matchId>>).
+// Returns both the per-day picks and the matchup history map itself, since
+// a caller scoped to one (possibly sport-filtered) day - see app.js's
+// renderRecommendedSection - only wants the history, not these unfiltered
+// picks, to compute ITS OWN, differently-scoped plan against.
+export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
+  const dayKeys = [...matchesByDayKey.keys()].sort();
+  const lastRecommendedDayKey = new Map();
+  const plan = new Map();
+  dayKeys.forEach(dayKey => {
+    const dayMatches = matchesByDayKey.get(dayKey) || [];
+    applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey);
+    const picks = computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
+    picks.forEach(match => lastRecommendedDayKey.set(matchupKey(match), dayKey));
+    plan.set(dayKey, picks);
+  });
+  return { plan, lastRecommendedDayKey };
 }
 
 // ---- Viewer-relative score resolution --------------------------------------
 //
 // `priorityOrder` nudges effectiveScore away from the AI's own score - the
 // displayed reason/.score always stay the true, un-nudged values; only
-// effectiveScore (the day plan's own DP weight, and groupIntoSlots' own
-// anchor ordering) sees the adjusted number.
+// effectiveScore (the day plan's own DP weight by default, see
+// computeDayPlan's `scoreField` option) sees the adjusted number.
 export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
   const context = { priorityOrder, myServiceIds, recommendStyle };
   const withScores = matches.map(match => {
@@ -380,6 +656,14 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
       ...match,
       score: breakdown.styleScore,
       effectiveScore: breakdown.effectiveScore,
+      // See computeRecommendationScore's own comment - same numbers as
+      // baseScore/effectiveScore above, under the names docs/
+      // recommendation-engine-audit.md's score-architecture section asks
+      // for. planningScore is intentionally NOT set here - it needs
+      // same-day scheduling + cross-day history (applyRecentRepeatPenalties)
+      // neither of which this function has.
+      eventScore: breakdown.baseScore,
+      viewerScore: breakdown.effectiveScore,
       scoreBreakdown: breakdown,
       confidence: computeConfidence(match),
       recommended: false,

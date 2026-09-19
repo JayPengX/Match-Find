@@ -76,21 +76,42 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
   the plan.
 - Two fixtures that overlap so much you genuinely can't sequence them - the
   overlap covers at least 75% of the SHORTER one's own length
-  (`NEAR_TOTAL_OVERLAP_FRACTION`, `isNearTotalOverlap`) - become one **slot**:
-  a swipeable card stack, not two separate picks. Anything overlapping
-  less than that isn't forced into a choice; the plan below just resolves
-  it on its own.
-- The plan itself is the maximum-total-score set of NON-overlapping slots
-  for the day (a real weighted-interval-scheduling chain, `computeDayPlan`/
-  `weightedIntervalSchedule`) - not a per-match threshold, and not "highest
-  score wins its own little slot, everything else nearby is quality-gated
-  or dropped" (both tried in earlier versions - see that function's own
-  comment for why each one either hid good games or stopped being an
-  actual PLAN). A slot's own `enduranceScore` decides how much of its
-  nominal length actually blocks the next pick from starting
-  (`effectiveDurationMinutes`) - a fixture unlikely to stay watchable to
-  the end frees the schedule up sooner than its full listed length would
-  suggest, letting the next pick start earlier.
+  (`NEAR_TOTAL_OVERLAP_FRACTION`, `isNearTotalOverlap`) - render as one
+  swipeable card stack, not two separate picks. Anything overlapping less
+  than that isn't forced into a choice; the plan below just resolves it on
+  its own. This grouping is a **presentation label only**, computed after
+  the plan below is already decided - every individual fixture is always a
+  real candidate for the scheduler itself, never pre-collapsed to one
+  representative per overlap group ahead of time (an earlier version did
+  that and could silently lose the actually-best plan - see
+  `computeDayPlan`'s own comment).
+- The plan itself is the maximum-total-score set of NON-overlapping
+  fixtures for the day (a real weighted-interval-scheduling chain,
+  `computeDayPlan`/`weightedIntervalSchedule`) - not a per-match threshold,
+  and not "highest score wins its own little slot, everything else nearby
+  is quality-gated or dropped" (both tried in earlier versions - see that
+  function's own comment for why each one either hid good games or
+  stopped being an actual PLAN). A fixture's own `enduranceScore` decides
+  how much of its nominal length actually blocks the next pick from
+  starting (`effectiveDurationMinutes`) - a fixture unlikely to stay
+  watchable to the end frees the schedule up sooner than its full listed
+  length would suggest. On top of that, a sport with no real clock (MLB -
+  extra innings, rain delays) gets its own effective length shrunk further
+  before it's allowed to block anything after it (`SPORT_TIMING`,
+  `schedulingInterval`) - football/F1/MLS keep their exact old strictness,
+  only MLB (and NBA, more mildly) gets more permissive, and only by that
+  explicit uncertainty factor, never by loosening the 75% overlap rule
+  itself. A small fixed buffer (`TRANSITION_BUFFER_MINUTES`) also sits
+  between any two back-to-back picks, so "ends at 8:00, starts at 8:00" no
+  longer counts as a real gap.
+- **The same matchup doesn't default to winning every day of a series.**
+  `computeWindowPlan` walks the whole fetched window in date order and
+  applies a small, decaying penalty (`applyRecentRepeatPenalties`) to a
+  matchup that was already the pick on an EARLIER day - strong enough to
+  let a close alternative win instead, never strong enough to override a
+  genuinely much better repeat (see `RECENT_REPEAT_PENALTY_BY_GAP_DAYS`).
+  This only affects which fixture wins the plan, never the underlying
+  score shown on the card.
 - **Swiping a stack is a real commitment, not just a peek.** Settling on a
   different card pins that match as the slot's fixed choice
   (`pinSlotChoice`) and rebuilds the WHOLE day's plan around it — the
@@ -183,10 +204,9 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
 ## Sport priority (⚙, in the sport filter row)
 
 `priorityOrder` nudges a match's `effectiveScore` up or down slightly
-before both places that number matters: `groupIntoSlots`' own
-highest-score-first anchor ordering, and `computeDayPlan`'s scheduling
-weight (which fixture wins a genuinely contested, overlapping stretch of
-the day) - a viewer's preferred sports win a close scheduling call a little
+before it feeds `computeDayPlan`'s scheduling weight (which fixture wins a
+genuinely contested, overlapping stretch of the day) - a viewer's
+preferred sports win a close scheduling call a little
 more easily, their least favorite needs to be a little better to win one -
 a small, symmetric tilt (1st-ranked gets the biggest positive nudge,
 last-ranked the biggest negative, the exact middle rank gets none), never

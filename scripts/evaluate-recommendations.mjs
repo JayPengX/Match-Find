@@ -26,7 +26,15 @@
 
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { computeConfidence } from '../public/lib/recommendation.mjs';
+import { computeConfidence, matchupKey } from '../public/lib/recommendation.mjs';
+
+// Re-exported so existing importers (this file's own tests included) don't
+// need to know matchupKey moved - it's now the one shared definition of
+// "same matchup" recommendation.mjs's own cross-day repeat penalty
+// (applyRecentRepeatPenalties) uses too, not a second copy of this logic
+// living only here (see docs/recommendation-engine-audit.md's "remove
+// complexity instead of adding more patches").
+export { matchupKey };
 
 // Accepts either `{matches: [...]}` (matches.json/the export button's own
 // shape) or a bare `[...]` array, so this also works against an ad hoc
@@ -40,22 +48,6 @@ export function extractMatches(parsed) {
 export async function loadExport(filePath) {
   const raw = await readFile(filePath, 'utf8');
   return extractMatches(JSON.parse(raw));
-}
-
-// A team-league match's two competitors, order-independent (so "A @ B" and
-// "B @ A" - a return leg, or just a different export's own [away, home]
-// ordering - count as the same matchup) - an F1 session has no
-// `competitors` at all (see build-data.mjs's fetchF1Matches), so it falls
-// back to its own name (which already includes the session suffix -
-// "...Qualifying" vs "...Sprint" - so qualifying and the race itself are
-// correctly two different keys, never folded together as "the same event
-// recommended twice").
-export function matchupKey(match) {
-  if (Array.isArray(match.competitors) && match.competitors.length === 2) {
-    const names = match.competitors.map(c => c.name || c.abbreviation || '?').sort();
-    return `${match.sport}: ${names.join(' vs ')}`;
-  }
-  return `${match.sport}: ${match.name || match.id}`;
 }
 
 function localDateKeyFromUtc(startTimeUtc) {

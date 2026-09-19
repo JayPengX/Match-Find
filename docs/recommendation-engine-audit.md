@@ -23,16 +23,18 @@ this existing design working as intended:
 - **"Duplicate recommendations"** (§5) — the export shows the same two
   teams (e.g. Rays–Yankees, Padres–Dodgers) recommended on several
   consecutive dates. This is not deduplication failure: `recommended` is
-  decided **per calendar day** by `computeDayPlan`, which already groups
-  same-day, near-totally-overlapping fixtures into one slot
-  (`groupIntoSlots`/`isNearTotalOverlap`, ≥75% overlap of the shorter
-  match's duration) so two overlapping picks can never both be
+  decided **per calendar day** by `computeDayPlan`, which ensures two
+  same-day, near-totally-overlapping fixtures (`isNearTotalOverlap`, ≥75%
+  overlap of the shorter match's duration) can never both be
   `recommended: true` on the same day. A 4-game series recommended on 4
   different dates is 4 distinct real events, each with its own plan — not
   one event duplicated. `scripts/evaluate-recommendations.mjs` (added,
   see below) reports this as a **recurring-matchup rate**, descriptively,
-  not as an error, and `groupIntoSlots`'s own doc comment now says
-  explicitly why cross-day repeats are out of scope for it.
+  not as an error. (`groupIntoSlots` is what computes that same-day
+  grouping - see "Round 2" below for how its role changed from gating the
+  scheduler to a presentation-only label computed after scheduling, and
+  for the cross-day repeat penalty added since this paragraph was
+  originally written.)
 - **"effectiveScore isn't explainable"** (§6) — the arithmetic
   (`styleScore + priorityNudge + serviceNudge`) was already simple and
   additive (matching the audit's own §15 recommendation that priority
@@ -158,12 +160,14 @@ against one day's output."
   own `durationMinutes`/`enduranceScore` mechanism already absorbs most
   of the practical difference (a 190-minute MLB game and a 115-minute
   soccer match already schedule differently).
-- **No cross-day diversity/series suppression**, by design — see "How
-  the audit's claims line up" above. This is a deliberate product
-  decision (a day-by-day plan, not a deduplicated feed), not an oversight,
-  but it's a decision the repo owner should make explicitly if a future
-  "top N picks across the week" view is ever added — `matchupKey` in the
-  new evaluator is exactly the grouping key such a feature would need.
+- ~~No cross-day diversity/series suppression, by design~~ — **superseded,
+  see "Round 2" below.** A second, deeper audit made the case that "a
+  day-by-day plan, not a deduplicated feed" was too absolute: nothing
+  stopped the SAME matchup from defaulting to winning every single day of
+  a series even when a comparably good alternative existed. A soft,
+  decaying cross-day repeat penalty now exists (`applyRecentRepeatPenalties`/
+  `computeWindowPlan`) - it nudges, never hard-bans, so a genuinely
+  dominant matchup can still win on consecutive days.
 - **No behavioral feedback loop.** There's no click/watch/dismiss signal
   captured anywhere in this pipeline (it's a static site with no backend
   of its own beyond the shared scoring proxy), so `evaluateRecommendation`-
@@ -176,3 +180,145 @@ against one day's output."
   unchanged in this pass — rewriting the shared proxy's own prompt/schema
   is a change to a different repo (`jaypengx-collab/shared-proxy`) and
   wasn't made here.
+
+## Round 2: deep engine audit response (scheduler correctness + variety)
+
+A second, deeper audit reviewed the actual scheduling implementation (not
+just an exported snapshot) and found five real, user-reported bugs plus
+several structural causes behind them: destructive pre-grouping that could
+throw away the globally best plan, one flat overlap model applied to every
+sport regardless of how predictable its length actually is, anchor-order-
+dependent grouping, no transition buffer between picks, and no cross-day
+memory. This pass fixes the scheduler itself (Phase 1/2 of that audit's own
+"implementation order" - Phases 3-5, the AI-scoring/evidence-layer work,
+are explicitly deferred, see below); it does not touch `scripts/
+build-data.mjs`'s Gemini prompt or scoring.
+
+### 1. Removed destructive pre-grouping - the scheduler now sees every candidate
+
+The single biggest structural bug: `computeDayPlan` used to group
+near-totally-overlapping matches into "slots" and hand the weighted-
+interval-scheduling DP only each slot's single highest-`effectiveScore`
+representative. That threw away information the DP never got a chance to
+use - a slightly lower-scoring match that would have allowed a genuinely
+great continuation right after it could lose to a higher-scoring match
+that blocked the continuation entirely, because the DP was never shown
+"pick A alone" vs. "pick B, then C" as a real choice; it only ever saw
+"A" vs. "[C's own slot]".
+
+`computeDayPlan` now feeds every individual candidate straight into
+`weightedIntervalSchedule` and lets the DP itself find the actual
+maximum-value sequence. `groupIntoSlots`'s near-total-overlap clusters
+still exist, but purely as a PRESENTATION label (the swipeable card
+stack's members, and a pinned choice's stable lookup key) computed AFTER
+the scheduler has already decided what's actually recommended - never
+before it, and never as an input that limits what the scheduler can
+choose from.
+
+### 2. Anchor-independent grouping
+
+`groupIntoSlots`'s old algorithm claimed matches around a highest-score
+"anchor" greedily, which meant the resulting groups could differ depending
+on which match happened to become the anchor first. It's now a plain
+union-find over the same pairwise `isNearTotalOverlap` relation -
+deterministic, and independent of input order (see the new "groupIntoSlots
+is anchor-independent" test).
+
+### 3. One canonical duration model, with real uncertainty for sports that deserve it
+
+`durationMinutes` (ESPN's per-sport nominal average) was previously read
+two different ways in two different places - `isNearTotalOverlap`'s
+grouping check used the raw nominal duration, while the DP's own
+compatibility check used `effectiveDurationMinutes` (endurance-shortened).
+MLB's 190-minute nominal length, in particular, was trusted as exactly as
+precise as football's 115 or F1's own scheduled session windows, even
+though MLB has no clock at all (extra innings, rain delays) - the direct
+cause of the reported "missed obvious continuation" bug whenever a great
+match was scheduled to start soon after a baseball game's nominal, but
+likely inaccurate, end time.
+
+New in `recommendation.mjs`:
+
+- `SPORT_TIMING` / `resolveSportTiming(sport)` - a per-sport
+  `durationReliability` tier (`high` for football/MLS/F1, `medium` for
+  NBA, `low` for MLB), a flat data table rather than scattered
+  `if (sport === 'MLB')` special cases.
+- `DURATION_UNCERTAINTY_BY_RELIABILITY` - how much of a low/medium-
+  reliability sport's own effective viewing window gets shrunk before it's
+  allowed to block a later pick (0% / 10% / 30%). Not a claim about how
+  early these games usually end - just an acknowledgment that they
+  plausibly could have, which is reason enough to still offer a strong
+  later match as a continuation.
+- `TRANSITION_BUFFER_MINUTES` (10, flat) - two picks that are technically
+  non-overlapping down to the minute still aren't something a real viewer
+  can switch between instantly.
+- `schedulingInterval(match)` / `schedulingDurationMinutes(match)` - the
+  ONE interval the scheduler ever reads (baking in both of the above);
+  `canWatchSequentially(a, b)` - the explicit pairwise "can these actually
+  be sequenced" relation the earlier audit specifically asked for in place
+  of anchor-dependent grouping.
+
+Football/F1/MLS keep exactly their old strictness (0% uncertainty); only
+MLB (and NBA, more mildly) got more permissive, and only by the shrink
+factor above - not by loosening the near-total-overlap threshold itself.
+
+### 4. Soft cross-day repeat penalty (variety)
+
+`computeWindowPlan(matchesByDayKey, pinnedChoices)` runs `computeDayPlan`
+once per day, in chronological order, and tracks the most recent day each
+distinct matchup (`matchupKey` - moved here from
+`evaluate-recommendations.mjs`, which now imports it instead of keeping a
+second copy) actually won its own day's plan. `applyRecentRepeatPenalties`
+uses that history to set a new `planningScore` field
+(`effectiveScore - recentRepeatPenalty`, decaying from 1.5 at a 1-day gap
+to 0 at 4+ days) - `effectiveScore` itself is never mutated, only read.
+`computeDayPlan` takes an optional `{ scoreField }` (`weightedIntervalSchedule`
+an optional `getScore`) so the DP can be weighted by `planningScore`
+without a second copy of the scheduling function.
+
+`public/app.js` wires this in `renderSections` (which recomputes
+`state.recommendationHistory` from a fresh, always-UNFILTERED-by-sport
+`computeWindowPlan` pass before every render) and
+`renderRecommendedSection` (which applies the penalty to the current,
+possibly sport-filtered, day's candidates before calling `computeDayPlan`)
+- kept as two separate passes specifically so "只看 MLB" still gets its own
+MLB-only plan (existing, deliberate behavior), while the repeat penalty
+itself still reflects what was actually recommended across every sport.
+
+### 5. Score naming (`eventScore` / `viewerScore`)
+
+`computeRecommendationScore` and `resolveViewingPlan`'s per-match output
+now also carry `eventScore` (alias of `baseScore` - the AI's objective
+judgment, untouched by any viewer preference) and `viewerScore` (alias of
+`effectiveScore` - after priority/service/style). These are additive
+aliases, not a rename: `score`/`effectiveScore`/`baseScore` are unchanged
+so nothing in `public/app.js`'s existing rendering broke. `planningScore`
+(viewerScore + the repeat penalty above) is the third tier the earlier
+audit asked for, set separately by `applyRecentRepeatPenalties` since it
+needs cross-day context a single match/day can't provide on its own.
+
+### Deferred (out of scope for this pass)
+
+The earlier audit's own "implementation order" put these later on
+purpose, and they stay deferred here for the same reasons:
+
+- **A structured evidence layer for online/public context** (Phase 4) -
+  requires changing the shared proxy's (`jaypengx-collab/shared-proxy`)
+  Gemini prompt/response schema, a different repo, and is a materially
+  larger change than a scheduling fix.
+- **A full score-architecture rename** (`match.score` → `eventScore`
+  everywhere, removing the old names) - `public/app.js`'s rendering code
+  reads `match.score`/`.effectiveScore` in many places; a full rename is
+  real, separately reviewable work, not something to fold into a
+  scheduling-correctness pass.
+- **A planner "oracle" in the evaluator** (independently computing the
+  mathematically optimal schedule from raw candidates and reporting
+  actual/oracle as a ratio) - a genuinely separate, substantial piece of
+  work from the scheduler fix itself; `scripts/evaluate-recommendations.mjs`
+  now at least reuses the same `matchupKey` the scheduler's own repeat
+  penalty is built on, but doesn't yet re-derive an optimal schedule to
+  compare against.
+- **Dimension-redundancy analysis** (competitiveness vs. watchability vs.
+  endurance correlation) and **contested-cluster refinement removal** -
+  both require re-examining `scripts/build-data.mjs`'s AI scoring pass
+  itself, which this round deliberately left untouched.
