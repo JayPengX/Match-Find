@@ -702,6 +702,29 @@ async function main() {
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
+  // TEMPORARY diagnostic - user disputes the exact start times of the
+  // "tomorrow" MLB slate; need the real, exact, sorted per-match times
+  // (not just counts) for both today's and tomorrow's Taipei-day buckets
+  // to settle it against real ESPN data rather than assumption. Removed
+  // in the immediate follow-up once confirmed.
+  {
+    const taipeiParts = iso => {
+      const d = new Date(Date.parse(iso) + 8 * 3600_000);
+      const dateKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      const clock = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+      return { dateKey, clock };
+    };
+    const nowTaipei = taipeiParts(now.toISOString());
+    console.log('[debug] now UTC:', now.toISOString(), '-> Taipei:', nowTaipei.dateKey, nowTaipei.clock);
+    for (const sport of ['MLB', 'MLS']) {
+      const rows = matches
+        .filter(m => m.sport === sport && !m.timeTbd)
+        .map(m => ({ id: m.id, name: m.name, ...taipeiParts(m.startTimeUtc) }))
+        .sort((a, b) => (a.dateKey + a.clock).localeCompare(b.dateKey + b.clock));
+      console.log(`[debug] ${sport} full sorted Taipei times:`, JSON.stringify(rows));
+    }
+  }
+
   let cache = pruneCache(await loadCache(), now);
   const meta = await loadMeta();
 
