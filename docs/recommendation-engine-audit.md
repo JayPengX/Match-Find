@@ -173,13 +173,17 @@ against one day's output."
   of its own beyond the shared scoring proxy), so `evaluateRecommendation`-
   style calibration against real user behavior (audit §17) isn't possible
   without adding that instrumentation first — out of scope here.
-- **Explanations (`reason`) are still Gemini's own free-form text**, not
+- ~~Explanations (`reason`) are still Gemini's own free-form text, not
   assembled from the structured feature contributions in
-  `scoreBreakdown` (audit §11). `scoreBreakdown` now exists and could
-  feed a future template-based explanation, but `reason` itself is
-  unchanged in this pass — rewriting the shared proxy's own prompt/schema
-  is a change to a different repo (`jaypengx-collab/shared-proxy`) and
-  wasn't made here.
+  `scoreBreakdown`~~ — **partially superseded, see "Round 4" below.**
+  `reason` is still AI-generated prose, not template-assembled (the
+  original audit itself said the prose could stay AI-generated -
+  section 23: "The exact prose can remain AI-generated, but its claims
+  should be derived from structured evidence") - but the shared proxy's
+  prompt now explicitly instructs grounding that sentence in the same
+  evidence the score itself was based on, and Round 3's structured
+  evidence is shown directly alongside the reason so a viewer can verify
+  it independently either way.
 
 ## Round 2: deep engine audit response (scheduler correctness + variety)
 
@@ -479,3 +483,94 @@ already are; actually deleting `score`/`effectiveScore` from the data
 format would cost real risk (a live production JSON schema change) for no
 additional clarity beyond what `eventScore`/`viewerScore` already provide
 today.
+
+## Round 4: closing the gaps Round 3 missed
+
+A direct question ("is recommendation-engine-audit.md all done?") prompted
+a re-check against the FULL original report rather than just this
+document's own "Deferred"/"Known limitations" lists - which turned up
+three real, unimplemented items neither Round 2 nor Round 3 had actually
+flagged as open. This round closes all three.
+
+### 1. Sport-level variety (§15)
+
+The cross-day repeat penalty (Round 2) only ever tracked ONE level of
+variety - the same two teams. Section 15 explicitly asks for more:
+"Avoid accidentally producing: MLB MLB MLB MLB MLB when equally
+compelling alternatives exist" (sport variety) and "If the entire viewing
+plan repeatedly revolves around one league despite strong alternatives,
+the planner should expose that concentration" (team/league concentration).
+
+`public/lib/recommendation.mjs` now has `computeSportConcentration(picks)`
+(a plain `Map<sport, share>`) and a second soft penalty
+(`SPORT_CONCENTRATION_THRESHOLD` = 0.75 over a
+`SPORT_CONCENTRATION_LOOKBACK_DAYS` = 3-day rolling window) - same
+design as the matchup penalty: small, decaying-by-construction (it only
+ever looks at the last 3 days), and never strong enough to override a
+sport that's genuinely and repeatedly the best choice, only to nudge a
+close call. `computeWindowPlan` now also returns `sportConcentration`
+(the WHOLE window's own final sport split, not just the short lookback
+used for the penalty) as the literal "expose that concentration"
+diagnostic the audit asked for - `public/app.js`'s Settings "匯出資料"
+export now includes it.
+
+`applyRecentRepeatPenalties` gained a `recentPicks` parameter (defaults
+to `[]`, so every existing 3-argument call site - and every existing
+test - keeps working with zero sport penalty applied, same as before).
+
+### 2. "Why not" explanations (§27)
+
+Nothing in this codebase could previously answer "why wasn't THIS
+candidate recommended" except by a developer manually tracing through
+`computeDayPlan`. `explainWhyNotRecommended(candidateId, dayKey,
+dayMatches, pinnedForDay)` answers it for real, not by guessing from
+static rules: it clones the input (never touches the caller's own match
+objects/flags), re-runs the actual plan as it happened, then re-runs it a
+SECOND time with this one candidate forced in via the exact same pinning
+mechanism a real viewer swipe uses, and compares the two plans' total
+value. That distinguishes three genuinely different answers:
+
+- `blockedByPin` - forcing the candidate in would have raised the plan's
+  value, so a DIFFERENT pinned choice (not a scoring judgment) is what's
+  actually excluding it.
+- `lostToBetterSequence` - it conflicts with match(es) that formed a
+  higher- or equal-value plan without it; names exactly which ones.
+- `lowValue` - the rare case where it doesn't conflict with anything
+  chosen at all, but its own score genuinely wasn't worth including.
+
+Deliberately NOT wired into every card on every render (the report's own
+framing is a developer-debugging tool - "prevents the developer from
+having to inspect five functions to understand one decision" - not a
+live UI feature) - it's exported and tested, ready for a future
+"why not?" button without forcing every non-recommended card to pay for
+a scheduling re-run nobody asked for.
+
+### 3. Evidence-grounded reason (§23)
+
+Round 3's evidence layer stored and displayed structured evidence
+alongside the AI's one-sentence `reason`, but never actually told the
+model writing that sentence to USE it - a fixture with real, current
+evidence behind its score could still get a generic "雙方戰績接近" (the
+two teams are evenly matched) that said nothing case-specific. The
+shared proxy's (`jaypengx-collab/shared-proxy`) `buildMatchRecommendPrompt`/
+`buildMatchRefinePrompt` now explicitly instruct grounding `reason` in
+the `[Recent: ...]`/`[Odds: ...]` clause when one is present, falling
+back to general knowledge exactly as before when neither exists - a
+small, low-risk prompt-only change (no schema/response shape change,
+unlike Round 3's evidence-array change). This satisfies the original
+audit's own framing directly: "The exact prose can remain AI-generated,
+but its claims should be derived from structured evidence" (§23) - not a
+template-assembled sentence, a model explicitly told to cite what it was
+actually given.
+
+### Status after Round 4
+
+Every item from the original 43-section report is now either implemented
+or explicitly deferred with reasoning recorded in this document (see
+"Known limitations" and "What Round 2 deferred, and why" above) - nothing
+should remain silently unaddressed. The genuinely open items are the ones
+already named as such: a fuller per-feature freshness-decay confidence
+model, real sport-specific scoring adapters, a behavioral feedback loop
+(needs instrumentation this static site doesn't have), and the
+wire-format score rename - each with its own stated reason for staying
+that way, not an oversight.
