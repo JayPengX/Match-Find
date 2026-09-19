@@ -11,5 +11,19 @@
   </defs>
   <rect width="180" height="180" rx="42" fill="url(#g)"/>
   <rect width="180" height="180" rx="42" fill="url(#hl)"/>
-  <path d="M48 96 L78 126 L133 58" fill="none" stroke="#ffffff" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- A ball with an interior cross-seam pattern - reads as "sport" at any
+       size, unlike a plain checkmark which carries no sport meaning at all.
+       The seam curves stay well inside the ball's own r=40 boundary
+       (an earlier version traced arcs AT r=40, exactly retracing the ball's
+       own outline and reading as a doubled ring instead of a seam) so they
+       show up as pattern lines, not a second circle. Kept to bold, simple
+       shapes (no fine detail) so it still holds up at 16-32px. -->
+  <circle cx="90" cy="90" r="40" fill="#ffffff"/>
+  <path d="M90 52 V128" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
+  <path d="M60 60 Q90 90 60 120" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
+  <path d="M120 60 Q90 90 120 120" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
+  <!-- A short motion streak trailing the ball - suggests "in play", not a
+       static object sitting there. -->
+  <path d="M20 132 L44 122" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.55"/>
+  <path d="M14 116 L34 108" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.32"/>
 </svg>

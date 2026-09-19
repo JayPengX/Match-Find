@@ -11,8 +11,8 @@
   --good: #3ddc97;
   --good-soft: rgba(61, 220, 151, 0.14);
   --warn: #ffb84d;
-  --radius: 16px;
-  --radius-sm: 10px;
+  --radius: 20px;
+  --radius-sm: 12px;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.45);
   --shadow-pinned: 0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 32px -14px rgba(91, 140, 255, 0.35);
   --sport-epl: #5b8cff;
@@ -20,6 +20,7 @@
   --sport-mlb: #ff6b6b;
   --sport-nba: #ff9f4d;
   --sport-f1: #b98bff;
+  --tap: 44px;
   --font-sans: "Noto Sans TC", -apple-system, BlinkMacSystemFont, "PingFang TC", "Microsoft JhengHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -46,7 +47,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  line-height: 1.6;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -54,58 +55,45 @@ button {
   font-family: inherit;
 }
 
+/* A slim, minimal chrome strip - not a masthead with a wordmark/tagline -
+   so an installed PWA's own in-app header doesn't duplicate the identity
+   the home-screen icon/OS title bar already carries. Just the mark, the
+   clock, and the one settings entry point. */
 .page-header {
-  padding: 28px 16px 20px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
 }
 .page-header-inner {
   max-width: 760px;
   margin: 0 auto;
-}
-.page-header-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
+  gap: 10px;
 }
 .brand-mark {
   flex: none;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-}
-.page-header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-}
-.tagline {
-  margin: 2px 0 0;
-  color: var(--text-muted);
-  font-size: 0.85rem;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
 }
 .clock {
-  margin: 12px 0 0;
-  font-size: 0.76rem;
+  flex: 1;
+  margin: 0;
+  font-size: 0.72rem;
   color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-btn {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: var(--tap);
+  height: var(--tap);
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text-muted);
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
@@ -122,14 +110,14 @@ button {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: min(400px, calc(100vw - 32px));
-  max-height: min(560px, calc(100vh - 64px));
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(600px, calc(100vh - 64px));
   overflow-y: auto;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-pinned);
-  padding: 20px;
+  padding: 22px;
   z-index: 20;
 }
 .settings-panel-header {
@@ -139,66 +127,76 @@ button {
 }
 .settings-panel-header h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 1.15rem;
   font-weight: 700;
 }
 .settings-panel-header button {
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 1.1rem;
+  font-size: 1.3rem;
   cursor: pointer;
-  padding: 4px;
+  padding: 8px;
+  width: var(--tap);
+  height: var(--tap);
+}
+.settings-section {
+  margin-top: 26px;
+}
+.settings-section h3 {
+  margin: 0 0 4px;
+  font-size: 0.98rem;
+  font-weight: 700;
 }
 .settings-hint {
-  margin: 8px 0 18px;
-  font-size: 0.82rem;
+  margin: 4px 0 14px;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
 .settings-sport-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 .settings-sport-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
 }
 .settings-sport-rank {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 0.72rem;
+  font-size: 0.74rem;
   font-weight: 700;
 }
 .settings-sport-label {
   flex: 1;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.94rem;
 }
 .settings-move-group {
   flex: none;
   display: flex;
-  gap: 4px;
+  gap: 6px;
 }
 .settings-move-group button {
   border: 1px solid var(--border);
   background: var(--bg-raised);
   color: var(--text-muted);
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
@@ -209,14 +207,14 @@ button {
 }
 .settings-reset {
   display: block;
-  margin: 20px auto 0;
+  margin: 16px auto 0;
   border: none;
   background: transparent;
   color: var(--text-faint);
   font-size: 0.8rem;
   text-decoration: underline;
   cursor: pointer;
-  padding: 4px;
+  padding: 8px;
 }
 
 .settings-chip-list {
@@ -229,10 +227,11 @@ button {
   background: var(--bg-elevated);
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 8px 14px;
-  font-size: 0.84rem;
+  padding: 10px 16px;
+  font-size: 0.86rem;
   font-weight: 600;
   cursor: pointer;
+  min-height: var(--tap);
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 .settings-chip.is-active {
@@ -250,11 +249,11 @@ button {
   align-items: center;
   gap: 10px;
   margin: 0 0 12px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   background: var(--bg-elevated);
   border-radius: var(--radius-sm);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 0.95rem;
+  font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -264,8 +263,8 @@ button {
   background: var(--bg-raised);
   color: var(--text-muted);
   border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 0.78rem;
+  padding: 8px 14px;
+  font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -277,10 +276,23 @@ button {
   background: var(--accent);
   color: #fff;
   font-weight: 700;
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   border-radius: var(--radius-sm);
-  padding: 11px 16px;
+  min-height: var(--tap);
+  padding: 12px 16px;
   cursor: pointer;
+}
+.sync-action-btn.is-secondary {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.settings-btn-row {
+  display: flex;
+  gap: 10px;
+}
+.settings-btn-row .sync-action-btn {
+  flex: 1;
 }
 .sync-connect-row {
   display: flex;
@@ -294,7 +306,8 @@ button {
   background: var(--bg-elevated);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: 12px;
+  min-height: var(--tap);
   font-size: 0.9rem;
   font-family: "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.03em;
@@ -323,7 +336,7 @@ button {
 main#app {
   max-width: 760px;
   margin: 0 auto;
-  padding: 24px 16px 40px;
+  padding: 20px 16px 44px;
 }
 
 .section-label {
@@ -331,15 +344,10 @@ main#app {
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--text-muted);
-  margin: 30px 0 12px;
+  margin: 32px 0 12px;
 }
 .section-label span { color: var(--text); }
-#recommended-section .section-label { margin-top: 6px; }
-.section-sublabel {
-  margin: -6px 0 12px;
-  font-size: 0.82rem;
-  color: var(--text-faint);
-}
+#recommended-section .section-label { margin-top: 4px; }
 
 .day-scroller {
   display: flex;
@@ -355,8 +363,9 @@ main#app {
   background: var(--bg-elevated);
   color: var(--text);
   border-radius: 999px;
-  padding: 9px 18px;
-  font-size: 0.86rem;
+  padding: 12px 20px;
+  min-height: var(--tap);
+  font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -380,8 +389,9 @@ main#app {
   background: transparent;
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 0.82rem;
+  padding: 9px 16px;
+  min-height: 38px;
+  font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -393,7 +403,7 @@ main#app {
 }
 
 .match-card {
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
@@ -412,7 +422,7 @@ main#app {
   background: linear-gradient(160deg, var(--accent-soft), transparent 60%), var(--bg-raised);
   border-color: rgba(91, 140, 255, 0.45);
   box-shadow: var(--shadow-pinned);
-  padding: 18px;
+  padding: 20px;
 }
 .match-card.is-live .match-time-relative {
   color: var(--good);
@@ -469,24 +479,22 @@ main#app {
   color: var(--accent);
 }
 
-/* A single readable line - "7:00 下午 – 9:35 下午" plus a small relative
-   label - replaces the old cramped 74px right-hand column of three stacked
-   labels, which was hard to scan at a glance, especially on a phone. */
+/* One readable line - "7:00 下午 – 9:35 下午" plus a small relative label. */
 .match-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .match-time-range {
   font-weight: 700;
-  font-size: 0.98rem;
+  font-size: 1.05rem;
   font-variant-numeric: tabular-nums;
 }
 .match-time-relative {
   flex: none;
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: var(--text-faint);
 }
@@ -498,15 +506,23 @@ main#app {
   flex-wrap: wrap;
 }
 .sport-badge {
-  display: inline-block;
-  font-size: 0.68rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  padding: 3px 9px;
+  padding: 4px 10px 4px 8px;
   border-radius: 999px;
   color: #0b0d12;
   background: #ccc;
 }
+.sport-icon {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+}
+.sport-icon svg { width: 100%; height: 100%; display: block; }
 .sport-badge[data-sport="Premier League"] { background: var(--sport-epl); color: #0b0d12; }
 .sport-badge[data-sport="MLS"] { background: var(--sport-mls); color: #06231a; }
 .sport-badge[data-sport="MLB"] { background: var(--sport-mlb); color: #2a0808; }
@@ -516,8 +532,8 @@ main#app {
 .teams {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin: 9px 0 6px;
+  gap: 6px;
+  margin: 11px 0 7px;
 }
 .team-row {
   display: flex;
@@ -541,8 +557,8 @@ main#app {
   background: var(--accent-soft);
 }
 .team-logo {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   object-fit: contain;
   flex: none;
 }
@@ -562,12 +578,12 @@ main#app {
 }
 
 .recommended-tag {
-  font-size: 0.66rem;
+  font-size: 0.68rem;
   font-weight: 700;
   color: var(--good);
   background: var(--good-soft);
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 3px 10px;
 }
 .recommended-tag.is-alternative {
   color: var(--accent);
@@ -581,8 +597,8 @@ main#app {
 .match-watch {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 4px 0 0;
+  gap: 7px;
+  margin: 5px 0 0;
   font-size: 0.8rem;
   color: var(--text-muted);
 }
@@ -597,16 +613,18 @@ main#app {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  border-radius: 7px;
   color: #fff;
   font-size: 0.62rem;
   font-weight: 700;
   line-height: 1;
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
+.watch-badge svg { width: 100%; height: 100%; display: block; }
 .watch-logo {
   height: 12px;
   width: auto;
@@ -622,12 +640,12 @@ main#app {
   color: var(--good);
   background: var(--good-soft);
   border-radius: 999px;
-  padding: 2px 7px;
+  padding: 3px 8px;
 }
 
 .match-reason {
-  margin: 10px 0 0;
-  font-size: 0.85rem;
+  margin: 11px 0 0;
+  font-size: 0.87rem;
   color: var(--text-muted);
 }
 .match-reason.is-heuristic::after {
@@ -637,12 +655,15 @@ main#app {
 }
 
 .conflict-note {
-  margin: 8px 0 0;
+  margin: 9px 0 0;
   font-size: 0.76rem;
   color: var(--warn);
 }
 .conflict-note.is-allowed-overlap {
   color: var(--good);
+}
+.conflict-note.is-info {
+  color: var(--text-faint);
 }
 
 .empty-state {
@@ -661,7 +682,7 @@ main#app {
 .page-footer {
   max-width: 760px;
   margin: 0 auto;
-  padding: 20px 16px 44px;
+  padding: 20px 16px 48px;
   color: var(--text-faint);
   font-size: 0.76rem;
 }
@@ -701,7 +722,7 @@ main#app {
    regardless of the `hidden` attribute JS actually sets. This class is now
    only used by #sync-prompt-banner (see app.js's maybeShowSyncPrompt) - a
    deployed-new-code detection used to show a banner here too, but that
-   case now forces a real reload instead (see pollForUpdates). */
+   case now forces a real reload instead (see app.js's checkForUpdate). */
 .update-banner[hidden] { display: none; }
 .update-banner button {
   border: none;
@@ -710,7 +731,8 @@ main#app {
   font-weight: 700;
   font-size: 0.82rem;
   border-radius: 999px;
-  padding: 8px 16px;
+  padding: 10px 18px;
+  min-height: 40px;
   cursor: pointer;
 }
 @keyframes update-banner-in {
@@ -719,5 +741,5 @@ main#app {
 }
 
 @media (max-width: 480px) {
-  .match-card { padding: 14px; }
+  .match-card { padding: 16px; }
 }

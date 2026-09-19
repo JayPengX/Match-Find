@@ -14,7 +14,9 @@ up for a 3am fixture. The page itself only ever shows the *recommendation* -
 a plain-language reason, not the raw competitiveness/watchability numbers
 behind it (see "Page layout" below).
 
-No sign-up, no app — it's a GitHub Pages site rebuilt every few hours.
+No sign-up, no app — it's a GitHub Pages site rebuilt every 15 minutes,
+installable as a PWA (its own minimal chrome has no title bar to duplicate
+what the home-screen icon already carries).
 
 ## How it works
 
@@ -209,29 +211,35 @@ own wording, not a fixed enum) to a small badge for exactly three services
 this site's own viewer actually tracks: 愛爾達, Apple TV, Netflix. Any
 *other* broadcaster Gemini names (緯來, DAZN, Disney+, myVideo, MLB.TV, ...)
 still shows up as plain text on the card either way (see `watch-text` in
-`buildMatchCard`) - it just doesn't get a logo/color badge or a "do I own
-this" toggle in Settings, since this registry only exists to badge the
-handful of services actually worth tracking, not to catalog every service
-Gemini might ever answer with. Where a tracked service's real, official
-mark exists on Wikimedia Commons (confirmed live, not assumed - see each
-entry's `logo`/`logoBg`), that's used via Commons' own `Special:FilePath`
-hotlink redirect, same posture as the team/F1 logos already pulled from
-ESPN's CDN elsewhere in this file rather than reproduced into this repo; a
-service with no logo found there (愛爾達 - no genuine Commons file for the
-Taiwan channel's own mark was found, see that entry's own comment) falls
-back to a plain colored-initial badge, and any logo that fails to load
-(network hiccup, a moved file) falls back to that same badge automatically
-(same `onerror` pattern as team logos). Adding a new tracked service later
+`buildMatchCard`) - it just doesn't get a logo/color badge, since this
+registry only exists to badge the handful of services actually worth
+tracking, not to catalog every service Gemini might ever answer with.
+愛爾達 and Apple TV render as an original, drawn-inline pictogram (a
+broadcast-signal mark, a TV outline) on a two-stop gradient badge - not a
+hotlinked reproduction of either service's real logo, both so the badge
+never depends on an external request succeeding and so it reads as a
+designed icon rather than a flat color square with a squeezed-in wordmark
+on top. Netflix still uses its real mark via Wikimedia Commons'
+`Special:FilePath` hotlink redirect (confirmed live, not assumed), same
+posture as the team/F1 logos pulled from ESPN's CDN elsewhere in this file;
+if that hotlink ever fails to load, it falls back to a plain colored-initial
+badge (same `onerror` pattern as team logos). Which services count as
+"yours" (`DEFAULT_MY_SERVICE_IDS`) is fixed to this site's own owner's real
+subscriptions, not a per-viewer Settings toggle - see that constant's own
+comment. Adding a new tracked service later
 is one more entry in that list; nothing else in the file needs to know
 about it, same pattern as `SPORT_LABELS_ZH` for sports.
 
-`MY_SERVICE_IDS` names which of those the site's owner actually subscribes
-to right now (愛爾達, Apple TV, Netflix, as of writing) - matched fixtures
-get a small "已訂閱" mark, and a modest score nudge
-(`OWNED_SERVICE_SCORE_BONUS`) in `resolveViewingPlan`, same tie-breaking
-spirit as sport priority: a great game on a service you don't have still
-shows up and can still be recommended, this only tips a genuinely close
-call toward the one you can actually watch live right now.
+`DEFAULT_MY_SERVICE_IDS` names which of those the site's owner actually
+subscribes to (愛爾達, Apple TV, Netflix, as of writing) - fixed, not a
+per-viewer Settings toggle (an earlier version let each viewer pick their
+own, which added a whole settings section for a nudge that's only ever
+meaningful for this site's own owner). Matched fixtures get a small
+"已訂閱" mark, and a modest score nudge (`OWNED_SERVICE_SCORE_BONUS`) in
+`resolveViewingPlan`, same tie-breaking spirit as sport priority: a great
+game on a service you don't have still shows up and can still be
+recommended, this only tips a genuinely close call toward the one you can
+actually watch live right now.
 
 ## AI runs in the background, not on page load
 
@@ -261,8 +269,10 @@ initial load) and reacts based on what actually changed, using `buildId`
 
 ## AI score cache (keeping Gemini usage flat)
 
-A scheduled run every 6 hours would, naively, re-score the same
-heavily-overlapping 14-day window of fixtures on every single run. Instead,
+The workflow itself now runs every 15 minutes (see "Deployment" below) so
+the free ESPN half of the build stays as fresh as possible - a scheduled
+run that naively re-scored the same heavily-overlapping 14-day window of
+fixtures on every one of THOSE runs would be a real problem. Instead,
 `data/ai-cache.json` (a file *committed to the repo*, unlike the
 fully-regenerated `public/data/matches.json`) records every match Gemini has
 already scored, keyed by a stable match id, along with the `PROMPT_VERSION`
@@ -279,14 +289,17 @@ fixtures all need re-scoring at once). Entries older than 12 hours past
 kickoff are pruned automatically so the file doesn't grow forever.
 
 **Throttling how often Gemini gets called**: even with per-match caching, a
-routine 6-hourly run can still find a couple of newly-in-window fixtures
-almost every time, meaning several small Gemini calls a day for no real
-benefit. `data/ai-meta.json` (committed the same way as `ai-cache.json`)
-records `lastAiFetchAt` — the last time this build actually called the
-proxy — and a `schedule`-triggered run (as opposed to a `push` or manual
-`workflow_dispatch` run — see `GITHUB_EVENT_NAME` in the workflow) skips
-calling Gemini entirely if that was less than `AI_FETCH_MIN_INTERVAL_HOURS`
-(20) ago; anything still pending just waits for the next eligible run. A
+routine run can still find a couple of newly-in-window fixtures almost
+every time, meaning several small Gemini calls a day for no real benefit -
+especially now that the workflow itself fires every 15 minutes rather than
+every 6 hours (see "Deployment" below). `data/ai-meta.json` (committed the
+same way as `ai-cache.json`) records `lastAiFetchAt` — the last time this
+build actually called the proxy — and a `schedule`-triggered run (as
+opposed to a `push` or manual `workflow_dispatch` run — see
+`GITHUB_EVENT_NAME` in the workflow) skips calling Gemini entirely if that
+was less than `AI_FETCH_MIN_INTERVAL_HOURS` (8 — a few times a day, not
+once, so a genuinely new pick still shows up same-day) ago; anything still
+pending just waits for the next eligible run. A
 push or a manual run always calls it, since either one means someone
 specifically wants fresh data now. The footer shows this same timestamp
 ("AI 最後查詢於 ...") with a "重新查詢" link straight to the Actions run page,
@@ -333,9 +346,15 @@ This repo deploys itself: `.github/workflows/deploy.yml` runs
 `scripts/build-data.mjs` and publishes `public/` to GitHub Pages —
 
 - on every push to `main`,
-- on a schedule (every 6 hours), so the data stays fresh even with no
-  code changes,
-- and on-demand via the Actions tab ("Run workflow").
+- on a schedule (every 15 minutes), so live status/newly-scheduled fixtures
+  stay fresh even with no code changes - this only costs a free ESPN fetch
+  on most runs, since `AI_FETCH_MIN_INTERVAL_HOURS` (see "AI score cache"
+  above) is what actually keeps Gemini calls down to a few times a day
+  regardless of how often the workflow itself fires,
+- and on-demand via the Actions tab ("Run workflow"), or the "檢查更新"/
+  "重新整理資料" buttons in Settings (client-side only - they just re-fetch
+  whatever the last scheduled run already published, they can't trigger a
+  new one - see public/app.js's checkForUpdate).
 
 Make sure the repo's **Settings → Pages → Source** is set to **GitHub
 Actions** (no branch to pick — the workflow handles publishing).

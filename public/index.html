@@ -27,17 +27,9 @@
 <body>
   <header class="page-header">
     <div class="page-header-inner">
-      <div class="page-header-row">
-        <div class="brand">
-          <img class="brand-mark" src="./favicon.svg" alt="" width="34" height="34" />
-          <div>
-            <h1>Match Find</h1>
-            <p class="tagline">值得你空出時間的那一場比賽</p>
-          </div>
-        </div>
-        <button id="settings-btn" class="settings-btn" type="button" aria-label="設定">⚙</button>
-      </div>
+      <img class="brand-mark" src="./favicon.svg" alt="Match Find" width="30" height="30" />
       <p class="clock" id="local-clock" aria-live="off"></p>
+      <button id="settings-btn" class="settings-btn" type="button" aria-label="設定">⚙</button>
     </div>
   </header>
 
@@ -50,27 +42,21 @@
 
     <section class="settings-section">
       <h3>推薦風格</h3>
-      <p class="settings-hint">決定「推薦賽事」怎麼選——換一種風格會立即套用到目前的推薦清單，不需要重新整理。</p>
+      <p class="settings-hint">立即套用，不需重新整理。</p>
       <div id="settings-recommend-style" class="settings-chip-list" role="radiogroup" aria-label="推薦風格"></div>
     </section>
 
     <section class="settings-section">
       <h3>賽事優先順序</h3>
-      <p class="settings-hint">時間衝突、精彩程度相近時，排名較前的運動優先——用 ↑↓ 排序，會立即套用到推薦清單。</p>
+      <p class="settings-hint">時間衝突時，排名較前的優先。</p>
       <div id="settings-sport-list" class="settings-sport-list"></div>
       <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設順序</button>
     </section>
 
     <section class="settings-section">
       <h3>已啟用的運動</h3>
-      <p class="settings-hint">關閉的運動完全不會出現在網站上（推薦與所有賽事都不會）。至少要開啟一項。</p>
+      <p class="settings-hint">關閉的運動不會出現在網站上。</p>
       <div id="settings-enabled-sports" class="settings-chip-list"></div>
-    </section>
-
-    <section class="settings-section">
-      <h3>訂閱的頻道／服務</h3>
-      <p class="settings-hint">標記你實際訂閱的頻道或服務，這些賽事會加註「已訂閱」，衝突時也會稍微優先。</p>
-      <div id="settings-my-services" class="settings-chip-list"></div>
     </section>
 
     <section class="settings-section">
@@ -78,7 +64,7 @@
       <p id="sync-status-text" class="settings-hint"></p>
       <div id="sync-connected-view" hidden>
         <p class="sync-code-display"><span id="sync-code-text"></span> <button id="sync-copy-btn" type="button">複製</button></p>
-        <button id="sync-disconnect-btn" type="button" class="settings-reset">停止同步（不會刪除雲端資料）</button>
+        <button id="sync-disconnect-btn" type="button" class="settings-reset">停止同步</button>
       </div>
       <div id="sync-disconnected-view">
         <button id="sync-create-btn" type="button" class="sync-action-btn">建立新的同步碼</button>
@@ -88,6 +74,21 @@
         </div>
       </div>
       <p id="sync-error-text" class="sync-error" hidden></p>
+    </section>
+
+    <section class="settings-section">
+      <h3>更新</h3>
+      <p id="update-status-text" class="settings-hint">檢查目前版本是否為最新。</p>
+      <div class="settings-btn-row">
+        <button id="check-update-btn" type="button" class="sync-action-btn">檢查更新</button>
+        <button id="refresh-data-btn" type="button" class="sync-action-btn is-secondary">重新整理資料</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3>開發者工具</h3>
+      <p class="settings-hint">匯出目前的推薦資料（JSON），可用來檢查推薦準確度。</p>
+      <button id="export-data-btn" type="button" class="sync-action-btn is-secondary">匯出推薦資料</button>
     </section>
   </div>
 
@@ -109,30 +110,23 @@
     <section id="recommended-section">
       <h2 class="section-label"><span data-day-label></span>推薦賽事</h2>
       <div id="recommended-list"></div>
-      <p id="recommended-empty" class="empty-state" hidden>
-        這一天沒有特別推薦的賽事，也可能都在深夜時段——本站不會把深夜賽事列為必看推薦。
-      </p>
+      <p id="recommended-empty" class="empty-state" hidden>今天沒有特別推薦的賽事。</p>
     </section>
 
     <section id="all-matches-section">
       <h2 class="section-label"><span data-day-label></span>所有賽事</h2>
       <div id="all-match-list"></div>
-      <p id="all-empty" class="empty-state" hidden>這一天沒有找到任何賽事。</p>
+      <p id="all-empty" class="empty-state" hidden>這一天沒有賽事。</p>
     </section>
 
     <section id="tbd-section" hidden>
       <h2 class="section-label">時間未定</h2>
-      <p class="section-sublabel">通常是季後賽——對戰組合已確定，實際開賽時間還沒公布。</p>
       <div id="tbd-list"></div>
     </section>
   </main>
 
-  <p id="empty-state" class="empty-state" hidden>
-    近期沒有找到即將開始的賽事，請稍後再回來看看。
-  </p>
-  <p id="error-state" class="empty-state" hidden>
-    無法載入賽事資料，網站可能正在建置第一批資料，請稍後再試一次。
-  </p>
+  <p id="empty-state" class="empty-state" hidden>近期沒有賽事，請稍後再回來看看。</p>
+  <p id="error-state" class="empty-state" hidden>無法載入資料，請稍後再試一次。</p>
 
   <footer class="page-footer">
     <p id="generated-note"></p>
@@ -140,7 +134,6 @@
       <span id="ai-status-text"></span>
       <a id="ai-refetch-link" href="#" target="_blank" rel="noopener">重新查詢</a>
     </p>
-    <p>賽程資料來自 ESPN 公開 API．推薦內容由 Gemini AI 透過共用代理伺服器產生。</p>
   </footer>
 
   <template id="match-card-template">
@@ -150,7 +143,7 @@
         <span class="match-time-relative"></span>
       </div>
       <div class="match-heading">
-        <span class="sport-badge"></span>
+        <span class="sport-badge"><span class="sport-icon"></span><span class="sport-badge-text"></span></span>
         <span class="recommended-tag" hidden>推薦</span>
       </div>
       <div class="teams" data-teams></div>

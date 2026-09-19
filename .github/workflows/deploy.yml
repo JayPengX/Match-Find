@@ -6,10 +6,14 @@ name: Build match data and deploy to Pages
 
 on:
   schedule:
-    # Every 6 hours. The anchor minute (17) is arbitrary - just off the
-    # top of the hour so this doesn't line up with every other repo's cron
-    # and hit GitHub's scheduling queue at the same instant.
-    - cron: '17 */6 * * *'
+    # Every 15 minutes - this only costs an ESPN fetch (a free, unauthenticated
+    # public API) on most runs: build-data.mjs's own AI_FETCH_MIN_INTERVAL_HOURS
+    # throttle is what actually keeps Gemini calls down to a few times a day
+    # regardless of how often this workflow itself fires, so running the
+    # workflow often is exactly what lets match/live-status data stay fresh
+    # without spending any extra AI quota. GitHub Pages is a public repo, so
+    # Actions minutes on GitHub-hosted runners aren't metered here either.
+    - cron: '*/15 * * * *'
   push:
     branches: ['main']
   workflow_dispatch: {}

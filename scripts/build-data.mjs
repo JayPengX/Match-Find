@@ -90,12 +90,18 @@ const PROMPT_VERSION = 7;
 const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
 // A scheduled run only actually calls Gemini if it's been at least this
 // long since the last real call - seeing a couple of newly-in-window
-// fixtures every 6 hours would otherwise mean several small Gemini calls a
-// day for no real benefit (see the top-of-file comment: quota only cares
-// about calling once per MATCH, but a steady trickle of small requests all
-// day is still more calls than one batched one). A push or manual dispatch
-// always calls it regardless - see main()'s throttling check.
-const AI_FETCH_MIN_INTERVAL_HOURS = 20;
+// fixtures every run would otherwise mean several small Gemini calls a day
+// for no real benefit (see the top-of-file comment: quota only cares about
+// calling once per MATCH, but a steady trickle of small requests all day is
+// still more calls than one batched one). A push or manual dispatch always
+// calls it regardless - see main()'s throttling check.
+//
+// 8, not 20+: the ESPN-only refresh now runs far more often than this (see
+// .github/workflows/deploy.yml's cron - every few minutes, since that half
+// is free and doesn't need throttling at all), so this constant alone is
+// what keeps the actual Gemini-scoring cadence down to "a few times a day"
+// regardless of how often the workflow itself fires.
+const AI_FETCH_MIN_INTERVAL_HOURS = 8;
 
 // ---- Contested-cluster refinement (the shared proxy's /match-recommend-refine) ------
 //

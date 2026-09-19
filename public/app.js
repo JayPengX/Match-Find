@@ -57,6 +57,26 @@ const SPORT_LABELS_ZH = {
   F1: 'F1'
 };
 
+// One small original pictogram per sport (not a league crest - Premier
+// League and MLS share the plain soccer-ball mark, same reasoning as
+// SERVICES' own iconSvg comment: an original shape drawn inline, not a
+// reproduction of any league's actual logo) so a sport badge reads at a
+// glance instead of as a plain colored pill of text. `currentColor` picks
+// up the badge's own text color (see styles.css's .sport-badge[data-sport]
+// rules), so one icon works across every badge color without its own fill.
+const SPORT_ICONS = {
+  'Premier League':
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="currentColor" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>',
+  MLS:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="currentColor" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>',
+  MLB:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M6.7 6.2c2.6 2.2 2.6 9.4 0 11.6M17.3 6.2c-2.6 2.2-2.6 9.4 0 11.6" stroke-linecap="round"/></svg>',
+  NBA:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6v16.8M6.2 5.8c2.1 3 2.1 9.4 0 12.4M17.8 5.8c-2.1 3-2.1 9.4 0 12.4" stroke-linecap="round"/></svg>',
+  F1:
+    '<svg viewBox="0 0 24 24" fill="none"><path d="M5.2 21V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><rect x="5.2" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="12.4" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="8.8" y="7.6" width="3.6" height="3.6" fill="currentColor"/><rect x="16" y="7.6" width="3.6" height="3.6" fill="currentColor"/></svg>'
+};
+
 // ---- Broadcast service registry -------------------------------------------
 //
 // `whereToWatchTw` (see the shared proxy's /match-recommend) is free-form text written
@@ -91,30 +111,22 @@ const SPORT_LABELS_ZH = {
 // recognizable logo/color badge and can be picked as "a service I own" in
 // Settings, scoped down to the services this site's own viewer actually
 // cares about tracking.
+// `iconSvg` is a small original pictogram (a TV outline, a broadcast-signal
+// mark), not a reproduction of either service's real trademarked logo -
+// drawn inline instead of hotlinked so the badge always renders (no
+// external request that can fail) and reads clearly at 18px on a solid
+// gradient instead of a flat color square with a squashed wordmark on top.
+// `logoBg` is a two-stop gradient, not a flat fill, purely so the badge
+// itself looks like a designed icon rather than a plain colored sticker.
 const SERVICES = [
-  // The Commons file this used to point at (ELTA_logo.svg) turned out, on
-  // closer look, to be the logo of ELTA - a Lithuanian news agency that
-  // just happens to share the initialism - not Taiwan's 愛爾達體育台 at
-  // all, and no genuine Commons file for the Taiwan channel's own mark
-  // existed to replace it with. This logo instead comes from 愛爾達電視's
-  // own official Android app icon on the Google Play Store - a real,
-  // confirmed-correct source, just not one with Commons' own "always
-  // resolves to the file's current version" redirect guarantee (a Play
-  // Store CDN link is a fixed image blob - it won't silently start
-  // pointing at a different app's icon later the way a wiki-editable
-  // Commons page theoretically could, but Google could still stop serving
-  // it if the app listing itself ever changed substantially). logoBg
-  // matches the icon's own baked-in background (it's a solid square, not
-  // transparent artwork) purely so there's no visible flash of a
-  // different color while the image itself is still loading.
   {
     id: 'elta',
     pattern: /愛爾達|ELTA/i,
     label: '愛爾達體育台',
     badge: '達',
     color: '#ff7a3d',
-    logo: 'https://play-lh.googleusercontent.com/vE0VONaUjXyEgpUv0efGHg2_GS_Kbmx3YKyWPWzmv8oX-BlTzDReK17V9GhuJ7e7MMmFWvrVyP08vn03Q_H3',
-    logoBg: '#ff7a3d'
+    iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="17.5" r="1.4" fill="#fff" stroke="none"/><path d="M8.3 14a5.2 5.2 0 0 1 7.4 0"/><path d="M5 10.8a9.4 9.4 0 0 1 14 0"/></svg>',
+    logoBg: 'linear-gradient(155deg, #ff9457, #e8531a)'
   },
   {
     id: 'appletv',
@@ -122,8 +134,8 @@ const SERVICES = [
     label: 'Apple TV',
     badge: 'TV',
     color: '#1d1d1f',
-    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/AppleTVLogo.svg',
-    logoBg: '#1d1d1f'
+    iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="12" rx="2.2"/><path d="M9 20.5h6"/><path d="M12 17.5v3"/></svg>',
+    logoBg: 'linear-gradient(155deg, #3a3a3d, #0c0c0e)'
   },
   {
     id: 'netflix',
@@ -135,13 +147,11 @@ const SERVICES = [
     logoBg: '#ffffff'
   }
 ];
-// Which of the above a viewer actually subscribes to - editable in
-// Settings (see "Enabled sports / subscribed services settings" below),
-// used only as a tie-breaking nudge in resolveViewingPlan (a match on a
-// service you don't have is still shown and can still be recommended, see
+// Fixed rather than a per-viewer Settings toggle (see "Broadcast service
+// registry" above) - this site's own owner's real subscriptions, used as a
+// tie-breaking nudge in resolveViewingPlan (a match on a service you don't
+// have is still shown and can still be recommended, see
 // OWNED_SERVICE_SCORE_BONUS below) and as a small "已訂閱" mark in the UI.
-// This default is this site's own owner's real subscriptions, used until a
-// viewer (this owner on a fresh device, or anyone else) picks their own.
 const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
 
 function resolveService(whereToWatchTw) {
@@ -184,7 +194,6 @@ const settingsResetBtn = document.getElementById('settings-reset-btn');
 const settingsRecommendStyle = document.getElementById('settings-recommend-style');
 const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
-const settingsMyServices = document.getElementById('settings-my-services');
 const syncStatusText = document.getElementById('sync-status-text');
 const syncConnectedView = document.getElementById('sync-connected-view');
 const syncDisconnectedView = document.getElementById('sync-disconnected-view');
@@ -198,6 +207,10 @@ const syncErrorText = document.getElementById('sync-error-text');
 const syncPromptBanner = document.getElementById('sync-prompt-banner');
 const syncPromptOpenBtn = document.getElementById('sync-prompt-open-btn');
 const syncPromptDismissBtn = document.getElementById('sync-prompt-dismiss-btn');
+const updateStatusText = document.getElementById('update-status-text');
+const checkUpdateBtn = document.getElementById('check-update-btn');
+const refreshDataBtn = document.getElementById('refresh-data-btn');
+const exportDataBtn = document.getElementById('export-data-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -341,7 +354,6 @@ state.priorityOrder = loadPriorityOrder();
 // page, not even in "所有賽事", since "enable/disable" is a plainer,
 // stronger statement than "prefer less".
 const ENABLED_SPORTS_STORAGE_KEY = 'matchfind-enabled-sports';
-const MY_SERVICES_STORAGE_KEY = 'matchfind-my-services';
 
 function loadEnabledSports() {
   try {
@@ -359,28 +371,14 @@ function saveEnabledSports(enabledSports) {
     // Private browsing / blocked storage - see savePriorityOrder's own comment.
   }
 }
-function loadMyServiceIds() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(MY_SERVICES_STORAGE_KEY));
-    if (!Array.isArray(stored)) return new Set(DEFAULT_MY_SERVICE_IDS);
-    return new Set(stored.filter(id => SERVICES.some(s => s.id === id)));
-  } catch {
-    return new Set(DEFAULT_MY_SERVICE_IDS);
-  }
-}
-function saveMyServiceIds(myServiceIds) {
-  try {
-    localStorage.setItem(MY_SERVICES_STORAGE_KEY, JSON.stringify([...myServiceIds]));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
-}
 state.enabledSports = loadEnabledSports();
-state.myServiceIds = loadMyServiceIds();
+// Not a per-viewer setting (see SERVICES' own comment) - fixed to this
+// site's own owner's real subscriptions.
+state.myServiceIds = new Set(DEFAULT_MY_SERVICE_IDS);
 
 // ---- Cross-device settings sync --------------------------------------------
 //
-// Syncs exactly three things - priorityOrder, enabledSports, myServiceIds -
+// Syncs exactly two things - priorityOrder, enabledSports -
 // across a viewer's own devices via a single passcode, through the shared
 // Cloudflare Worker (see the jaypengx-collab/shared-proxy repo's
 // /match-find-sync route, the same singleCredential design as its own
@@ -422,16 +420,15 @@ function buildSyncPayloadObject() {
   return {
     recommendStyle: state.recommendStyle,
     priorityOrder: state.priorityOrder,
-    enabledSports: [...state.enabledSports],
-    myServiceIds: [...state.myServiceIds]
+    enabledSports: [...state.enabledSports]
   };
 }
 
 // Applies a synced payload on top of local state - the same tolerant
-// filtering as the individual loadX functions above (an unknown sport/
-// service id, e.g. from an older or newer version of this site syncing
-// with this one, is dropped rather than trusted blindly), then persists it
-// locally so a later offline visit still has it.
+// filtering as the individual loadX functions above (an unknown sport id,
+// e.g. from an older or newer version of this site syncing with this one,
+// is dropped rather than trusted blindly), then persists it locally so a
+// later offline visit still has it.
 function applySyncPayloadObject(payload) {
   if (RECOMMEND_STYLES.some(s => s.id === payload?.recommendStyle)) {
     state.recommendStyle = payload.recommendStyle;
@@ -445,13 +442,9 @@ function applySyncPayloadObject(payload) {
     const known = payload.enabledSports.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
     if (known.length) state.enabledSports = new Set(known);
   }
-  if (Array.isArray(payload?.myServiceIds)) {
-    state.myServiceIds = new Set(payload.myServiceIds.filter(id => SERVICES.some(s => s.id === id)));
-  }
   saveRecommendStyle(state.recommendStyle);
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
-  saveMyServiceIds(state.myServiceIds);
 }
 
 async function syncFetch(method, { passcode = state.syncPasscode, body } = {}) {
@@ -720,7 +713,6 @@ function renderSettingsPanel() {
     })
   );
   renderEnabledSportsPanel();
-  renderMyServicesPanel();
   renderSyncPanel();
 }
 
@@ -733,7 +725,6 @@ function persistSettingsAndSync() {
   saveRecommendStyle(state.recommendStyle);
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
-  saveMyServiceIds(state.myServiceIds);
   if (state.syncPasscode) syncPush();
 }
 
@@ -761,27 +752,6 @@ function renderEnabledSportsPanel() {
         persistSettingsAndSync();
         renderEnabledSportsPanel();
         applyEnabledSportsAndRender();
-      });
-      return chip;
-    })
-  );
-}
-
-function renderMyServicesPanel() {
-  settingsMyServices.replaceChildren(
-    ...SERVICES.map(service => {
-      const owned = state.myServiceIds.has(service.id);
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = owned ? 'settings-chip is-active' : 'settings-chip';
-      chip.textContent = service.label;
-      chip.setAttribute('aria-pressed', String(owned));
-      chip.addEventListener('click', () => {
-        if (owned) state.myServiceIds.delete(service.id);
-        else state.myServiceIds.add(service.id);
-        persistSettingsAndSync();
-        renderMyServicesPanel();
-        recomputeAndRender();
       });
       return chip;
     })
@@ -978,6 +948,21 @@ const STACK_MAX_SCORE_GAP = 1.5;
 // isn't cut down arbitrarily.
 const STACK_MAX_ALTERNATIVES = 3;
 
+// The quality gates below exist to stop a busy day's stack from filling up
+// with mediocre leftovers - but on a day where the WHOLE schedule is only a
+// couple of fixtures, withholding one for merely missing a quality bar
+// leaves the viewer with less to pick from than the day actually had, which
+// defeats the point of a "quality" gate in the first place (there was
+// nothing to protect a sparse day's stack from). Confirmed live: a day with
+// just one MLB and one MLS fixture, genuinely overlapping, where the lower-
+// scored one fell under DIVERSITY_MIN_SCORE and was dropped entirely -
+// leaving only one match recommended on a day that only had two to begin
+// with. A day at or under this many TOTAL fixtures skips the quality gate
+// entirely for anything that already cleared MEANINGFUL_OVERLAP_MINUTES:
+// with this little to choose from all day, every genuine overlap is worth
+// seeing, not just the "good enough" ones.
+const SPARSE_DAY_MAX_MATCHES = 4;
+
 // The quality gate for "worth stacking" - MEANINGFUL_OVERLAP_MINUTES
 // already decided a candidate genuinely shares the anchor's own viewing
 // slot; this decides whether it's actually worth offering as a swipe
@@ -986,8 +971,10 @@ const STACK_MAX_ALTERNATIVES = 3;
 // - two comparable options for the same kind of viewing), or it's "a good
 // game from a different sport" (not required to be close to the anchor's
 // own score, since the point there is a different kind of match entirely,
-// not a closer call on the same one).
-function isStackQualityWorthy(candidate, anchor) {
+// not a closer call on the same one). `sparse` (see SPARSE_DAY_MAX_MATCHES)
+// bypasses both - on a sparse day there's no leftover glut to guard against.
+function isStackQualityWorthy(candidate, anchor, { sparse = false } = {}) {
+  if (sparse) return true;
   if (candidate.sport === anchor.sport) {
     return candidate.score >= STACK_MIN_SCORE && candidate.score >= anchor.score - STACK_MAX_SCORE_GAP;
   }
@@ -1004,6 +991,20 @@ function isQuietHours(match) {
 function matchInterval(match) {
   const start = Date.parse(match.startTimeUtc);
   return { start, end: start + match.durationMinutes * 60_000 };
+}
+
+// Unlike overlapMinutes below (which reads the `.interval` resolveViewingPlan
+// stamps on its own working copies, stripped back off before returning -
+// see that function's own final map), this computes straight from a plain
+// match's own startTimeUtc/durationMinutes, so rendering code (buildMatchCard)
+// can ask "when, exactly, do these two overlap" about the actual objects in
+// state.matches without needing its own copy of that internal field.
+function computeOverlapRange(a, b) {
+  const ai = matchInterval(a);
+  const bi = matchInterval(b);
+  const start = Math.max(ai.start, bi.start);
+  const end = Math.min(ai.end, bi.end);
+  return end > start ? { start, end } : null;
 }
 
 function overlapMinutes(a, b) {
@@ -1030,6 +1031,7 @@ function meaningfullyOverlaps(a, b) {
 // quiet-hour re-check.
 function pickDayRecommendations(dayMatches) {
   dayMatches.forEach(match => { match.recommended = false; });
+  const sparse = dayMatches.length <= SPARSE_DAY_MAX_MATCHES;
 
   // Anchor-claiming, highest-effectiveScore-first: an unclaimed match
   // becomes a cluster's anchor, and only matches that MEANINGFULLY overlap
@@ -1065,7 +1067,7 @@ function pickDayRecommendations(dayMatches) {
   clusters.forEach(({ anchor, members }) => {
     anchor.recommended = true;
     const worthy = members
-      .filter(m => isStackQualityWorthy(m, anchor))
+      .filter(m => isStackQualityWorthy(m, anchor, { sparse }))
       .sort((a, b) => b.score - a.score)
       .slice(0, STACK_MAX_ALTERNATIVES);
     if (worthy.length) anchor.stackAlternativeIds = worthy.map(m => m.id);
@@ -1177,7 +1179,7 @@ function renderVenue(el, match) {
   el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
-function buildMatchCard(match, { isStackAlternative = false } = {}) {
+function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null } = {}) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   const start = Date.parse(match.startTimeUtc);
   const end = start + match.durationMinutes * 60_000;
@@ -1207,8 +1209,11 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
   }
 
   const badge = node.querySelector('.sport-badge');
-  badge.textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
   badge.dataset.sport = match.sport;
+  const sportIcon = node.querySelector('.sport-icon');
+  if (SPORT_ICONS[match.sport]) sportIcon.innerHTML = SPORT_ICONS[match.sport];
+  else sportIcon.hidden = true;
+  node.querySelector('.sport-badge-text').textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
 
   const teamsEl = node.querySelector('[data-teams]');
   if (match.competitors && match.competitors.length === 2) {
@@ -1233,7 +1238,15 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
     const badgeLogo = watchEl.querySelector('.watch-logo');
     const badgeText = watchEl.querySelector('.watch-badge-text');
     const service = resolveService(match.whereToWatchTw);
-    if (service && service.logo) {
+    if (service && service.iconSvg) {
+      // A drawn-inline pictogram (see SERVICES' own comment) - never fails
+      // to load, so there's no hotlink fallback path to wire up here.
+      badge.hidden = false;
+      badge.style.background = service.logoBg || service.color || '#fff';
+      badgeLogo.hidden = true;
+      badgeText.hidden = true;
+      badge.innerHTML = service.iconSvg;
+    } else if (service && service.logo) {
       badge.hidden = false;
       badge.style.background = service.logoBg || '#fff';
       badgeLogo.src = service.logo;
@@ -1301,18 +1314,39 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
   //   2. Genuinely lost its slot with nothing surfacing it as an
   //      alternative anywhere - muted, with a note pointing at what's
   //      recommended instead.
+  //   3. The recommended pick itself, when something real overlaps it that
+  //      never made the stack (didn't clear isStackQualityWorthy) - an
+  //      informational note, not a warning, purely so the actual overlap
+  //      window is never silently invisible from the pick's own card.
+  // Every case that names another match also names the real, overlapping
+  // TIME window (via computeOverlapRange), not just that an overlap exists -
+  // "重疊" alone doesn't say whether it's 5 minutes or the whole game.
+  const fmtTime = ms => localTimeFormatter().format(new Date(ms));
+  const overlapClause = other => {
+    const range = computeOverlapRange(match, other);
+    return range ? `${fmtTime(range.start)}–${fmtTime(range.end)} 重疊` : '時間重疊';
+  };
   const conflictNote = node.querySelector('.conflict-note');
   if (isStackAlternative) {
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
-    conflictNote.textContent = '同一時段的另一個選擇——精彩程度也不差，滑動比較看看。';
+    const clause = stackAnchor ? overlapClause(stackAnchor) : '同時段';
+    conflictNote.textContent = `同一時段的另一個選擇（${clause}）——精彩程度也不差，滑動比較看看。`;
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
       conflictNote.hidden = false;
-      conflictNote.textContent = `與「${others.map(m => m.name).join('、')}」時間重疊——該時段推薦的是這一場。`;
+      conflictNote.textContent = `與「${others.map(m => m.name).join('、')}」${overlapClause(others[0])}——該時段推薦的是這一場。`;
     }
     node.classList.add('is-muted');
+  } else if (match.recommended && !isStackAlternative && (match.overlappingIds || []).length) {
+    const stackedIds = new Set(match.stackAlternativeIds || []);
+    const extra = state.matches.filter(m => match.overlappingIds.includes(m.id) && !stackedIds.has(m.id));
+    if (extra.length) {
+      conflictNote.hidden = false;
+      conflictNote.classList.add('is-info');
+      conflictNote.textContent = `同時段還有「${extra.map(m => m.name).join('、')}」（${overlapClause(extra[0])}），精彩程度稍低而未列入選擇。`;
+    }
   }
   if (match.recommended || isStackAlternative) node.classList.add('is-recommended');
 
@@ -1470,7 +1504,7 @@ function buildMatchStack(primary, alternatives, isPinned) {
   scroller.className = 'match-stack-scroller';
   const cards = [primary, ...alternatives];
   cards.forEach((match, index) => {
-    const card = buildMatchCard(match, { isStackAlternative: index > 0 });
+    const card = buildMatchCard(match, { isStackAlternative: index > 0, stackAnchor: primary });
     if (index === 0 && isPinned) card.classList.add('is-pinned');
     scroller.appendChild(card);
   });
@@ -1661,7 +1695,7 @@ function renderAiStatus(lastAiFetchAt) {
 }
 
 // Applies a freshly-fetched matches.json payload to the page. Used both by
-// the initial load and by pollForUpdates() below, so "how a payload turns
+// the initial load and by checkForUpdate() below, so "how a payload turns
 // into what's on screen" only exists in one place.
 function applyMatchData(data) {
   state.proxyUrl = data.proxyUrl || '';
@@ -1766,24 +1800,81 @@ function applyEnabledSportsAndRender() {
 //     file's own script/stylesheet tags with this build's commit sha at
 //     deploy time - pulls in fresh JS/CSS too, since the browser has never
 //     cached a URL with this exact query string before.
-async function pollForUpdates() {
+// `silent` is what makes this the same function for both the background
+// poll (setInterval, see init()) and the two manual Settings buttons: the
+// background poll doesn't want status text fighting with whatever else the
+// viewer might be looking at, while a viewer who just tapped "檢查更新" or
+// "重新整理資料" wants to actually see the answer, not just react to
+// whatever silently changes on screen behind the panel.
+async function checkForUpdate({ silent = false } = {}) {
+  if (!silent) {
+    updateStatusText.textContent = '檢查中…';
+    checkUpdateBtn.disabled = true;
+    refreshDataBtn.disabled = true;
+  }
   try {
     const response = await fetch('./data/matches.json', { cache: 'no-store' });
-    if (!response.ok) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    if (data.generatedAt === state.generatedAt) return; // nothing new
+    if (data.generatedAt === state.generatedAt) {
+      if (!silent) updateStatusText.textContent = '已是最新版本。';
+      return;
+    }
 
     if (state.buildId && data.buildId && data.buildId !== state.buildId) {
+      if (!silent) updateStatusText.textContent = '發現新版本，正在套用…';
       location.replace(`${location.pathname}?v=${encodeURIComponent(data.buildId)}`);
       return;
     }
 
     state.generatedAt = data.generatedAt;
     applyMatchData(data);
+    if (!silent) updateStatusText.textContent = '資料已更新。';
   } catch (error) {
     console.error('update check failed', error);
+    if (!silent) updateStatusText.textContent = '檢查失敗，請稍後再試。';
+  } finally {
+    if (!silent) {
+      checkUpdateBtn.disabled = false;
+      refreshDataBtn.disabled = false;
+    }
   }
 }
+checkUpdateBtn.addEventListener('click', () => checkForUpdate());
+// Same underlying check either way (this is a static site - there's no
+// separate "just the ESPN data" endpoint to hit) - a distinct second button
+// purely because the two read as different requests to a viewer ("is the
+// app itself updated" vs "get me whatever's fresh right now"), matching how
+// build-data.mjs itself separates a quota-free ESPN refresh from the
+// quota-throttled Gemini one (see that script's own AI_FETCH_MIN_INTERVAL_HOURS).
+refreshDataBtn.addEventListener('click', () => checkForUpdate());
+
+// A developer tool, not a viewer-facing feature (see its own Settings
+// section) - downloads the CURRENT recommendation plan as JSON, entirely
+// client-side. state.matches (post-resolveViewingPlan), not
+// state.rawMatches, is deliberately what's exported: the whole point is to
+// inspect the actual .recommended/.stackAlternativeIds/.score decision this
+// build made, not just the raw fetched fixtures behind it.
+function exportRecommendationData() {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    dataGeneratedAt: state.generatedAt || null,
+    recommendStyle: state.recommendStyle,
+    priorityOrder: state.priorityOrder,
+    enabledSports: [...state.enabledSports],
+    matches: state.matches
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `match-find-export-${localDateKey(new Date())}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+exportDataBtn.addEventListener('click', exportRecommendationData);
 
 async function init() {
   try {
@@ -1802,7 +1893,7 @@ async function init() {
     else maybeShowSyncPrompt();
 
     setInterval(() => renderSections(), 60_000);
-    setInterval(pollForUpdates, DATA_POLL_INTERVAL_MS);
+    setInterval(() => checkForUpdate({ silent: true }), DATA_POLL_INTERVAL_MS);
     // Periodic + on-focus sync pulls (see SYNC_POLL_INTERVAL_MS's own
     // comment) - both no-ops while unpaired, and both safe to fire
     // whenever: syncPull only ever actually applies/re-renders when the
