@@ -698,6 +698,18 @@ function relativeLabel(startMs, endMs) {
   return hours ? `${days} 天 ${hours} 小時後` : `${days} 天後`;
 }
 
+// "已結束" plus the final score, when build-data.mjs actually got one back
+// from ESPN as a plain number for both sides - anything else (missing,
+// non-numeric, only one side present) just falls back to the plain label
+// rather than showing a half-built or misleading score line.
+function finishedLabel(match) {
+  const scores = (match.competitors || []).map(c => Number(c.score));
+  if (scores.length === 2 && scores.every(Number.isFinite)) {
+    return `已結束．${scores[0]}–${scores[1]}`;
+  }
+  return '已結束';
+}
+
 // Local calendar date key, e.g. "2026-09-19" - deliberately NOT toISOString
 // (which would give the UTC date, off by a day for plenty of viewers around
 // midnight). Every date/day grouping in this file goes through this so a
@@ -939,21 +951,29 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // Computed across every fetched match regardless of day or quiet hours -
   // used purely for display (the "time overlaps what's recommended" note on
   // a non-recommended card) and as the candidate pool pickDayRecommendations
-  // draws its stack alternatives from.
+  // draws its stack alternatives from. A finished match is excluded on both
+  // sides of this: it's never itself worth flagging as "overlaps something
+  // else" (it's over, there's nothing left to conflict with), and it's not
+  // a real alternative for anything still upcoming either.
   withIntervals.forEach(match => {
-    match.overlappingIds = withIntervals
-      .filter(other => other.id !== match.id && overlapMinutes(match, other) > 0)
-      .map(other => other.id);
+    match.overlappingIds = match.isFinished
+      ? []
+      : withIntervals
+          .filter(other => other.id !== match.id && !other.isFinished && overlapMinutes(match, other) > 0)
+          .map(other => other.id);
   });
 
   // "What's worth watching" is decided one local calendar day at a time
-  // (see top-of-section comment) - bucket every eligible (non-quiet-hour)
-  // match by the local day it starts on, then run the whole DP/diversity/
-  // stacking pipeline independently per day. A match excluded here
-  // (quiet hours) simply keeps its default `recommended: false` from above.
+  // (see top-of-section comment) - bucket every eligible (non-quiet-hour,
+  // not-already-finished) match by the local day it starts on, then run the
+  // whole DP/diversity/stacking pipeline independently per day. A match
+  // excluded here (quiet hours, or already over) simply keeps its default
+  // `recommended: false` from above - a finished match has nothing left to
+  // recommend, it's kept around purely so the day's schedule stays visible
+  // and continuous instead of matches disappearing the moment they end.
   const byDay = new Map();
   withIntervals
-    .filter(m => !isQuietHours(m))
+    .filter(m => !isQuietHours(m) && !m.isFinished)
     .forEach(match => {
       const dayKey = localDateKey(new Date(match.interval.start));
       if (!byDay.has(dayKey)) byDay.set(dayKey, []);
@@ -1019,7 +1039,15 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
     // column used to take real hunting to parse, especially on a phone.
     node.querySelector('.match-time-range').textContent =
       `${localTimeFormatter().format(new Date(start))} – ${localTimeFormatter().format(new Date(end))}`;
-    node.querySelector('.match-time-relative').textContent = relativeLabel(start, end);
+    // A finished match's real end time rarely matches `end` above (that's
+    // only ever durationMinutes' per-sport AVERAGE - see build-data.mjs's
+    // isFinished comment), so this says "已結束" (plus the final score,
+    // when ESPN reported both as plain numbers) instead of a relative
+    // countdown/直播中 that would otherwise still be computed from that
+    // same unreliable estimated end time.
+    node.querySelector('.match-time-relative').textContent = match.isFinished
+      ? finishedLabel(match)
+      : relativeLabel(start, end);
   }
 
   const badge = node.querySelector('.sport-badge');
@@ -1133,7 +1161,16 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
   if (match.recommended || isStackAlternative) node.classList.add('is-recommended');
 
   const now = Date.now();
-  if (!match.timeTbd && now >= start && now < end) node.classList.add('is-live');
+  // isFinished is authoritative (ESPN's own status - see build-data.mjs's
+  // own comment on why it can't just be inferred from `end`, which is only
+  // ever a per-sport AVERAGE duration) - checked first so a game that ran
+  // long past that average never gets mislabeled 直播中/live after it's
+  // actually already over.
+  if (match.isFinished) {
+    node.classList.add('is-finished');
+  } else if (!match.timeTbd && now >= start && now < end) {
+    node.classList.add('is-live');
+  }
 
   return node;
 }
@@ -1146,7 +1183,14 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
 // reorders anything on the day containing "now".
 function pinCurrentOrNext(sortedMatches) {
   const now = Date.now();
-  const pinIndex = sortedMatches.findIndex(m => Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now);
+  // isFinished (ESPN's own status) is checked first, same reasoning as
+  // pickInitialDay's own comment - without it, a match that ran long past
+  // its per-sport AVERAGE duration estimate (the fallback below) would
+  // still look "current" here even though it's already over, now that a
+  // finished match stays in the list instead of disappearing.
+  const pinIndex = sortedMatches.findIndex(
+    m => !m.isFinished && Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now
+  );
   if (pinIndex <= 0) return sortedMatches;
   const pinned = sortedMatches[pinIndex];
   return [pinned, ...sortedMatches.slice(0, pinIndex), ...sortedMatches.slice(pinIndex + 1)];
@@ -1411,6 +1455,12 @@ function pickInitialDay(days, matches) {
   const todayKey = localDateKey(new Date());
   const todayHasRemaining = matches.some(m => {
     if (localDateKey(new Date(m.startTimeUtc)) !== todayKey) return false;
+    // isFinished (ESPN's own status) is authoritative and checked first - a
+    // finished match now stays in `matches` for schedule continuity (see
+    // build-data.mjs), so without this a game that ran long past its
+    // per-sport AVERAGE duration estimate (the fallback below) would still
+    // read as "remaining" here even though it's actually already over.
+    if (m.isFinished) return false;
     return Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now;
   });
   if (todayHasRemaining) return todayKey;

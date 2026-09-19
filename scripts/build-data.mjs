@@ -199,7 +199,13 @@ function buildCompetitor(leagueId, c) {
     abbreviation,
     logo: c.team?.logo || '',
     homeAway: c.homeAway || '',
-    record: parseOverallRecord(c)
+    record: parseOverallRecord(c),
+    // Only meaningful once the fixture is live or finished ('pre' fixtures
+    // report "0" same as a real scoreless one) - the client only ever reads
+    // this for a finished match's final-score line (see buildMatchCard),
+    // so a 'pre' fixture's meaningless "0" is harmless dead weight, not a
+    // bug worth filtering out here.
+    score: c.score ?? null
   };
 }
 
@@ -243,21 +249,30 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       if (seenIds.has(event.id)) continue; // a doubleheader's 2nd game can appear under both query dates near midnight UTC
       const competition = event.competitions?.[0];
       const statusType = competition?.status?.type;
-      // Only a truly FINISHED fixture ('post') is excluded - a LIVE one
-      // ('in') is exactly what this site should be recommending someone
-      // watch right now, and used to be dropped here by mistake: this
-      // script re-fetches ESPN's feed on every scheduled run (every ~6h)
-      // AND on every push, and a fixture that was 'pre' (upcoming) at one
-      // run has very often flipped to 'in' by the time the next run
-      // happens mid-game - previously that meant a match simply vanished
-      // from matches.json the moment it actually started, taking its
-      // "recommended" status and the client's own "直播中"/is-live
-      // styling (public/app.js's relativeLabel/buildMatchCard - both
+      // 'pre'/'in'/'post' all kept now - a FINISHED fixture used to be
+      // excluded here too, which meant a match simply vanished off the page
+      // the instant it ended (same underlying mistake as the 'in'/live fix
+      // below: this script re-fetches ESPN's feed every ~6h AND on every
+      // push, so a fixture that was 'in' at one run is very often 'post' by
+      // the next one). For someone scanning "what happened today" rather
+      // than only "what's on right now", a match disappearing the moment it
+      // finishes reads as a bug, not a feature - the whole day's schedule
+      // should stay visible and continuous. isFinished (below) is what lets
+      // the client (public/app.js's buildMatchCard) render it as an ended,
+      // non-recommendable match instead of a live or upcoming one.
+      //
+      // A LIVE one ('in') is exactly what this site should be recommending
+      // someone watch right now, and used to be dropped here by mistake for
+      // the same re-fetch-mid-game reason - previously that meant a match
+      // simply vanished from matches.json the moment it actually started,
+      // taking its "recommended" status and the client's own "直播中"/
+      // is-live styling (public/app.js's relativeLabel/buildMatchCard - both
       // already built to handle a live match, just never fed one) with it.
       // Confirmed live: a viewer mid-game, asking why "today" suddenly
       // showed nothing for the sport they were actively watching.
-      if (statusType?.state !== 'pre' && statusType?.state !== 'in') continue;
+      if (!['pre', 'in', 'post'].includes(statusType?.state)) continue;
       const isLive = statusType.state === 'in';
+      const isFinished = statusType.state === 'post';
       const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(event.date);
       if (!Number.isFinite(startMs)) continue;
@@ -275,8 +290,13 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       // means), which the plain `startMs < now` check would otherwise
       // reject as if it were a stale event from outside the window - the
       // upper bound still applies (windowEndMs is always well in the
-      // future, so this never actually lets in anything unreasonable).
-      if (!timeTbd && !isLive && (startMs < now.getTime() || startMs > windowEndMs)) continue;
+      // future, so this never actually lets in anything unreasonable). A
+      // FINISHED fixture is exempted the same way and for the same reason -
+      // its start is necessarily in the past too - and is in no danger of
+      // reaching arbitrarily far back in time doing so: the `dates` array
+      // above only ever queries one day before `now`, so the oldest a kept
+      // 'post' fixture's start can be is that one extra day, never more.
+      if (!timeTbd && !isLive && !isFinished && (startMs < now.getTime() || startMs > windowEndMs)) continue;
       seenIds.add(event.id);
 
       // Always [away, home] regardless of the order ESPN happens to list
@@ -321,6 +341,13 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         // only a placeholder and the client (public/app.js) knows not to
         // schedule or display this fixture by clock time at all.
         timeTbd,
+        // isFinished is authoritative (ESPN's own status), unlike "is this
+        // live right now" which the client derives itself from the current
+        // time against startTimeUtc/durationMinutes - a finished game can't
+        // be inferred the same way since durationMinutes is only ever a
+        // per-sport AVERAGE broadcast length (see TEAM_LEAGUES' own
+        // comment), not this specific game's real one.
+        isFinished,
         durationMinutes: league.durationMinutes,
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
@@ -380,13 +407,18 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       const statusType = session.status?.type;
       // Same fix as fetchTeamLeagueMatches above, same reasoning: a LIVE
       // session ('in' - e.g. an in-progress qualifying or race) should
-      // still be recommendable, not dropped the moment it starts.
-      if (statusType?.state !== 'pre' && statusType?.state !== 'in') continue;
+      // still be recommendable, not dropped the moment it starts, and a
+      // FINISHED one ('post') stays visible too instead of vanishing off
+      // the day's schedule the moment it ends - see that function's own
+      // comment on isFinished for why continuity across the whole day
+      // matters, not just "what's on right now".
+      if (!['pre', 'in', 'post'].includes(statusType?.state)) continue;
       const isLive = statusType.state === 'in';
+      const isFinished = statusType.state === 'post';
       const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(session.date || event.date);
       if (!Number.isFinite(startMs)) continue;
-      if (!timeTbd && !isLive && (startMs < now.getTime() || startMs > windowEndMs)) continue;
+      if (!timeTbd && !isLive && !isFinished && (startMs < now.getTime() || startMs > windowEndMs)) continue;
 
       const broadcast = (session.broadcasts || []).flatMap(b => b.names || []).slice(0, 1)[0];
 
@@ -397,6 +429,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
         nameZh: raceNameZh ? `${raceNameZh}${sessionType.labelSuffixZh ? '－' + sessionType.labelSuffixZh : ''}` : '',
         startTimeUtc: new Date(startMs).toISOString(),
         timeTbd,
+        isFinished,
         durationMinutes: sessionType.durationMinutes,
         venue: event.circuit?.fullName || '',
         broadcast: broadcast || '',
@@ -702,29 +735,6 @@ async function main() {
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
-  // TEMPORARY diagnostic - user disputes the exact start times of the
-  // "tomorrow" MLB slate; need the real, exact, sorted per-match times
-  // (not just counts) for both today's and tomorrow's Taipei-day buckets
-  // to settle it against real ESPN data rather than assumption. Removed
-  // in the immediate follow-up once confirmed.
-  {
-    const taipeiParts = iso => {
-      const d = new Date(Date.parse(iso) + 8 * 3600_000);
-      const dateKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-      const clock = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-      return { dateKey, clock };
-    };
-    const nowTaipei = taipeiParts(now.toISOString());
-    console.log('[debug] now UTC:', now.toISOString(), '-> Taipei:', nowTaipei.dateKey, nowTaipei.clock);
-    for (const sport of ['MLB', 'MLS']) {
-      const rows = matches
-        .filter(m => m.sport === sport && !m.timeTbd)
-        .map(m => ({ id: m.id, name: m.name, ...taipeiParts(m.startTimeUtc) }))
-        .sort((a, b) => (a.dateKey + a.clock).localeCompare(b.dateKey + b.clock));
-      console.log(`[debug] ${sport} full sorted Taipei times:`, JSON.stringify(rows));
-    }
-  }
-
   let cache = pruneCache(await loadCache(), now);
   const meta = await loadMeta();
 
@@ -735,7 +745,13 @@ async function main() {
   // actually search instead of guess) instead of keeping a stale answer
   // forever, since source: 'ai' alone would otherwise mark it "done" for
   // good.
+  // A finished match is never worth a Gemini call - "is this worth
+  // watching" is moot once it's over - so it's excluded here regardless of
+  // whether it happens to already have a cache entry from when it was
+  // still 'pre'/'in' (see the scoring loop below for how it's handled
+  // instead: no score, not recommendable).
   const needsScoring = matches.filter(m => {
+    if (m.isFinished) return false;
     const cached = cache[m.id];
     return !cached || cached.source !== 'ai' || cached.promptVersion !== PROMPT_VERSION;
   });
@@ -787,6 +803,20 @@ async function main() {
 
   let usedAi = false;
   for (const match of matches) {
+    // A finished match never gets a "worth watching" score at all - see
+    // needsScoring's own comment above. score: 0 keeps it out of
+    // findContestedClusters (CONTESTED_MIN_SCORE) without needing a
+    // separate isFinished check there too.
+    if (match.isFinished) {
+      match.competitiveness = null;
+      match.watchability = null;
+      match.reason = '';
+      match.venueZh = '';
+      match.whereToWatchTw = '';
+      match.source = 'finished';
+      match.score = 0;
+      continue;
+    }
     const scored = cache[match.id] || { ...heuristicScore(match), source: 'heuristic' };
     match.competitiveness = scored.competitiveness;
     match.watchability = scored.watchability;
@@ -823,7 +853,18 @@ async function main() {
     buildId: BUILD_ID,
     daysAhead: DAYS_AHEAD,
     lastAiFetchAt: meta.lastAiFetchAt || null,
-    source: matches.length === 0 ? 'none' : usedAi ? (matches.every(m => m.source === 'ai') ? 'ai' : 'mixed') : 'heuristic',
+    // 'finished' matches are excluded from this "is everything AI-scored"
+    // check - they're never scored at all (see the scoring loop above), so
+    // counting them here would report 'mixed' the instant even one match on
+    // the page has ended, regardless of how the rest were actually scored.
+    source:
+      matches.length === 0
+        ? 'none'
+        : usedAi
+          ? matches.every(m => m.isFinished || m.source === 'ai')
+            ? 'ai'
+            : 'mixed'
+          : 'heuristic',
     // Baked in at build time so the browser knows where to send its own
     // settings-sync calls (see public/app.js's sync section) - a plain
     // variable, not a secret (same reasoning as PROXY_URL's own comment
