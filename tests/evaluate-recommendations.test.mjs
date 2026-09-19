@@ -1,6 +1,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractMatches, matchupKey, summarize } from '../scripts/evaluate-recommendations.mjs';
+import {
+  extractMatches,
+  matchupKey,
+  summarize,
+  computePlannerOracle,
+  computeDimensionCorrelations
+} from '../scripts/evaluate-recommendations.mjs';
+import { computeDayPlan } from '../public/lib/recommendation.mjs';
 
 function match(overrides = {}) {
   return {
@@ -94,5 +101,115 @@ describe('summarize', () => {
     assert.equal(report.totalMatches, 0);
     assert.equal(report.recommendedRate, 0);
     assert.deepEqual(report.recurringMatchups.topRecurring, []);
+  });
+
+  test('includes a plannerOracle and dimensionCorrelations section', () => {
+    const report = summarize([]);
+    assert.ok(report.plannerOracle);
+    assert.ok(report.dimensionCorrelations);
+  });
+});
+
+// A high-reliability, fully-controllable-timing fixture - same shape as
+// recommendation.test.mjs's own footballMatch helper, kept separate since
+// these two test files don't share fixtures across the module boundary.
+function footballMatch(overrides = {}) {
+  return {
+    id: 'm', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z',
+    durationMinutes: 60, enduranceScore: 10, isFinished: false, timeTbd: false,
+    effectiveScore: 5, recommended: false,
+    ...overrides
+  };
+}
+
+describe('computePlannerOracle', () => {
+  test('a genuinely optimal plan (as computeDayPlan itself would produce) scores a 100% ratio', () => {
+    // Same "A alone (10) loses to B+C (9+9=18)" scenario as
+    // recommendation.test.mjs's Test 3 - let the real scheduler decide,
+    // then verify the oracle agrees it was optimal.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    computeDayPlan('2026-09-19', [a, b, c]);
+    const oracle = computePlannerOracle([a, b, c]);
+    assert.equal(oracle.overallRatio, 1);
+    assert.equal(oracle.daysBelowOptimal, 0);
+  });
+
+  test('catches a genuinely suboptimal plan and reports a ratio below 1', () => {
+    // Same three matches, but hand-set to the WORSE "pick A alone" outcome
+    // a broken scheduler might produce - the oracle should independently
+    // discover B+C (18) beats A (10) and report actual/oracle = 10/18.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10, recommended: true });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9, recommended: false });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9, recommended: false });
+    const oracle = computePlannerOracle([a, b, c]);
+    assert.ok(oracle.overallRatio < 1);
+    assert.equal(oracle.totalActualValue, 10);
+    assert.equal(oracle.totalOracleValue, 18);
+    assert.equal(oracle.daysBelowOptimal, 1);
+  });
+
+  test('a pinned (isPreferred) pick is honored as a hard constraint, not penalized as suboptimal', () => {
+    const higher = footballMatch({ id: 'higher', startTimeUtc: '2026-09-21T18:00:00.000Z', effectiveScore: 9, recommended: false });
+    const pinned = footballMatch({ id: 'pinned', startTimeUtc: '2026-09-21T18:02:00.000Z', effectiveScore: 5, recommended: true, isPreferred: true });
+    const oracle = computePlannerOracle([higher, pinned]);
+    assert.equal(oracle.overallRatio, 1);
+  });
+
+  test('an empty match list produces a well-formed, non-crashing report', () => {
+    const oracle = computePlannerOracle([]);
+    assert.equal(oracle.dayCount, 0);
+    assert.equal(oracle.overallRatio, null);
+    assert.deepEqual(oracle.worstDays, []);
+  });
+
+  test('finished and quiet-hours matches are excluded from candidacy, same as computeDayPlan', () => {
+    const finished = footballMatch({ id: 'f', isFinished: true, recommended: false });
+    const quiet = footballMatch({ id: 'q', startTimeUtc: '2026-09-19T03:00:00.000Z', recommended: false }); // 03:00 UTC local hour 3 - quiet hours
+    const oracle = computePlannerOracle([finished, quiet]);
+    assert.equal(oracle.dayCount, 0);
+  });
+});
+
+describe('computeDimensionCorrelations', () => {
+  function scored(overrides) {
+    return { sport: 'MLB', isFinished: false, competitiveness: 5, watchability: 5, enduranceScore: 5, broadcastQuality: 5, ...overrides };
+  }
+
+  test('identical dimensions correlate perfectly (r=1) and get flagged as highly correlated', () => {
+    const matches = Array.from({ length: 6 }, (_, i) =>
+      scored({ id: 'm' + i, competitiveness: i + 1, watchability: i + 1 })
+    );
+    const result = computeDimensionCorrelations(matches);
+    assert.equal(result.MLB.pairs['competitiveness<->watchability'], 1);
+    assert.ok(result.MLB.highlyCorrelated.includes('competitiveness<->watchability'));
+  });
+
+  test('a dimension with zero variance reports null (undefined), not a fabricated 0', () => {
+    const matches = Array.from({ length: 6 }, (_, i) => scored({ id: 'm' + i, competitiveness: i + 1, enduranceScore: 5 }));
+    const result = computeDimensionCorrelations(matches);
+    assert.equal(result.MLB.pairs['competitiveness<->enduranceScore'], null);
+  });
+
+  test('sports with fewer than the minimum sample size are excluded entirely', () => {
+    const matches = [scored({ id: 'a' }), scored({ id: 'b' })];
+    assert.deepEqual(computeDimensionCorrelations(matches), {});
+  });
+
+  test('correlations are computed separately per sport', () => {
+    const mlb = Array.from({ length: 5 }, (_, i) => scored({ id: 'mlb' + i, sport: 'MLB', competitiveness: i + 1, watchability: i + 1 }));
+    const f1 = Array.from({ length: 5 }, (_, i) => scored({ id: 'f1' + i, sport: 'F1', competitiveness: i + 1, watchability: 5 - i }));
+    const result = computeDimensionCorrelations([...mlb, ...f1]);
+    assert.equal(result.MLB.pairs['competitiveness<->watchability'], 1);
+    assert.equal(result.F1.pairs['competitiveness<->watchability'], -1);
+  });
+
+  test('a finished match (null dimensions) is excluded rather than crashing the calculation', () => {
+    const matches = [
+      ...Array.from({ length: 5 }, (_, i) => scored({ id: 'm' + i })),
+      { id: 'done', sport: 'MLB', isFinished: true, competitiveness: null, watchability: null, enduranceScore: null, broadcastQuality: null }
+    ];
+    assert.doesNotThrow(() => computeDimensionCorrelations(matches));
   });
 });
