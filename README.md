@@ -72,6 +72,20 @@ Scoring and picking are split across two different places, deliberately:
   above, it's all in the one `matches.json` fetched on page load). Defaults
   to today, but jumps ahead to the next day that still has a fixture to
   come if today's are all already over.
+- A row of **sport filter chips** (全部/英超/MLB/...) below the day picker,
+  built only from sports actually present in the enabled set (see "Enabled
+  sports settings" below) - narrows both sections below to one sport.
+  Picking a sport chip that has nothing on the currently selected day (see
+  `ensureSelectedDayHasActiveSport`) jumps the day picker to the nearest
+  day that actually has one instead of leaving both sections empty for no
+  visible reason - a real, common case for MLB/MLS specifically: Taiwan is
+  far enough ahead of US time zones that a US evening fixture almost always
+  lands on the viewer's *next* local calendar date (see `localDateKey`),
+  so "today" can be genuinely, correctly empty for MLB while a full
+  night's worth of real matches sit one tab over on "明天". Disabling a
+  sport in Settings while its chip is the active filter resets the filter
+  to 全部 the same way, rather than leaving the page stuck showing nothing
+  for a sport that no longer exists in the enabled set at all.
 - For the selected day: **推薦賽事 ("recommended fixtures")**, the curated
   back-to-back lineup described above, closest/live match first.
 - Below that: **所有賽事 ("all fixtures")**, every fixture that day
@@ -95,23 +109,38 @@ Scoring and picking are split across two different places, deliberately:
   the scenes; the page itself only ever shows the recommendation, not the
   data behind it.
 - A recommended fixture with a genuinely stack-worthy overlapping
-  alternative (see `isStackWorthy` in `resolveViewingPlan`) renders as a
-  **horizontally swipeable card stack** (native CSS scroll-snap, the same
-  kind of touch swipe the day picker already uses) instead of either
+  alternative (see `isStackQualityWorthy` in `resolveViewingPlan`) renders
+  as a **horizontally swipeable card stack** (native CSS scroll-snap, the
+  same kind of touch swipe the day picker already uses) instead of either
   silently picking one or showing several at once - only one card is ever
   on screen by default, the others are a deliberate swipe away with dots
   marking how many there are. A version of this that showed every
   alternative expanded at once was tried first and dropped as too
-  cluttered. Stacking stayed too eager even after that, so `isStackWorthy`
-  narrowed it to exactly two cases: the alternative is genuinely "equally
-  good" (a close score, same sport as the anchor), or it's a good game from
-  a *different* sport - and either way its own start time has to actually
-  be close to the anchor's (`STACK_TIME_TOLERANCE_MINUTES`), not just have
-  a duration that happens to overlap it, so a ~7am pick's stack can't pull
-  in an unrelated ~8am fixture or bleed into the next slot's own stack. A
-  diversity-floor pick (see above) is never absorbed into another match's
-  stack either, so a sport rescued by the diversity floor can't lose that
-  guaranteed slot just because it overlaps a higher-scored pick.
+  cluttered. What counts as "worth stacking" went through a few rounds of
+  tuning: `isStackQualityWorthy` gates on exactly two cases - the
+  alternative is genuinely "equally good" (a close score, same sport as
+  the anchor), or it's a good game from a *different* sport - but the two
+  places that call it use **different timing gates**, since they turned
+  out to need different answers to "does this actually belong in the same
+  slot":
+  - Merging two matches that *each independently earned* their own
+    recommended slot (one from the DP, one from the diversity floor, say)
+    additionally requires their own **start times** to be close
+    (`STACK_TIME_TOLERANCE_MINUTES`) - not just a duration that happens to
+    overlap - so a ~7am pick can't silently absorb an unrelated ~8am pick
+    that also won its own slot.
+  - Attaching *extra*, never-independently-recommended fixtures to an
+    already-decided anchor's stack instead uses real time overlap (the
+    same `overlapMinutes` the rest of the scheduler uses) with no extra
+    start-time gate - a start-time-only gate was tried here too and
+    reverted: MLB alone routinely has several good, genuinely-simultaneous
+    games starting 40-60 minutes apart (each running ~3 hours), and a
+    tighter gate was quietly excluding real, good alternatives instead of
+    surfacing them.
+  
+  A diversity-floor pick (see above) is never absorbed into another
+  match's stack either, so a sport rescued by the diversity floor can't
+  lose that guaranteed slot just because it overlaps a higher-scored pick.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day

@@ -792,44 +792,49 @@ const DIVERSITY_MIN_SCORE = 6.5;
 // in fixtures nobody would call "equally good".
 const STACK_MIN_SCORE = 6;
 // The second half of "equally good" (same-sport case only - see
-// isStackWorthy below) - a same-sport overlapping fixture also has to come
-// within this many points of the recommended match's own score, so a great
-// pick's stack doesn't fill up with merely-decent leftovers just because
-// STACK_MIN_SCORE alone let them through. Tightened from an earlier, looser
-// 1.5 after live use showed stacks forming too readily - "equally good"
-// should be a narrow bar, not "in the same ballpark".
-const STACK_MAX_SCORE_GAP = 1;
+// isStackQualityWorthy below) - a same-sport overlapping fixture also has
+// to come within this many points of the recommended match's own score, so
+// a great pick's stack doesn't fill up with merely-decent leftovers just
+// because STACK_MIN_SCORE alone let them through.
+const STACK_MAX_SCORE_GAP = 1.5;
 // Caps how many alternatives one stack can hold - a "swipe to see what
-// else was on" gesture stops being quick past a handful of cards. Trimmed
-// from an earlier 3 for the same reason as STACK_MAX_SCORE_GAP: stacking
-// was happening too readily, and a stack of 2 is already the point where
-// "swipe to compare" is a quick, deliberate action rather than clutter.
-const STACK_MAX_ALTERNATIVES = 2;
-// How close two fixtures' own START times have to be to belong in the same
-// stack - deliberately separate from OVERLAP_TOLERANCE_MINUTES/durationMinutes
-// overlap above: a stack is presented as "the same time slot, pick one", so
-// it has to actually be about the same clock time, not just have durations
-// that happen to overlap (MLB's 190-minute average means a 7pm game's
-// interval can technically overlap one starting past 9pm). Live symptom
-// this fixes: a match recommended for ~7am pulling in an unrelated ~8am
-// fixture as a "same slot" alternative, or two adjacent recommended slots
-// (a 7am stack and an 8am stack) bleeding into one.
+// else was on" gesture stops being quick past a handful of cards. MLB
+// alone can field ~15 games a night, several genuinely good at once, so
+// this stays generous enough that a real slate of good options isn't cut
+// down to one or two arbitrarily.
+const STACK_MAX_ALTERNATIVES = 3;
+// How close two fixtures' own START times have to be to merge as the SAME
+// recommended slot (see the cluster/anchor-merge pass in
+// pickDayRecommendations) - deliberately separate from
+// OVERLAP_TOLERANCE_MINUTES/durationMinutes overlap above: two matches that
+// EACH independently earned their own recommended slot (one from the DP,
+// one from the diversity floor, say) shouldn't collapse into one just
+// because their broadcast windows graze each other - durationMinutes is
+// only ever a per-sport average, so a match's real broadcast window is
+// wider than its recorded interval, and treating any graze as "the same
+// slot" is what let a 7am pick's stack absorb an unrelated 8am pick, or
+// two genuinely separate slots bleed into one. This tighter, start-time-
+// based gate ONLY applies to merging two already-independently-recommended
+// picks - see isStackQualityWorthy's own comment for why the
+// alternative-attachment pass (surfacing EXTRA good, not-independently-
+// recommended fixtures airing at the same time) uses real overlap instead.
 const STACK_TIME_TOLERANCE_MINUTES = 30;
 
-// Whether an overlapping-but-not-primary fixture is worth adding to a
-// recommended match's swipeable stack at all - the single gate both the
-// cluster-merge pass and the alternative-attachment pass below apply, so
-// "what counts as stack-worthy" only has one definition. Two, and only two,
-// things justify a stack entry: the fixture is genuinely "equally good" (a
-// close score AND the SAME sport as the anchor - two comparable options for
-// the same kind of viewing), or it's "a good game from a different sport"
-// (a real diversity pick, not required to be close to the anchor's own
-// score, since the point there is a different kind of match entirely, not
-// a closer call on the same one). Either way the fixture's own start time
-// has to actually be close to the anchor's - see STACK_TIME_TOLERANCE_MINUTES.
-function isStackWorthy(candidate, anchor) {
-  const startDiffMinutes = Math.abs(candidate.interval.start - anchor.interval.start) / 60_000;
-  if (startDiffMinutes > STACK_TIME_TOLERANCE_MINUTES) return false;
+// The quality half of "worth stacking" - shared by both the cluster-merge
+// pass and the alternative-attachment pass in pickDayRecommendations, so
+// "what counts as good enough to stack" only has one definition. Two, and
+// only two, things justify a stack entry: the fixture is genuinely
+// "equally good" (a close score AND the SAME sport as the anchor - two
+// comparable options for the same kind of viewing), or it's "a good game
+// from a different sport" (a real diversity pick, not required to be close
+// to the anchor's own score, since the point there is a different kind of
+// match entirely, not a closer call on the same one). This is deliberately
+// just the quality half - see each call site for its own TIMING gate
+// (STACK_TIME_TOLERANCE_MINUTES for the cluster-merge pass, real
+// overlapMinutes for the alternative-attachment pass), since "is this
+// worth stacking at all" and "does it actually belong in THIS slot" turned
+// out to need different timing answers depending on what's being merged.
+function isStackQualityWorthy(candidate, anchor) {
   if (candidate.sport === anchor.sport) {
     return candidate.score >= STACK_MIN_SCORE && candidate.score >= anchor.score - STACK_MAX_SCORE_GAP;
   }
@@ -983,8 +988,9 @@ function pickDayRecommendations(dayMatches) {
   // A diversity pick (see isDiversityPick above) is never eligible to be
   // absorbed as a cluster member: its entire purpose is guaranteeing that
   // sport a slot today, and letting it get folded into a higher-scored
-  // anchor's cluster - then possibly fail isStackWorthy and get dropped
-  // outright - would silently defeat that guarantee the moment its one
+  // anchor's cluster - then possibly fail the stack-worthy checks below and
+  // get dropped outright - would silently defeat that guarantee the moment
+  // its one
   // fixture happens to overlap something else. Live symptom this fixes: a
   // day's only MLB/MLS pick existed purely as a diversity pick, overlapped
   // a higher-scored Premier League anchor, didn't clear the "equally good"
@@ -1006,17 +1012,28 @@ function pickDayRecommendations(dayMatches) {
       );
       if (!rest.length) return;
       rest.forEach(match => claimedAsClusterMember.add(match.id));
-      // A demoted match only joins the anchor's stack if it's still
-      // genuinely stack-worthy against the anchor (see isStackWorthy) -
-      // effectiveScore decided who anchors the slot, but it shouldn't
-      // decide who's worth swiping to, since that's exactly the priority
-      // nudge turning a mediocre match into a false "equally good" by
-      // riding the user's own favorite-sport preference. A demoted match
-      // that isn't stack-worthy just loses its recommended status
-      // entirely, same as any other match that lost its slot - it still
-      // shows up in "所有賽事" with the usual "time overlaps what's
+      // A demoted match only joins the anchor's stack if it's both
+      // genuinely stack-worthy on quality (isStackQualityWorthy) AND its
+      // own start time is actually close to the anchor's
+      // (STACK_TIME_TOLERANCE_MINUTES) - this second, stricter timing gate
+      // is what keeps two INDEPENDENTLY recommended picks (each already
+      // earned its own slot via the DP or the diversity floor) from
+      // collapsing into one stack just because their broadcast windows
+      // graze each other; see STACK_TIME_TOLERANCE_MINUTES's own comment
+      // for the live "7am stack absorbing an unrelated 8am pick" bug this
+      // guards against. effectiveScore decided who anchors the slot, but
+      // it shouldn't decide who's worth swiping to, since that's exactly
+      // the priority nudge turning a mediocre match into a false "equally
+      // good" by riding the user's own favorite-sport preference. A
+      // demoted match that isn't stack-worthy just loses its recommended
+      // status entirely, same as any other match that lost its slot - it
+      // still shows up in "所有賽事" with the usual "time overlaps what's
       // recommended" note, it just isn't offered as a swipe option.
-      const worthy = rest.filter(m => isStackWorthy(m, anchor));
+      const worthy = rest.filter(
+        m =>
+          Math.abs(m.interval.start - anchor.interval.start) / 60_000 <= STACK_TIME_TOLERANCE_MINUTES &&
+          isStackQualityWorthy(m, anchor)
+      );
       rest.forEach(match => { match.recommended = false; });
       worthy.forEach(match => claimedStackIds.add(match.id));
       if (worthy.length) {
@@ -1035,20 +1052,30 @@ function pickDayRecommendations(dayMatches) {
   // the swipeable card stack (see renderRecommendedSection) - unlike an
   // always-expanded "show both at once" layout, browsing alternatives here
   // is opt-in (a swipe), so this can afford to be more generous than a
-  // forced side-by-side display could. Still gated by isStackWorthy, not
-  // "anything that overlaps": same-sport has to be genuinely equally good
-  // (a close score), a different sport only has to be genuinely good on its
-  // own, and either way its start time has to actually be close to `rec`'s
-  // own - a 9-rated pick's stack shouldn't fill up with 6-rated leftovers,
-  // or a fixture hours away, just because they happened to overlap it.
-  // Each alternative is claimed by at most one recommended match (whichever
-  // it overlaps that's processed first, in chronological order) so it
-  // never appears in two different stacks at once, and the merged-in
-  // cluster members above are claimed already so they can't also get
-  // pulled into a neighboring stack. `rec.overlappingIds` was built from
-  // EVERY fetched match regardless of day or quiet hours (see
-  // resolveViewingPlan) - looking candidates up via `dayMatches.find` here
-  // is what actually excludes anything outside today's eligible set,
+  // forced side-by-side display could. Gated on quality by
+  // isStackQualityWorthy - same-sport has to be genuinely equally good (a
+  // close score), a different sport only has to be genuinely good on its
+  // own - but NOT by the cluster-merge pass's own strict
+  // STACK_TIME_TOLERANCE_MINUTES: these are fixtures that never won their
+  // own recommended slot in the first place, so surfacing one here as "還
+  // 有得選" isn't at risk of the "two independently-recommended picks
+  // collapsed into one" bug that gate exists for - real overlapMinutes
+  // (already computed as `rec.overlappingIds`) is the right bar instead,
+  // since the whole point is "what else is genuinely ON RIGHT NOW while
+  // you'd be watching this". A tighter start-time-only gate here was tried
+  // and reverted - MLB alone routinely has several good, genuinely-
+  // simultaneous games that start 40-60 minutes apart (each running ~3
+  // hours), and excluding them left real, good options off the stack. A
+  // 9-rated pick's stack still shouldn't fill up with 6-rated leftovers
+  // just because they happened to overlap it - isStackQualityWorthy's
+  // score gate still applies. Each alternative is claimed by at most one
+  // recommended match (whichever it overlaps that's processed first, in
+  // chronological order) so it never appears in two different stacks at
+  // once, and the merged-in cluster members above are claimed already so
+  // they can't also get pulled into a neighboring stack. `rec.overlappingIds`
+  // was built from EVERY fetched match regardless of day or quiet hours
+  // (see resolveViewingPlan) - looking candidates up via `dayMatches.find`
+  // here is what actually excludes anything outside today's eligible set,
   // without needing its own day-key or quiet-hour re-check.
   recommended.forEach(rec => {
     const alreadyClaimed = rec.stackAlternativeIds || [];
@@ -1056,7 +1083,7 @@ function pickDayRecommendations(dayMatches) {
       .filter(id => {
         if (claimedStackIds.has(id) || alreadyClaimed.includes(id)) return false;
         const other = dayMatches.find(m => m.id === id);
-        return other && !other.recommended && isStackWorthy(other, rec);
+        return other && !other.recommended && isStackQualityWorthy(other, rec);
       })
       .sort((a, b) => {
         const scoreOf = id => dayMatches.find(m => m.id === id).score;
@@ -1322,6 +1349,41 @@ function applySportFilter(matches) {
   return state.activeSport === 'all' ? matches : matches.filter(m => m.sport === state.activeSport);
 }
 
+// When a sport filter is active and the currently selected day turns out to
+// have zero matches for it, jump the day picker to the nearest day that
+// actually has one instead of leaving the viewer staring at an empty state
+// for no visible reason. This is a real, common case for MLB/MLS
+// specifically, not an edge case: Taiwan is far enough ahead of US time
+// zones that a US evening fixture almost always lands on the viewer's NEXT
+// local calendar date, not the same one (see localDateKey) - so "今天"
+// can be completely empty for MLB even though a full night's worth of
+// real MLB matches exist one tab over on "明天". Prefers the nearest day
+// FORWARD (soonest upcoming), falling back to the nearest day backward
+// only if every later day is also empty for this sport - either way,
+// nearest, so this never jumps further than it has to. A no-op for `all`
+// (nothing to be empty of), when the current day already has a match for
+// it, or when this sport genuinely has nothing anywhere in the fetched
+// window (nothing sensible to jump to).
+function ensureSelectedDayHasActiveSport() {
+  if (state.activeSport === 'all') return;
+  if (matchesForDay(state.selectedDayKey).some(m => m.sport === state.activeSport)) return;
+  const currentIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
+  const hasSport = day => matchesForDay(day.key).some(m => m.sport === state.activeSport);
+  let candidate = null;
+  for (let i = currentIndex + 1; i < state.days.length; i++) {
+    if (hasSport(state.days[i])) { candidate = state.days[i]; break; }
+  }
+  if (!candidate) {
+    for (let i = currentIndex - 1; i >= 0; i--) {
+      if (hasSport(state.days[i])) { candidate = state.days[i]; break; }
+    }
+  }
+  if (!candidate) return;
+  state.selectedDayKey = candidate.key;
+  const newIndex = state.days.findIndex(d => d.key === candidate.key);
+  if (newIndex >= state.visibleDayCount) state.visibleDayCount = newIndex + 1;
+}
+
 function renderDayLabels() {
   const day = state.days.find(d => d.key === state.selectedDayKey);
   const label = day ? dayLabelFor(day.date) : '';
@@ -1374,6 +1436,9 @@ function renderFilters() {
       btn.setAttribute('aria-pressed', String(sport === state.activeSport));
       btn.addEventListener('click', () => {
         state.activeSport = sport;
+        ensureSelectedDayHasActiveSport();
+        renderDayScroller();
+        renderDayLabels();
         renderFilters();
         renderSections();
       });
@@ -1619,6 +1684,17 @@ function applyEnabledSportsAndRender() {
   state.rawMatches = rawMatches;
   state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
   state.days = buildDayList(state.matches);
+  // A sport filter that no longer exists at all (its sport just got
+  // disabled in Settings) would otherwise leave the filter chips all
+  // showing unselected (none of them is this stale sport anymore) while
+  // every section quietly renders empty, with nothing on screen to explain
+  // why - reset to "all" so disabling a sport always shows what's left
+  // instead of silently going blank. A sport that's merely empty on the
+  // CURRENT day but still enabled/exists elsewhere is handled below
+  // instead (ensureSelectedDayHasActiveSport), not here.
+  if (state.activeSport !== 'all' && !state.matches.some(m => m.sport === state.activeSport)) {
+    state.activeSport = 'all';
+  }
   // Keep whatever day the viewer is already looking at if it still exists
   // in the refreshed window (a routine data refresh shouldn't yank someone
   // back to "today" out from under them) - only fall back to picking a
@@ -1631,6 +1707,10 @@ function applyEnabledSportsAndRender() {
 
   const selectedIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
   if (selectedIndex >= state.visibleDayCount) state.visibleDayCount = selectedIndex + 1;
+  // A sport that's still enabled but simply has nothing on the day the
+  // viewer happens to be on (see that function's own comment - the common
+  // MLB/MLS-vs-Taiwan-timezone case) jumps to the nearest day that has it.
+  ensureSelectedDayHasActiveSport();
 
   appEl.hidden = false;
   emptyState.hidden = true;
