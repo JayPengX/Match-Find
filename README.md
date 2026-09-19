@@ -83,7 +83,7 @@ Scoring and picking are split across two different places, deliberately:
   small color-coded badge per service (see "Broadcast service registry"
   below) and a "已訂閱" mark when it's one you actually subscribe to. MLB in
   particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
-  once - the prompt (see Orbit's `/match-recommend`) is told to always name
+  once - the prompt (see the shared proxy's `/match-recommend`) is told to always name
   愛爾達體育台 when both apply, rather than answering inconsistently.
 - Each fixture shows one time range ("7:00 下午 – 9:35 下午") plus a short
   relative countdown next to it, instead of three separate stacked labels -
@@ -116,8 +116,8 @@ Scoring and picking are split across two different places, deliberately:
   ordinary and sprint weekends). Session times were cross-checked against
   Formula1.com's own official timetable and matched exactly. F1's Taiwan
   broadcaster is always 愛爾達體育台 - the MLB-specific "Apple TV exclusive
-  slate" override (see "Broadcast service registry" below and Orbit's
-  `/match-recommend`) explicitly does not apply to F1, even though ESPN's
+  slate" override (see "Broadcast service registry" below and the shared
+  proxy's `/match-recommend`) explicitly does not apply to F1, even though ESPN's
   own `broadcast` field for F1 also happens to say Apple TV (its real
   international rights holder - a genuinely different, unrelated fact from
   who carries it in Taiwan).
@@ -215,7 +215,7 @@ it was scored under. Each build only sends fixtures that either aren't in
 that cache yet or were scored under an older `PROMPT_VERSION` — so a given
 match is scored by Gemini exactly once *per meaningful prompt change*, not
 once ever, which is what lets an already-cached match still pick up a real
-fix (e.g. teaching Orbit's `/match-recommend` to actually search instead of
+fix (e.g. teaching the shared proxy's `/match-recommend` to actually search instead of
 guess a broadcaster) instead of keeping a stale answer forever. Requests are
 batched under the shared Worker's 80-fixtures-per-call cap (see
 `AI_SCORE_BATCH_SIZE` — matters most on the very first run, and on any run
@@ -252,7 +252,7 @@ against each other. After the base pass, `findContestedClusters` groups
 fixtures that overlap in time AND scored within `CONTESTED_SCORE_DELTA` of
 each other (transitively, so a three-way pileup becomes one cluster, not
 three overlapping pairs) and sends each cluster - never the full fixture
-list - to Orbit's `/match-recommend-refine`, which is allowed to reach for
+list - to the shared proxy's `/match-recommend-refine`, which is allowed to reach for
 a Pro-tier model specifically because it only ever sees a handful of
 fixtures a day this way. Only `competitiveness`/`watchability`/`reason` get
 overwritten by the refined answer; `venueZh`/`whereToWatchTw` stay whatever
@@ -264,7 +264,7 @@ above), so it costs nothing extra on a routine scheduled run that's
 already within the cooldown window.
 
 Refine calls are spaced ~4 seconds apart rather than fired back-to-back -
-confirmed live that Orbit's Pro-tier models aren't currently reachable on
+confirmed live that the shared proxy's Pro-tier models aren't currently reachable on
 this account (each attempt falls through to the same `gemini-3.7-flash`
 the base pass already calls, near-instantly), so a burst of refine calls
 right after the base pass's own calls can blow through Gemini's real
@@ -287,21 +287,24 @@ Actions** (no branch to pick — the workflow handles publishing).
 
 ## AI recommendations (optional but recommended)
 
-The competitiveness/watchability scoring is served by the same shared
-Cloudflare Worker that the sibling repo [Orbit](https://github.com/jaypengx-collab/Orbit)
-already deploys for its own AI features (`cloudflare-worker/orbit-worker.js`,
-route `/match-recommend`) — this repo doesn't hold, and never needs, a
-Gemini API key of its own. `whereToWatchTw` in particular is grounded in an
-actual Google Search lookup on Orbit's side (broadcast rights are often
-team/game-specific, not sport-wide — e.g. some MLB teams' games air
-exclusively on Apple TV rather than the usual 愛爾達/緯來), rather than
-answered from the model's static training-time knowledge alone.
+The competitiveness/watchability scoring is served by a shared Cloudflare
+Worker in its own dedicated repo,
+[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy)
+(`worker.js`, route `/match-recommend`) — this repo doesn't hold, and never
+needs, a Gemini API key of its own. That Worker also backs two sibling
+sites' own AI/sync features (Orbit, Orbit Vocab), so it's already deployed
+and configured if either of those is already running. `whereToWatchTw` in
+particular is grounded in an actual Google Search lookup on the proxy's
+side (broadcast rights are often team/game-specific, not sport-wide — e.g.
+some MLB teams' games air exclusively on Apple TV rather than the usual
+愛爾達/緯來), rather than answered from the model's static training-time
+knowledge alone.
 
 To enable it:
 
-1. Deploy or confirm Orbit's Worker is live with `GEMINI_API_KEY` set (see
-   that repo's README, "AI 辨識課表照片" section) — the `/match-recommend`
-   route reuses that same key.
+1. Deploy or confirm the shared-proxy Worker is live with `GEMINI_API_KEY`
+   set (see that repo's README) — the `/match-recommend` route reuses that
+   same key.
 2. In **this** repo's **Settings → Secrets and variables → Actions →
    Variables**, add `PROXY_URL` set to that Worker's base URL (e.g.
    `https://orbit-workers-proxy.<you>.workers.dev`, **no path suffix** — the

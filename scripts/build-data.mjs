@@ -22,8 +22,9 @@
 // happens once here and gets cached rather than recomputed per viewer.
 //
 // The "worth watching" judgment (competitiveness/watchability scores) comes
-// from Orbit's shared Cloudflare Worker (see PROXY_URL below), which holds
-// a Gemini API key server-side - this script never needs one of its own.
+// from a shared Cloudflare Worker in its own repo, jaypengx-collab/shared-proxy
+// (see PROXY_URL below), which holds a Gemini API key server-side - this
+// script never needs one of its own.
 // If PROXY_URL isn't configured, or a call to it fails, matches fall back
 // to a simple local heuristic (see heuristicScore) so the site still works,
 // just with less insightful picks.
@@ -57,7 +58,7 @@ const CACHE_PATH = new URL('../data/ai-cache.json', import.meta.url);
 // out of ai-cache.json itself so that file stays a pure match-id map.
 const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 
-// Bumped whenever a change to Orbit's /match-recommend prompt is worth
+// Bumped whenever a change to the shared proxy's /match-recommend prompt is worth
 // re-scoring already-cached matches for (e.g. teaching it to ground
 // whereToWatchTw in an actual search instead of guessing) - every cache
 // entry stamps the PROMPT_VERSION it was scored under, and needsScoring
@@ -82,7 +83,7 @@ const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
 // always calls it regardless - see main()'s throttling check.
 const AI_FETCH_MIN_INTERVAL_HOURS = 20;
 
-// ---- Contested-cluster refinement (Orbit's /match-recommend-refine) ------
+// ---- Contested-cluster refinement (the shared proxy's /match-recommend-refine) ------
 //
 // The base scoring pass above scores every fixture independently, in one
 // big batch - fine for "roughly how good is this", weak at "which of these
@@ -90,11 +91,11 @@ const AI_FETCH_MIN_INTERVAL_HOURS = 20;
 // about that call lets the model weigh them against each other. Fixtures
 // that overlap in time AND land within CONTESTED_SCORE_DELTA of each
 // other's score are genuinely contesting the same viewing slot, and get a
-// second, comparative pass with Orbit's Pro-tier-first refine route (see
-// that repo's MATCH_RECOMMEND_REFINE_MODELS) - deliberately only THOSE
-// fixtures, never the full list, since a Pro-tier model's free-tier quota
-// is far smaller than Flash's and shared across every feature Orbit's
-// Worker serves, not just this one.
+// second, comparative pass with the shared proxy's Pro-tier-first refine
+// route (see that repo's, jaypengx-collab/shared-proxy, MATCH_RECOMMEND_REFINE_MODELS) -
+// deliberately only THOSE fixtures, never the full list, since a Pro-tier model's free-tier quota
+// is far smaller than Flash's and shared across every feature the shared
+// proxy Worker serves, not just this one.
 const CONTESTED_SCORE_DELTA = 1;
 // Not worth refining two mediocre matches into a slightly-more-precisely-
 // ranked pair of mediocre matches - this keeps refinement calls spent on
@@ -106,7 +107,7 @@ const CONTESTED_MIN_SCORE = 6;
 // just keep their base-pass scores and get reconsidered on the next
 // eligible (unthrottled) run.
 const MAX_REFINE_CLUSTERS_PER_RUN = 5;
-// Mirrors Orbit's own MATCH_RECOMMEND_REFINE_MAX_ITEMS - kept as a
+// Mirrors the shared proxy's own MATCH_RECOMMEND_REFINE_MAX_ITEMS - kept as a
 // separate constant here (repos can't share code) purely so an unusually
 // large cluster gets trimmed to its own highest-scoring members before
 // sending, rather than firing a request the server would just 400 anyway.
@@ -122,8 +123,8 @@ const DAYS_AHEAD = 14;
 // dropped on every run - once a match has aired there's no reason to keep
 // re-shipping its score in the cache file forever.
 const CACHE_RETENTION_HOURS = 12;
-// Orbit's /match-recommend route caps a single request at 80 fixtures (see
-// that repo's cloudflare-worker/orbit-worker.js) - a 14-day window's first
+// The shared proxy's /match-recommend route caps a single request at 80 fixtures (see
+// that repo's worker.js) - a 14-day window's first
 // ever build can easily find several hundred NEW fixtures at once (nothing
 // is cached yet), so those get sent in sequential batches under that cap
 // rather than in one oversized request. Once the cache is warm, a normal
@@ -264,7 +265,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       // postseason (confirmed against the live API) - surfaced to Gemini as
       // plain context, not scored locally, since "this is a playoff game"
       // is exactly the kind of stakes judgment the AI prompt already asks
-      // for (see Orbit's buildMatchRecommendPrompt) and this script has no
+      // for (see the shared proxy's buildMatchRecommendPrompt) and this script has no
       // real basis to weigh it itself.
       const isPostseason = event.season?.type === 3;
 
@@ -437,9 +438,9 @@ function chunk(array, size) {
   return chunks;
 }
 
-// Sends only the fixtures NOT already in the cache to Orbit's shared
-// Cloudflare Worker, which owns the actual Gemini prompt/schema (see that
-// repo's cloudflare-worker/orbit-worker.js, route /match-recommend) and
+// Sends only the fixtures NOT already in the cache to the shared
+// Cloudflare Worker (jaypengx-collab/shared-proxy), which owns the actual Gemini prompt/schema (see that
+// repo's worker.js, route /match-recommend) and
 // holds the real API key - this script only ever sends {id, sport, name,
 // startTimeUtc, context, venue, broadcast}, the same shape for every
 // fixture regardless of sport. This is the entire reason Gemini quota use
@@ -549,8 +550,8 @@ function findContestedClusters(matches, cache) {
   return [...groups.values()].filter(group => group.length >= 2);
 }
 
-// Sends each contested cluster (see findContestedClusters) to Orbit's
-// /match-recommend-refine as its own small request - mutates `cache`
+// Sends each contested cluster (see findContestedClusters) to the shared
+// proxy's /match-recommend-refine as its own small request - mutates `cache`
 // directly (competitiveness/watchability/reason only; venueZh and
 // whereToWatchTw stay whatever the base pass + grounded lookup already
 // decided, since re-litigating the broadcast question isn't what this

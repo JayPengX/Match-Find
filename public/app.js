@@ -88,7 +88,7 @@ const SPORT_APP_LINKS = {
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` (see Orbit's /match-recommend) is free-form text written
+// `whereToWatchTw` (see the shared proxy's /match-recommend) is free-form text written
 // by Gemini, not a fixed enum - this registry is what turns that text back
 // into something the UI can badge/color/reason about consistently, and
 // what OWNED (see DEFAULT_MY_SERVICE_IDS below) means at all. Adding a new service
@@ -357,9 +357,10 @@ state.myServiceIds = loadMyServiceIds();
 // ---- Cross-device settings sync --------------------------------------------
 //
 // Syncs exactly three things - priorityOrder, enabledSports, myServiceIds -
-// across a viewer's own devices via a single passcode, through Orbit's
-// shared Cloudflare Worker (see that repo's /match-find-sync route, the
-// same singleCredential design as its own /vocab-sync: one passcode is
+// across a viewer's own devices via a single passcode, through the shared
+// Cloudflare Worker (see the jaypengx-collab/shared-proxy repo's
+// /match-find-sync route, the same singleCredential design as its own
+// /vocab-sync: one passcode is
 // both the identifier and the only credential, no separate manager role,
 // because this is always "one person's own settings on their own devices",
 // never "one person's data read by many"). Never syncs fixture data or
@@ -636,7 +637,7 @@ function renderSettingsPanel() {
 }
 
 // Saves every setting to localStorage and, if currently paired to a sync
-// code, pushes the combined payload to Orbit's /match-find-sync (see
+// code, pushes the combined payload to the shared proxy's /match-find-sync (see
 // "Cross-device settings sync" below) - one call after any settings
 // mutation, rather than each individual toggle/reorder handler needing to
 // remember to do both.
