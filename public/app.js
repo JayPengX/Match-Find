@@ -71,18 +71,18 @@ const SPORT_LABELS_ZH = {
 // trademarked logo (this is a static site with no image-licensing story of
 // its own) - just enough to be visually recognizable and color-coded at a
 // glance, same spirit as the sport badges already on every card.
-// `logo` points at each service's real, official mark - hosted on
-// Wikimedia Commons (Special:FilePath, its own stable hotlink-friendly
-// redirect to the current file - confirmed live, not just assumed) rather
-// than reproduced/copied into this repo, same posture as the team/F1 logos
-// already pulled from ESPN's own CDN elsewhere in this file. `logoBg` is
-// the background the mark needs to actually be visible (several of these
-// are white- or dark-only artwork with no built-in backdrop). A service
-// with no real logo confirmed on Commons (愛爾達 - see that entry's own
-// comment) falls back to the plain colored-initial `badge` design from
-// before - buildMatchCard below tries `logo` first and only falls back to
-// `badge` on a load failure (same onerror pattern as team logos) or when
-// `logo` is absent.
+// `logo` points at each service's real, official mark, hotlinked from an
+// external host rather than reproduced/copied into this repo - same
+// posture as the team/F1 logos already pulled from ESPN's own CDN
+// elsewhere in this file: most are Wikimedia Commons (Special:FilePath,
+// its own stable hotlink-friendly redirect to the current file - confirmed
+// live, not just assumed), 愛爾達's own is Google Play's app-icon CDN (see
+// that entry's own comment for why Commons had nothing usable). `logoBg`
+// is the background the mark needs to actually be visible (several of
+// these are white- or dark-only artwork with no built-in backdrop) -
+// buildMatchCard below tries `logo` first and only falls back to `badge`
+// on a load failure (same onerror pattern as team logos) or when `logo`
+// is absent.
 //
 // Deliberately just these three: every OTHER service Gemini might name in
 // whereToWatchTw (see the shared proxy's buildMatchRecommendPrompt) still
@@ -92,18 +92,29 @@ const SPORT_LABELS_ZH = {
 // Settings, scoped down to the services this site's own viewer actually
 // cares about tracking.
 const SERVICES = [
-  // No `logo` here on purpose: the Commons file this used to point at
-  // (ELTA_logo.svg) turned out, on closer look, to be the logo of ELTA -
-  // a Lithuanian news agency that just happens to share the initialism -
-  // not Taiwan's 愛爾達體育台 at all. No genuine Commons file for the
-  // Taiwan channel's own mark was found, so this falls back to the plain
-  // colored-initial badge below rather than risk another wrong logo.
+  // The Commons file this used to point at (ELTA_logo.svg) turned out, on
+  // closer look, to be the logo of ELTA - a Lithuanian news agency that
+  // just happens to share the initialism - not Taiwan's 愛爾達體育台 at
+  // all, and no genuine Commons file for the Taiwan channel's own mark
+  // existed to replace it with. This logo instead comes from 愛爾達電視's
+  // own official Android app icon on the Google Play Store - a real,
+  // confirmed-correct source, just not one with Commons' own "always
+  // resolves to the file's current version" redirect guarantee (a Play
+  // Store CDN link is a fixed image blob - it won't silently start
+  // pointing at a different app's icon later the way a wiki-editable
+  // Commons page theoretically could, but Google could still stop serving
+  // it if the app listing itself ever changed substantially). logoBg
+  // matches the icon's own baked-in background (it's a solid square, not
+  // transparent artwork) purely so there's no visible flash of a
+  // different color while the image itself is still loading.
   {
     id: 'elta',
     pattern: /愛爾達|ELTA/i,
     label: '愛爾達體育台',
     badge: '達',
-    color: '#ff7a3d'
+    color: '#ff7a3d',
+    logo: 'https://play-lh.googleusercontent.com/vE0VONaUjXyEgpUv0efGHg2_GS_Kbmx3YKyWPWzmv8oX-BlTzDReK17V9GhuJ7e7MMmFWvrVyP08vn03Q_H3',
+    logoBg: '#ff7a3d'
   },
   {
     id: 'appletv',
