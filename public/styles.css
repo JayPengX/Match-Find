@@ -369,12 +369,6 @@ main#app {
   color: #fff;
   box-shadow: 0 6px 16px -8px rgba(91, 140, 255, 0.6);
 }
-.day-pill-more {
-  color: var(--text-muted);
-  font-weight: 500;
-  border-style: dashed;
-}
-
 .filter-row {
   display: flex;
   flex-wrap: wrap;

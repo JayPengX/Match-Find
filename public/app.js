@@ -31,7 +31,6 @@ const state = {
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
   matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.stackAlternativeIds/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
-  visibleDayCount: 7,
   selectedDayKey: null,
   activeSport: 'all',
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
@@ -1239,8 +1238,6 @@ function ensureSelectedDayHasActiveSport() {
   }
   if (!candidate) return;
   state.selectedDayKey = candidate.key;
-  const newIndex = state.days.findIndex(d => d.key === candidate.key);
-  if (newIndex >= state.visibleDayCount) state.visibleDayCount = newIndex + 1;
 }
 
 function renderDayLabels() {
@@ -1250,8 +1247,12 @@ function renderDayLabels() {
 }
 
 function renderDayScroller() {
-  const visibleDays = state.days.slice(0, state.visibleDayCount);
-  const nodes = visibleDays.map(day => {
+  // Every fetched day up front, no "load more" click - the whole window is
+  // already baked into matches.json at build time (see build-data.mjs's
+  // own comment on DAYS_AHEAD), so there's no cost to showing all of it
+  // right away; a click-to-reveal step here only ever hid days that were
+  // already sitting in memory.
+  const nodes = state.days.map(day => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'day-pill';
@@ -1266,18 +1267,6 @@ function renderDayScroller() {
     });
     return btn;
   });
-
-  if (state.visibleDayCount < state.days.length) {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'day-pill day-pill-more';
-    more.textContent = `還有 ${state.days.length - state.visibleDayCount} 天 ＋`;
-    more.addEventListener('click', () => {
-      state.visibleDayCount = state.days.length;
-      renderDayScroller();
-    });
-    nodes.push(more);
-  }
 
   dayScrollerEl.replaceChildren(...nodes);
   const activePill = dayScrollerEl.querySelector('[aria-selected="true"]');
@@ -1570,8 +1559,6 @@ function applyEnabledSportsAndRender() {
     state.selectedDayKey = pickInitialDay(state.days, state.matches);
   }
 
-  const selectedIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
-  if (selectedIndex >= state.visibleDayCount) state.visibleDayCount = selectedIndex + 1;
   // A sport that's still enabled but simply has nothing on the day the
   // viewer happens to be on (see that function's own comment - the common
   // MLB/MLS-vs-Taiwan-timezone case) jumps to the nearest day that has it.

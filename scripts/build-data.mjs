@@ -234,7 +234,20 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
   // already correctly exclude anything from that extra day that ISN'T
   // still 'pre' or 'in' and within window, so asking for one more day up
   // front costs one extra request per league and risks nothing.
-  const dates = Array.from({ length: daysAhead + 1 }, (_, i) =>
+  //
+  // length is daysAhead + 2, not + 1: one extra day for the `now - 1`
+  // lookback above, PLUS one more so the loop's own far end actually
+  // reaches windowEndMs (`now + daysAhead` days) instead of stopping one
+  // day short of it. That off-by-one used to go unnoticed on the
+  // every-team-plays-daily leagues (MLB/MLS/NBA) - there was always
+  // another fixture somewhere inside the remaining, correctly-queried part
+  // of the window to fill the page with - but it silently cost the
+  // Premier League its entire NEXT gameweek whenever that gameweek's
+  // fixtures happened to start on exactly this loop's uncovered final day
+  // (confirmed live: an international-break week left nothing else in the
+  // 14-day window to mask the gap, so "this gameweek" was all that ever
+  // showed up).
+  const dates = Array.from({ length: daysAhead + 2 }, (_, i) =>
     yyyymmddUtc(new Date(now.getTime() + (i - 1) * 86_400_000))
   );
   const results = await Promise.allSettled(
