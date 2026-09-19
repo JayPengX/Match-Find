@@ -196,6 +196,28 @@ const AI_FETCH_MIN_INTERVAL_HOURS = 8;
 // deliberately only THOSE fixtures, never the full list, since a Pro-tier model's free-tier quota
 // is far smaller than Flash's and shared across every feature the shared
 // proxy Worker serves, not just this one.
+//
+// What this pass is FOR changed with the scheduler rewrite (see docs/
+// recommendation-engine-audit.md's "Round 2" section, and public/lib/
+// recommendation.mjs's own computeDayPlan comment): an earlier version of
+// the client-side scheduler pre-collapsed each near-total-overlap cluster
+// to its single highest-effectiveScore member BEFORE ever running the
+// weighted-interval-scheduling DP, which made getting that one ranking
+// right load-bearing - a wrong choice there silently discarded a better
+// candidate with no way for the scheduler to ever reconsider it. That's no
+// longer true: computeDayPlan now hands the DP every individual candidate
+// and finds the actual best-value sequence regardless of which cluster
+// member happened to score marginally higher on the base pass. This
+// refinement pass is therefore no longer correctness-critical - it's
+// quality polish for genuinely close calls (does fixture A's base score of
+// 7 actually mean it's a hair better than fixture B's 7, or would a
+// model that could compare them side-by-side say the opposite), which is
+// still worth having but no longer worth spending MORE Pro-tier quota on
+// than before. The thresholds below are unchanged from before that
+// rewrite - deliberately: they were already conservative (a handful of
+// genuinely close, high-scoring clusters per run), and there's no
+// specific evidence either constant is now mistuned, so retuning them
+// without a real reason would just be a guess dressed up as a fix.
 const CONTESTED_SCORE_DELTA = 1;
 // Not worth refining two mediocre matches into a slightly-more-precisely-
 // ranked pair of mediocre matches - this keeps refinement calls spent on

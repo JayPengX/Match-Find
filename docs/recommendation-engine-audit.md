@@ -297,15 +297,17 @@ so nothing in `public/app.js`'s existing rendering broke. `planningScore`
 audit asked for, set separately by `applyRecentRepeatPenalties` since it
 needs cross-day context a single match/day can't provide on its own.
 
-### Deferred (out of scope for this pass)
+### What Round 2 deferred, and why
 
 The earlier audit's own "implementation order" put these later on
-purpose, and they stay deferred here for the same reasons:
+purpose, and they stayed deferred at the end of that round for the same
+reasons - see "Round 3" immediately below for which of these have since
+been done:
 
 - **A structured evidence layer for online/public context** (Phase 4) -
   requires changing the shared proxy's (`jaypengx-collab/shared-proxy`)
   Gemini prompt/response schema, a different repo, and is a materially
-  larger change than a scheduling fix.
+  larger change than a scheduling fix. **Done - see Round 3.**
 - **A full score-architecture rename** (`match.score` → `eventScore`
   everywhere, removing the old names) - `public/app.js`'s rendering code
   reads `match.score`/`.effectiveScore` in many places; a full rename is
@@ -313,12 +315,110 @@ purpose, and they stay deferred here for the same reasons:
   scheduling-correctness pass.
 - **A planner "oracle" in the evaluator** (independently computing the
   mathematically optimal schedule from raw candidates and reporting
-  actual/oracle as a ratio) - a genuinely separate, substantial piece of
-  work from the scheduler fix itself; `scripts/evaluate-recommendations.mjs`
-  now at least reuses the same `matchupKey` the scheduler's own repeat
-  penalty is built on, but doesn't yet re-derive an optimal schedule to
-  compare against.
+  actual/oracle as a ratio). **Done - see Round 3.**
 - **Dimension-redundancy analysis** (competitiveness vs. watchability vs.
-  endurance correlation) and **contested-cluster refinement removal** -
-  both require re-examining `scripts/build-data.mjs`'s AI scoring pass
-  itself, which this round deliberately left untouched.
+  endurance correlation). **Done - see Round 3.**
+- **Contested-cluster refinement removal** - reviewed, not removed; see
+  Round 3's own explanation of why it's still worth keeping.
+
+## Round 3: structured evidence, planner oracle, dimension correlation
+
+Implements the evidence layer and evaluator work Round 2 deferred, plus a
+review of contested-cluster refinement's continued relevance now that the
+scheduler no longer needs it for correctness.
+
+### 1. Structured evidence (Phase 4)
+
+The shared proxy's (`jaypengx-collab/shared-proxy`) `/match-recommend` used
+to fold ONE free-text "note" from its grounded Google-Search pass straight
+into the scoring prompt's `context` and then discard it - real, current
+information, but never durable, never structured, never shown to a viewer.
+`buildGroundedMatchInfoPrompt`/`fetchGroundedMatchInfo` now ask for and
+return a small array of evidence items per fixture, each `{category,
+finding, source, retrievedAt}` - `category` is one of `competitiveness` /
+`mediaAttention` / `eventImportance` / `recentContext`, this report's own
+section 19 vocabulary. `retrievedAt` is stamped server-side, at the moment
+the grounded search pass actually resolved, never something the model
+itself reports (see that repo's `sanitizeEvidence`). The plain-text digest
+still gets folded into `context` for the scoring pass to read (unchanged
+in effect), but `pick.evidence` is now ALSO returned to the caller
+directly - Match Find's own `scripts/build-data.mjs` caches it
+(re-validating it again independently, never trusting even this repo's own
+proxy blindly - see `sanitizeCachedEvidenceItem`), surfaces
+`match.evidence`/`match.evidenceRetrievedAt`, and `public/app.js` shows it
+in a collapsed "評分依據" drill-down under the AI's one-sentence reason so
+a viewer can verify/cross-check that sentence against the actual current
+facts it was scored from, instead of just trusting it.
+
+Evidence also gets its own, shorter refresh cadence
+(`EVIDENCE_MAX_AGE_HOURS`, 24h) independent of the next unrelated
+`PROMPT_VERSION` bump - the earlier audit's section 22 point that public/
+media attention can change within hours in a way team quality never does.
+`PROMPT_VERSION` bumped to 9 to backfill every already-cached match once.
+
+Confidence (`computeConfidence`, source/refined-based - "how much should
+the SCORE be trusted") and evidence freshness (`isEvidenceFresh`,
+retrievedAt-based - "how CURRENT is the evidence behind it") are now two
+explicitly separate signals, per section 20's "refined does not mean
+current."
+
+### 2. Planner oracle
+
+`scripts/evaluate-recommendations.mjs`'s `computePlannerOracle`
+independently re-derives each day's mathematically optimal weighted-
+interval schedule from the same candidates an export already decided a
+plan for, and reports an actual/oracle value ratio. Deliberately a
+SEPARATE, from-scratch DP (`oracleWeightedSchedule`), not a re-import of
+`computeDayPlan`/`weightedIntervalSchedule` - re-running the exact same
+function against its own prior output would trivially report 100% even if
+that function had a real bug, since it'd be the same bug on both sides of
+the comparison. A pinned (`isPreferred`) pick is honored as the same hard
+constraint `computeDayPlan` treats it as, so a deliberate user override
+never reads as "the scheduler failed to find the optimum."
+
+Verified against three hand-built cases before trusting it: a genuinely
+optimal plan (ratio == 100%), a deliberately broken "pick the numerically
+higher single match instead of the better sequence" plan (ratio correctly
+drops to 55.6%), and a pinned pick that isn't the numerically best
+candidate (still 100%, since the pin is a constraint, not a flaw).
+
+### 3. Score-dimension correlation
+
+`computeDimensionCorrelations` computes Pearson's r between
+competitiveness/watchability/enduranceScore/broadcastQuality, **per
+sport** (section 24's own instruction - a correlation that holds for MLB
+says nothing about F1), flagging `|r| >= 0.8` as a possible redundant
+dimension worth consolidating. Informational only - this pass doesn't
+remove or merge any dimension itself; that's a real product decision
+(does watchability still earn its keep as a separate axis from
+competitiveness for a given sport?) that deserves a human looking at real
+accumulated data, not an automatic action taken the first time a
+correlation crosses a threshold.
+
+### 4. Contested-cluster refinement: reviewed, kept (re-scoped)
+
+The audit asked whether `scripts/build-data.mjs`'s contested-cluster
+refinement (`refineContestedClusters`, the shared proxy's Pro-tier
+`/match-recommend-refine`) was "solving a problem that should partly be
+solved by the planner itself" (section 25) now that the planner no longer
+needs a single pre-chosen winner per conflict cluster. The answer: its
+ROLE changed, but it's still worth having. Before the scheduler rewrite
+(Round 2), a cluster's base-pass ranking was load-bearing - the client
+collapsed each cluster to its single highest-scoring member BEFORE
+scheduling, so a wrong ranking there silently discarded a better plan with
+no way to recover. That's no longer true: `computeDayPlan` hands the DP
+every individual candidate now, so it finds the actual best-value sequence
+regardless of which cluster member the base pass happened to rank
+marginally higher. Refinement is therefore no longer correctness-critical
+- but comparing two genuinely close fixtures head-to-head (does a 7 vs. a
+7 actually mean a coin flip, or would closer reasoning break the tie) is
+still a real accuracy improvement over two independent, unrelated
+judgments, which is what refinement was always actually FOR underneath the
+"prevents a silently-worse plan" framing. `CONTESTED_SCORE_DELTA`/
+`CONTESTED_MIN_SCORE`/`MAX_REFINE_CLUSTERS_PER_RUN`/
+`REFINE_CLUSTER_MAX_ITEMS` are unchanged - they were already conservative,
+and there's no specific evidence any of them is mistuned, so retuning
+without a real reason would just be a guess dressed up as a fix. Only the
+code comment explaining WHY this pass exists was rewritten, so a future
+reader doesn't reason about it against an architecture that no longer
+exists.
