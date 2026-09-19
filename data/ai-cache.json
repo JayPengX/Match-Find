@@ -555,16 +555,6 @@
     "source": "ai",
     "promptVersion": 9
   },
-  "mlb-401816994": {
-    "startTimeUtc": "2026-09-19T01:38:00.000Z",
-    "competitiveness": 5,
-    "watchability": 5,
-    "reason": "雙方戰績落後，近期競爭張力有限。",
-    "venueZh": "天使球場",
-    "whereToWatchTw": "愛爾達體育台",
-    "source": "ai",
-    "promptVersion": 5
-  },
   "mlb-401816993": {
     "startTimeUtc": "2026-09-19T01:40:00.000Z",
     "competitiveness": 7,
