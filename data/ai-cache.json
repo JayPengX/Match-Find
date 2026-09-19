@@ -66,35 +66,38 @@
   "epl-401879276": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
     "competitiveness": 7,
-    "watchability": 7,
+    "watchability": 8,
     "broadcastQuality": 6,
-    "reason": "利物浦客場挑戰伯恩茅斯尋求勝利。",
+    "reason": "利物浦實力佔優但客場作戰，具備極高話題度與觀賞價值。",
     "venueZh": "活力球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "epl-401879273": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 7,
     "broadcastQuality": 6,
-    "reason": "水晶宮作客艾蘭路球場對決利茲聯。",
+    "reason": "兩隊實力接近且球風硬朗，預期過程膠著但星味稍遜。",
     "venueZh": "艾蘭路球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "epl-401879272": {
     "startTimeUtc": "2026-09-20T13:00:00.000Z",
     "competitiveness": 5,
-    "watchability": 7,
+    "watchability": 8,
     "broadcastQuality": 6,
-    "reason": "曼城實力雄厚，主場迎戰桑德蘭。",
+    "reason": "曼城主場火力強大，但懸念較低，整體轉播水準極佳。",
     "venueZh": "阿提哈德球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "epl-401878777": {
     "startTimeUtc": "2026-09-20T15:30:00.000Z",
@@ -141,25 +144,27 @@
   },
   "mls-761816": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 8,
     "broadcastQuality": 7,
-    "reason": "奧蘭多城客場強碰新英格蘭革命。",
+    "reason": "新英倫革命戰績領先，奧蘭多企圖挑戰強敵，競爭激烈度高。",
     "venueZh": "吉 Gillette 體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761817": {
     "startTimeUtc": "2026-09-19T23:30:00.000Z",
-    "competitiveness": 7,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 9,
     "broadcastQuality": 7,
-    "reason": "洛杉磯FC作客對決聖荷西地震。",
+    "reason": "兩隊積分接近且星光熠熠，話題性與觀賞價值極高。",
     "venueZh": "李維斯體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761822": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
@@ -174,14 +179,15 @@
   },
   "mls-761820": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 7,
     "broadcastQuality": 7,
-    "reason": "辛辛那提FC作客挑戰休士頓迪納摩。",
+    "reason": "休士頓主場戰績優異，辛辛那提需全力突破防線。",
     "venueZh": "殼牌能源體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761821": {
     "startTimeUtc": "2026-09-20T00:30:00.000Z",
@@ -218,36 +224,39 @@
   },
   "mls-761826": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 7,
     "broadcastQuality": 7,
-    "reason": "西雅圖海灣者客場挑戰科羅拉多急流。",
+    "reason": "科羅拉多急泉主場強悍，西雅圖音速作客面臨硬仗。",
     "venueZh": "迪克體育用品公園",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761827": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 8,
     "broadcastQuality": 7,
-    "reason": "芝加哥火焰作客納什維爾SC。",
+    "reason": "納許維爾積分領先且主場氣勢強，芝加哥火焰力求搶分。",
     "venueZh": "GEODIS公園",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761825": {
     "startTimeUtc": "2026-09-20T01:30:00.000Z",
     "competitiveness": 7,
-    "watchability": 6,
+    "watchability": 7,
     "broadcastQuality": 7,
-    "reason": "溫哥華白浪客場強碰皇家鹽湖城。",
+    "reason": "溫哥華白浪本季表現強勢，客場挑戰皇家鹽湖城仍具考驗。",
     "venueZh": "美利坚第一球場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mls-761828": {
     "startTimeUtc": "2026-09-20T02:30:00.000Z",
@@ -1002,14 +1011,15 @@
   },
   "mlb-401817035": {
     "startTimeUtc": "2026-09-22T22:35:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 9,
+    "watchability": 8,
     "broadcastQuality": 6,
-    "reason": "美聯東區同分區世仇之戰，卡位戰。",
+    "reason": "藍鳥與金鶯勝場接近，美東排名競爭激烈，為三場中最具張力之對決。",
     "venueZh": "金鶯球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817032": {
     "startTimeUtc": "2026-09-22T22:40:00.000Z",
@@ -1074,11 +1084,12 @@
     "competitiveness": 6,
     "watchability": 7,
     "broadcastQuality": 6,
-    "reason": "勇士戰績優異，迎戰紅人求穩。",
+    "reason": "勇士戰績領先紅人較多，但例行賽尾聲仍具主場觀看價值。",
     "venueZh": "Truist球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817037": {
     "startTimeUtc": "2026-09-22T23:40:00.000Z",
@@ -1105,14 +1116,15 @@
   },
   "mlb-401817039": {
     "startTimeUtc": "2026-09-23T00:05:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
     "broadcastQuality": 6,
-    "reason": "大都會與遊騎兵跨聯盟交手。",
+    "reason": "兩隊戰績皆處於五成上下，季後賽機會渺茫，關注度略低。",
     "venueZh": "全球人壽球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817040": {
     "startTimeUtc": "2026-09-23T00:40:00.000Z",
@@ -1508,13 +1520,14 @@
   "mlb-401817076": {
     "startTimeUtc": "2026-09-25T22:45:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
+    "watchability": 5,
     "broadcastQuality": 6,
-    "reason": "大都會與國民分區交手。",
+    "reason": "兩隊皆提前退出季後賽競爭，對戰張力相對有限。",
     "venueZh": "國民球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817073": {
     "startTimeUtc": "2026-09-25T23:05:00.000Z",
@@ -1531,13 +1544,14 @@
   "mlb-401817075": {
     "startTimeUtc": "2026-09-25T23:07:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
+    "watchability": 5,
     "broadcastQuality": 6,
-    "reason": "紅人作客多倫多交手藍鳥。",
+    "reason": "雙方戰績接近但均無緣季後賽，觀看價值普通。",
     "venueZh": "羅傑斯中心",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817072": {
     "startTimeUtc": "2026-09-25T23:10:00.000Z",
@@ -1565,14 +1579,15 @@
   },
   "mlb-401817079": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 7,
     "broadcastQuality": 6,
-    "reason": "守護者交手皇家。",
+    "reason": "守護者全力爭取季後賽席位，戰意高於皇家。",
     "venueZh": "考夫曼球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817080": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
@@ -1587,25 +1602,27 @@
   },
   "mlb-401817081": {
     "startTimeUtc": "2026-09-25T23:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 7,
     "broadcastQuality": 6,
-    "reason": "紅雀挑戰強敵釀酒人。",
+    "reason": "釀酒人戰績領先，紅雀季後賽機會渺茫，關注度較高。",
     "venueZh": "美國家庭球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817082": {
     "startTimeUtc": "2026-09-26T00:10:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
     "broadcastQuality": 6,
-    "reason": "遊騎兵客場對決雙城。",
+    "reason": "遊騎兵勝率五成，雙城戰績落後，卡位戰膠著。",
     "venueZh": "標靶球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817084": {
     "startTimeUtc": "2026-09-26T01:40:00.000Z",
@@ -1624,11 +1641,12 @@
     "competitiveness": 6,
     "watchability": 6,
     "broadcastQuality": 6,
-    "reason": "太空人作客交手運動家。",
+    "reason": "太空人爭取勝率，運動家戰績低迷，實力有差距。",
     "venueZh": "薩特健康球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817083": {
     "startTimeUtc": "2026-09-26T02:10:00.000Z",
@@ -1921,11 +1939,12 @@
     "competitiveness": 6,
     "watchability": 6,
     "broadcastQuality": 6,
-    "reason": "守護者力拚季後賽席位對決皇家。",
+    "reason": "守護者與皇家勝差較大，季後賽競爭張力略遜一籌。",
     "venueZh": "考夫曼體育場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817110": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
@@ -1940,14 +1959,15 @@
   },
   "mlb-401817111": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 7,
+    "competitiveness": 7,
+    "watchability": 8,
     "broadcastQuality": 6,
-    "reason": "釀酒人強勢出擊迎戰紅雀。",
+    "reason": "釀酒人戰績顯著領先紅雀，但世仇對決仍具高度觀賞價值。",
     "venueZh": "美國家庭球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 6
+    "promptVersion": 6,
+    "refined": true
   },
   "mlb-401817112": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
