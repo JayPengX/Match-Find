@@ -33,6 +33,7 @@ const state = {
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
   activeSport: 'all',
+  recommendStyle: 'competitive', // which per-match score drives "推薦賽事" - see "Recommendation style setting" below
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
   myServiceIds: [], // subscribed services - see "Broadcast service registry" below
@@ -169,6 +170,7 @@ const settingsPanel = document.getElementById('settings-panel');
 const settingsBackdrop = document.getElementById('settings-backdrop');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const settingsResetBtn = document.getElementById('settings-reset-btn');
+const settingsRecommendStyle = document.getElementById('settings-recommend-style');
 const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
 const settingsMyServices = document.getElementById('settings-my-services');
@@ -205,6 +207,69 @@ const syncPromptDismissBtn = document.getElementById('sync-prompt-dismiss-btn');
 // "if these two are roughly equally good, which do you want?" - a dial
 // still leaves every sport at the same level ambiguous relative to each
 // other, where a full order never is.
+// ---- Recommendation style setting ------------------------------------------
+//
+// "Worth watching" isn't one fixed question - different viewers weigh it
+// differently, and none of them is more "correct" than the others:
+// - competitive: the original/default - build-data.mjs's own composite of
+//   competitiveness (how close the game is) and watchability (stakes/
+//   rivalry/star power), averaged. Unchanged for anyone who never opens
+//   this setting.
+// - entertainment: watchability ALONE - already exactly "what a general
+//   sports fan/mainstream media would find notable regardless of how close
+//   it ends up being" per that field's own definition in the shared proxy's
+//   buildMatchRecommendPrompt, so this style needed no new AI field at all,
+//   just a different existing one to lead with.
+// - broadcastQuality: a genuinely NEW dimension (see build-data.mjs/the
+//   shared proxy's worker.js) - how good the viewing EXPERIENCE itself is
+//   expected to be (production value, commentary, camera work, the
+//   reputation of whichever platform/broadcaster carries it), independent
+//   of how good the matchup is. A close, high-stakes game on a bare
+//   regional feed and a one-sided blowout on a marquee, beautifully-shot
+//   national broadcast are exactly the case these two styles disagree on.
+//
+// Each style maps to one already-scored per-match field (see
+// recommendStyleScore) - no extra Gemini calls, no extra data to fetch,
+// just a different lens on numbers build-data.mjs already computed once
+// for everyone. Synced like priorityOrder/enabledSports/myServiceIds (see
+// "Cross-device settings sync" below) since it's the same kind of "my own
+// preference, same on every device" setting.
+const RECOMMEND_STYLES = [
+  { id: 'competitive', label: '精彩程度', hint: '看重賽事本身的緊張刺激程度（預設方式）。' },
+  { id: 'entertainment', label: '話題熱度', hint: '看重話題性、明星球員、對戰歷史——大眾媒體會關注的那種賽事。' },
+  { id: 'broadcastQuality', label: '轉播品質', hint: '看重轉播的觀賞體驗——畫面製作、球評陣容、轉播平台的口碑。' }
+];
+const RECOMMEND_STYLE_STORAGE_KEY = 'matchfind-recommend-style';
+
+function loadRecommendStyle() {
+  try {
+    const stored = localStorage.getItem(RECOMMEND_STYLE_STORAGE_KEY);
+    return RECOMMEND_STYLES.some(s => s.id === stored) ? stored : RECOMMEND_STYLES[0].id;
+  } catch {
+    return RECOMMEND_STYLES[0].id;
+  }
+}
+function saveRecommendStyle(style) {
+  try {
+    localStorage.setItem(RECOMMEND_STYLE_STORAGE_KEY, style);
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+state.recommendStyle = loadRecommendStyle();
+
+// The one score each style actually ranks by - falls back to the
+// build-time composite `match.score` whenever the style's own field is
+// missing (an older cache entry from before broadcastQuality existed and
+// not yet re-scored, or a heuristic-scored/finished match with no real AI
+// judgment behind it at all) rather than producing NaN and breaking every
+// comparison downstream.
+function recommendStyleScore(match, style) {
+  if (style === 'entertainment' && Number.isFinite(match.watchability)) return match.watchability;
+  if (style === 'broadcastQuality' && Number.isFinite(match.broadcastQuality)) return match.broadcastQuality;
+  return match.score;
+}
+
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // Every rank step adds/subtracts one of these - small next to the 1-10
 // score scale (being ranked a couple of spots higher does NOT let a
@@ -335,6 +400,7 @@ state.syncPasscode = loadSyncPasscode();
 
 function buildSyncPayloadObject() {
   return {
+    recommendStyle: state.recommendStyle,
     priorityOrder: state.priorityOrder,
     enabledSports: [...state.enabledSports],
     myServiceIds: [...state.myServiceIds]
@@ -347,6 +413,9 @@ function buildSyncPayloadObject() {
 // with this one, is dropped rather than trusted blindly), then persists it
 // locally so a later offline visit still has it.
 function applySyncPayloadObject(payload) {
+  if (RECOMMEND_STYLES.some(s => s.id === payload?.recommendStyle)) {
+    state.recommendStyle = payload.recommendStyle;
+  }
   if (Array.isArray(payload?.priorityOrder)) {
     const known = payload.priorityOrder.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
     const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
@@ -359,6 +428,7 @@ function applySyncPayloadObject(payload) {
   if (Array.isArray(payload?.myServiceIds)) {
     state.myServiceIds = new Set(payload.myServiceIds.filter(id => SERVICES.some(s => s.id === id)));
   }
+  saveRecommendStyle(state.recommendStyle);
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
   saveMyServiceIds(state.myServiceIds);
@@ -523,11 +593,35 @@ syncPromptDismissBtn.addEventListener('click', dismissSyncPrompt);
 
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
-  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds);
+  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds, state.recommendStyle);
   renderSections();
 }
 
+function renderRecommendStylePanel() {
+  settingsRecommendStyle.replaceChildren(
+    ...RECOMMEND_STYLES.map(style => {
+      const active = state.recommendStyle === style.id;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = active ? 'settings-chip is-active' : 'settings-chip';
+      chip.textContent = style.label;
+      chip.title = style.hint;
+      chip.setAttribute('role', 'radio');
+      chip.setAttribute('aria-checked', String(active));
+      chip.addEventListener('click', () => {
+        if (state.recommendStyle === style.id) return;
+        state.recommendStyle = style.id;
+        persistSettingsAndSync();
+        renderRecommendStylePanel();
+        recomputeAndRender();
+      });
+      return chip;
+    })
+  );
+}
+
 function renderSettingsPanel() {
+  renderRecommendStylePanel();
   settingsSportList.replaceChildren(
     ...state.priorityOrder.map((sport, index) => {
       const row = document.createElement('div');
@@ -581,6 +675,7 @@ function renderSettingsPanel() {
 // mutation, rather than each individual toggle/reorder handler needing to
 // remember to do both.
 function persistSettingsAndSync() {
+  saveRecommendStyle(state.recommendStyle);
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
   saveMyServiceIds(state.myServiceIds);
@@ -932,17 +1027,24 @@ function pickDayRecommendations(dayMatches) {
 // gets the biggest negative one - symmetric around the middle rank so "no
 // preference at all" (the default order) really does mean zero nudge for
 // everyone, not just for whichever sport happens to be first in the array.
-function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set()) {
+function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'competitive') {
   const centerRank = (priorityOrder.length - 1) / 2;
   const withIntervals = matches.map(match => {
     const rank = priorityOrder.indexOf(match.sport);
     const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
     const service = resolveService(match.whereToWatchTw);
     const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
+    // Overrides the build-time composite with whichever field the chosen
+    // style actually ranks by (see recommendStyleScore) - every downstream
+    // consumer of `.score`/`.effectiveScore` (isStackQualityWorthy,
+    // pickDayRecommendations' cluster-anchor ranking, etc.) then just works
+    // off this one number without needing to know styles exist at all.
+    const styleScore = recommendStyleScore(match, recommendStyle);
     return {
       ...match,
+      score: styleScore,
       interval: matchInterval(match),
-      effectiveScore: match.score + priorityNudge + serviceNudge,
+      effectiveScore: styleScore + priorityNudge + serviceNudge,
       recommended: false
     };
   });
@@ -1536,7 +1638,7 @@ function applyMatchData(data) {
 function applyEnabledSportsAndRender() {
   const rawMatches = state.allRawMatches.filter(m => state.enabledSports.has(m.sport));
   state.rawMatches = rawMatches;
-  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
+  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds, state.recommendStyle);
   state.days = buildDayList(state.matches);
   // A sport filter that no longer exists at all (its sport just got
   // disabled in Settings) would otherwise leave the filter chips all

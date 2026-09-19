@@ -66,7 +66,12 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // below retries anything scored under an older one. A one-time full
 // re-score costs quota, but it's the only way an already-cached match ever
 // benefits from a prompt fix instead of keeping a stale answer forever.
-const PROMPT_VERSION = 5;
+// v6: added broadcastQuality (viewing-experience/production-value score,
+// independent of competitiveness/watchability) for the "轉播品質"
+// recommendation style - see public/app.js's "Recommendation style
+// setting". Every match already in the cache predates that field, so this
+// bump re-scores the whole window once to backfill it.
+const PROMPT_VERSION = 6;
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
@@ -469,7 +474,17 @@ function heuristicScore(match) {
   // AI 推薦)" caveat (see styles.css .is-heuristic) - this stays purely
   // descriptive so the two don't repeat each other.
   if (records.length !== 2) {
-    return { competitiveness: 5, watchability: 5, reason: '目前沒有雙方的戰績資料可供估計。', venueZh: '', whereToWatchTw: '' };
+    return {
+      competitiveness: 5,
+      watchability: 5,
+      // No real basis to judge production quality locally either (same
+      // reasoning as venueZh/whereToWatchTw below) - neutral rather than
+      // guessing at a specific platform's reputation.
+      broadcastQuality: 5,
+      reason: '目前沒有雙方的戰績資料可供估計。',
+      venueZh: '',
+      whereToWatchTw: ''
+    };
   }
   const winRates = records.map(r => r.wins / Math.max(1, r.wins + r.losses));
   const diff = Math.abs(winRates[0] - winRates[1]);
@@ -477,6 +492,8 @@ function heuristicScore(match) {
   return {
     competitiveness: Math.max(1, Math.min(8, Math.round(8 - diff * 16))),
     watchability: Math.max(1, Math.min(8, Math.round(avg * 10))),
+    // See the records.length !== 2 branch above - same reasoning.
+    broadcastQuality: 5,
     reason: `依雙方目前戰績估計（${records[0].wins}勝${records[0].losses}敗 對 ${records[1].wins}勝${records[1].losses}敗）。`,
     // Neither can be guessed locally - no real-world knowledge behind this
     // fallback path at all (see this function's own top comment) - so both
@@ -793,11 +810,17 @@ async function main() {
 
   for (const match of toFetchNow) {
     const pick = freshPicks.get(match.id);
-    if (pick && Number.isFinite(pick.competitiveness) && Number.isFinite(pick.watchability)) {
+    if (
+      pick &&
+      Number.isFinite(pick.competitiveness) &&
+      Number.isFinite(pick.watchability) &&
+      Number.isFinite(pick.broadcastQuality)
+    ) {
       cache[match.id] = {
         startTimeUtc: match.startTimeUtc,
         competitiveness: Math.max(1, Math.min(10, Math.round(pick.competitiveness))),
         watchability: Math.max(1, Math.min(10, Math.round(pick.watchability))),
+        broadcastQuality: Math.max(1, Math.min(10, Math.round(pick.broadcastQuality))),
         reason: String(pick.reason || '').slice(0, 300),
         venueZh: String(pick.venueZh || '').slice(0, 100),
         whereToWatchTw: String(pick.whereToWatchTw || '').slice(0, 100),
@@ -823,6 +846,7 @@ async function main() {
     if (match.isFinished) {
       match.competitiveness = null;
       match.watchability = null;
+      match.broadcastQuality = null;
       match.reason = '';
       match.venueZh = '';
       match.whereToWatchTw = '';
@@ -833,6 +857,11 @@ async function main() {
     const scored = cache[match.id] || { ...heuristicScore(match), source: 'heuristic' };
     match.competitiveness = scored.competitiveness;
     match.watchability = scored.watchability;
+    // ?? 5 covers a cache entry written before broadcastQuality existed -
+    // PROMPT_VERSION's bump (see its own comment) means this only matters
+    // for the one build before everything currently in the window gets
+    // re-scored, never a permanent gap.
+    match.broadcastQuality = scored.broadcastQuality ?? 5;
     match.reason = scored.reason;
     match.venueZh = scored.venueZh || '';
     match.whereToWatchTw = scored.whereToWatchTw || '';
