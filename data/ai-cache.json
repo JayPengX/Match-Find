@@ -257,15 +257,16 @@
   },
   "mls-761828": {
     "startTimeUtc": "2026-09-20T02:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 7,
     "broadcastQuality": 9,
     "enduranceScore": 6,
-    "reason": "波特蘭伐木者主場迎戰亞特蘭大聯。",
+    "reason": "波特蘭伐木者主場戰績強勢，預期這場美職對決將十分精彩激戰。",
     "venueZh": "普羅vidence公園",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mls-761829": {
     "startTimeUtc": "2026-09-20T23:00:00.000Z",
@@ -571,27 +572,29 @@
   },
   "mlb-401817001": {
     "startTimeUtc": "2026-09-19T20:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 8,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "釀酒人戰績領先，作客金鶯。",
+    "reason": "密爾瓦基釀酒人戰績領先，客場對決巴爾的摩金鶯極具看點。",
     "venueZh": "金鶯球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401816998": {
     "startTimeUtc": "2026-09-19T20:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 9,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "光芒主場迎戰紅襪，美東排名之爭。",
+    "reason": "坦帕灣光芒與波士頓紅襪的美聯東區內戰，季後賽競爭激烈。",
     "venueZh": "純品康納球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817002": {
     "startTimeUtc": "2026-09-19T20:10:00.000Z",
@@ -620,15 +623,16 @@
   },
   "mlb-401816999": {
     "startTimeUtc": "2026-09-19T22:40:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 7,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "小熊客場對陣紅人。",
+    "reason": "芝加哥小熊全力爭取季後賽席位，作客辛辛那提紅人佔有優勢。",
     "venueZh": "大美國球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817000": {
     "startTimeUtc": "2026-09-19T22:40:00.000Z",
@@ -644,15 +648,16 @@
   },
   "mlb-401817005": {
     "startTimeUtc": "2026-09-19T23:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 8,
+    "watchability": 7,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "藍鳥作客遊騎兵，實力相當。",
+    "reason": "多倫多藍鳥與德州遊騎兵戰力相當，這場比賽勝負難料。",
     "venueZh": "全球人壽球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817003": {
     "startTimeUtc": "2026-09-19T23:10:00.000Z",
@@ -718,15 +723,16 @@
   },
   "mlb-401817008": {
     "startTimeUtc": "2026-09-20T00:40:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 7,
+    "watchability": 8,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "教士主場迎戰馬林魚。",
+    "reason": "聖地牙哥教士近況穩健，主場迎戰邁阿密馬林魚勝算較高。",
     "venueZh": "沛可公園球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817011": {
     "startTimeUtc": "2026-09-20T01:10:00.000Z",
@@ -2014,11 +2020,12 @@
     "watchability": 6,
     "broadcastQuality": 7,
     "enduranceScore": 6,
-    "reason": "守護者戰績較佳，皇家主場力求表現。",
+    "reason": "守護者隊戰績較佳且具備季後賽競爭力，整體對戰吸引力略勝一籌。",
     "venueZh": "考夫曼體育場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817110": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
@@ -2060,15 +2067,16 @@
   },
   "mlb-401817113": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 5,
+    "watchability": 5,
     "broadcastQuality": 7,
     "enduranceScore": 6,
-    "reason": "水手爭取季後賽機會，天使戰力稍弱。",
+    "reason": "兩隊本季戰績皆不理想，關注度與精彩程度稍遜於同時段賽事。",
     "venueZh": "T-Mobile 球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 8
+    "promptVersion": 8,
+    "refined": true
   },
   "mlb-401817114": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
