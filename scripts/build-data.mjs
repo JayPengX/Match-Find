@@ -216,19 +216,12 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
 
   const matches = [];
   const seenIds = new Set();
-  // TEMPORARY diagnostic - see the "live match" fix's own follow-up commit
-  // for why: confirming, from real build output, exactly what ESPN's raw
-  // state distribution looks like for this league at this run, since this
-  // sandbox has no direct network access to verify it any other way.
-  const debugStateCounts = {};
   for (const result of results) {
     if (result.status !== 'fulfilled') continue;
     for (const event of result.value.events || []) {
       if (seenIds.has(event.id)) continue; // a doubleheader's 2nd game can appear under both query dates near midnight UTC
       const competition = event.competitions?.[0];
       const statusType = competition?.status?.type;
-      const debugKey = statusType?.state || 'unknown';
-      debugStateCounts[debugKey] = (debugStateCounts[debugKey] || 0) + 1;
       // Only a truly FINISHED fixture ('post') is excluded - a LIVE one
       // ('in') is exactly what this site should be recommending someone
       // watch right now, and used to be dropped here by mistake: this
@@ -317,12 +310,6 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       });
     }
   }
-  console.log(
-    `[debug] ${league.label} raw ESPN states this run:`,
-    JSON.stringify(debugStateCounts),
-    '-> kept', matches.length,
-    'first few kept startTimeUtc:', matches.slice(0, 5).map(m => m.startTimeUtc)
-  );
   return matches;
 }
 
