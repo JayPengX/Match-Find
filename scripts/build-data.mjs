@@ -331,13 +331,6 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       });
     }
   }
-  // TEMPORARY diagnostic - verifying the "query yesterday's date too" fix
-  // above actually surfaces a currently-live game, straight from real
-  // build output. Removed in the immediate follow-up commit once confirmed.
-  console.log(
-    `[debug] ${league.label}: kept ${matches.length}, live now:`,
-    JSON.stringify(matches.filter(m => Date.parse(m.startTimeUtc) <= now.getTime()).map(m => ({ id: m.id, start: m.startTimeUtc, name: m.name })))
-  );
   return matches;
 }
 
