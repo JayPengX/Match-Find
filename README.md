@@ -22,10 +22,17 @@ Scoring and picking are split across two different places, deliberately:
 
 1. **`scripts/build-data.mjs`** (run by the scheduled GitHub Action below,
    never by a browser — see "AI runs in the background" below) fetches
-   upcoming fixtures for the next 14 days from
+   upcoming *and currently-live* fixtures for the next 14 days from
    [ESPN's public scoreboard API](https://site.api.espn.com) — no API key
-   needed for this part. Each fixture comes with both teams' ESPN-hosted
-   logo and a Traditional Chinese name looked up from
+   needed for this part. Only a FINISHED fixture is excluded - this script
+   re-fetches ESPN's live feed on every scheduled run and every push, so a
+   fixture that was still upcoming last run has very often already started
+   by the next one; dropping it the moment ESPN flips it to "live" used to
+   mean a match a viewer was actively watching would simply vanish from
+   "today" mid-game, even though the client already has everything it
+   needs (relativeLabel/`.is-live`, see "Page layout" below) to show it as
+   直播中 once it's actually in the data. Each fixture comes with both
+   teams' ESPN-hosted logo and a Traditional Chinese name looked up from
    `scripts/team-names.mjs` (a static, best-effort translation table — see
    that file's own comment; a team missing from it just shows English-only).
 2. It sends only fixtures it hasn't already scored (see "AI score cache"

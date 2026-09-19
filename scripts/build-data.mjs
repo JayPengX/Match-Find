@@ -1,9 +1,10 @@
 // ---- scripts/build-data.mjs ----
-// Fetches upcoming fixtures for the Premier League, MLS, MLB, NBA, and F1
-// from ESPN's public scoreboard API (no key required) across the next
-// DAYS_AHEAD days, scores each one for competitiveness/watchability, and
-// writes the flat result to public/data/matches.json for the static site
-// to render.
+// Fetches upcoming AND currently-live fixtures for the Premier League, MLS,
+// MLB, NBA, and F1 from ESPN's public scoreboard API (no key required)
+// across the next DAYS_AHEAD days, scores each one for competitiveness/
+// watchability, and writes the flat result to public/data/matches.json for
+// the static site to render. Only a FINISHED fixture is excluded - a live
+// one is exactly what "what's worth watching" should be able to recommend.
 //
 // Runs at build time only (a scheduled GitHub Action, see
 // .github/workflows/deploy.yml) - never per page view, and never triggered
@@ -221,7 +222,21 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       if (seenIds.has(event.id)) continue; // a doubleheader's 2nd game can appear under both query dates near midnight UTC
       const competition = event.competitions?.[0];
       const statusType = competition?.status?.type;
-      if (statusType?.state !== 'pre') continue; // already live or finished - not "upcoming"
+      // Only a truly FINISHED fixture ('post') is excluded - a LIVE one
+      // ('in') is exactly what this site should be recommending someone
+      // watch right now, and used to be dropped here by mistake: this
+      // script re-fetches ESPN's feed on every scheduled run (every ~6h)
+      // AND on every push, and a fixture that was 'pre' (upcoming) at one
+      // run has very often flipped to 'in' by the time the next run
+      // happens mid-game - previously that meant a match simply vanished
+      // from matches.json the moment it actually started, taking its
+      // "recommended" status and the client's own "直播中"/is-live
+      // styling (public/app.js's relativeLabel/buildMatchCard - both
+      // already built to handle a live match, just never fed one) with it.
+      // Confirmed live: a viewer mid-game, asking why "today" suddenly
+      // showed nothing for the sport they were actively watching.
+      if (statusType?.state !== 'pre' && statusType?.state !== 'in') continue;
+      const isLive = statusType.state === 'in';
       const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(event.date);
       if (!Number.isFinite(startMs)) continue;
@@ -233,8 +248,14 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       // above), so that alone is enough to know it belongs in this window -
       // a non-TBD fixture still needs the precise bounds check since ESPN's
       // per-day results occasionally spill a neighboring day's event across
-      // a UTC midnight boundary.
-      if (!timeTbd && (startMs < now.getTime() || startMs > windowEndMs)) continue;
+      // a UTC midnight boundary. A LIVE fixture is exempted from the lower
+      // bound the same way TBD is, for the same underlying reason: its
+      // start time is necessarily already in the past (that's what "live"
+      // means), which the plain `startMs < now` check would otherwise
+      // reject as if it were a stale event from outside the window - the
+      // upper bound still applies (windowEndMs is always well in the
+      // future, so this never actually lets in anything unreasonable).
+      if (!timeTbd && !isLive && (startMs < now.getTime() || startMs > windowEndMs)) continue;
       seenIds.add(event.id);
 
       // Always [away, home] regardless of the order ESPN happens to list
@@ -331,11 +352,15 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       const session = (event.competitions || []).find(c => c.type?.abbreviation === sessionType.abbreviation);
       if (!session) continue; // e.g. no "SR" on a non-sprint weekend
       const statusType = session.status?.type;
-      if (statusType?.state !== 'pre') continue;
+      // Same fix as fetchTeamLeagueMatches above, same reasoning: a LIVE
+      // session ('in' - e.g. an in-progress qualifying or race) should
+      // still be recommendable, not dropped the moment it starts.
+      if (statusType?.state !== 'pre' && statusType?.state !== 'in') continue;
+      const isLive = statusType.state === 'in';
       const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(session.date || event.date);
       if (!Number.isFinite(startMs)) continue;
-      if (!timeTbd && (startMs < now.getTime() || startMs > windowEndMs)) continue;
+      if (!timeTbd && !isLive && (startMs < now.getTime() || startMs > windowEndMs)) continue;
 
       const broadcast = (session.broadcasts || []).flatMap(b => b.names || []).slice(0, 1)[0];
 
