@@ -29,7 +29,7 @@ const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
   rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
-  matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlapsWithPrevious/.overlappingIds
+  matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.stackAlternativeIds/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   visibleDayCount: 7,
   selectedDayKey: null,
@@ -57,6 +57,35 @@ const SPORT_LABELS_ZH = {
   F1: 'F1'
 };
 
+// Tapping a match card opens the sport's own official league app on iOS -
+// these are universal links (a normal https:// URL the league's own domain
+// has registered an apple-app-site-association file for), not custom URL
+// schemes, so there's no "invalid address" failure mode to worry about: if
+// the app is installed, iOS Safari hands the tap straight to it; if it
+// isn't, this just opens the league's real website instead. Every URL here
+// was confirmed live against that domain's own AASA file, not guessed.
+//
+// None of these point at the SPECIFIC fixture on the card - this site only
+// has ESPN's own event id for a match, not that league's own game/match id
+// (MLB's gamePk, the NBA's gameId, the Premier League's match id), and
+// there's no reliable way to cross-reference one from the other without a
+// second per-league API integration this feature doesn't otherwise need.
+// Landing on the league's live scoreboard/schedule is still exactly where
+// someone tapping a match card to "go watch this" wants to end up.
+//
+// MLS has no entry: confirmed live that mlssoccer.com serves no AASA file
+// at all (a plain 404 on /.well-known/apple-app-site-association), and no
+// documented custom scheme exists either - tapping an MLS card just does
+// nothing special (falls through to whatever renderMatchCard/browser
+// default behavior applies to non-interactive content), same as before
+// this feature existed.
+const SPORT_APP_LINKS = {
+  MLB: 'https://www.mlb.com/scores',
+  NBA: 'https://www.nba.com/games',
+  'Premier League': 'https://www.premierleague.com/en/matches',
+  F1: 'https://www.formula1.com/en/racing'
+};
+
 // ---- Broadcast service registry -------------------------------------------
 //
 // `whereToWatchTw` (see Orbit's /match-recommend) is free-form text written
@@ -78,19 +107,33 @@ const SPORT_LABELS_ZH = {
 // already pulled from ESPN's own CDN elsewhere in this file. `logoBg` is
 // the background the mark needs to actually be visible (several of these
 // are white- or dark-only artwork with no built-in backdrop). A service
-// with no real logo found on Commons (緯來, myVideo, MLB.TV) falls back to
-// the plain colored-initial `badge` design from before - buildMatchCard
+// with no real logo confirmed on Commons (緯來, myVideo, MLB.TV, 愛爾達 -
+// see that entry's own comment) falls back to the plain colored-initial
+// `badge` design from before - buildMatchCard
 // below tries `logo` first and only falls back to `badge` on a load
 // failure (same onerror pattern as team logos) or when `logo` is absent.
+//
+// `appLink` is the tap target for the watch badge itself (see
+// SPORT_APP_LINKS above for the card-level equivalent) - a universal link
+// confirmed against that service's own AASA file where one exists, so it
+// opens that specific streaming app on iOS if installed and its real
+// website otherwise. Absent for a service with no confirmed link (愛爾達,
+// 緯來, myVideo - none publish an AASA file, and no documented custom
+// scheme was found for any of them either): the badge just isn't tappable
+// for those, same as before this feature existed, rather than guessing.
 const SERVICES = [
+  // No `logo` here on purpose: the Commons file this used to point at
+  // (ELTA_logo.svg) turned out, on closer look, to be the logo of ELTA -
+  // a Lithuanian news agency that just happens to share the initialism -
+  // not Taiwan's 愛爾達體育台 at all. No genuine Commons file for the
+  // Taiwan channel's own mark was found, so this falls back to the plain
+  // colored-initial badge below rather than risk another wrong logo.
   {
     id: 'elta',
     pattern: /愛爾達|ELTA/i,
     label: '愛爾達體育台',
     badge: '達',
-    color: '#ff7a3d',
-    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/ELTA_logo.svg',
-    logoBg: '#ffffff'
+    color: '#ff7a3d'
   },
   {
     id: 'appletv',
@@ -99,7 +142,8 @@ const SERVICES = [
     badge: 'TV',
     color: '#1d1d1f',
     logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/AppleTVLogo.svg',
-    logoBg: '#1d1d1f'
+    logoBg: '#1d1d1f',
+    appLink: 'https://tv.apple.com'
   },
   {
     id: 'netflix',
@@ -108,17 +152,25 @@ const SERVICES = [
     badge: 'N',
     color: '#e50914',
     logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/Netflix_icon.svg',
-    logoBg: '#ffffff'
+    logoBg: '#ffffff',
+    appLink: 'https://www.netflix.com/browse'
   },
   { id: 'weilai', pattern: /緯來/i, label: '緯來體育台', badge: '緯', color: '#0068b7' },
+  // DAZN completed its acquisition of ELEVEN Sports in Feb 2023, and the
+  // ELEVEN brand itself was fully retired in Taiwan by mid-2024 - the
+  // pattern still matches "ELEVEN SPORTS" too (Gemini's own knowledge
+  // predates the rebrand often enough that it still says the old name
+  // sometimes) so an old-brand answer still resolves to today's real
+  // service instead of going unrecognized.
   {
     id: 'eleven',
-    pattern: /ELEVEN\s*SPORTS/i,
-    label: 'ELEVEN SPORTS',
-    badge: '11',
-    color: '#f2394c',
-    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/ELEVEN_SPORTS_Logo.svg',
-    logoBg: '#000000'
+    pattern: /DAZN|ELEVEN\s*SPORTS/i,
+    label: 'DAZN',
+    badge: 'DZN',
+    color: '#000000',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/DAZN_logo.svg',
+    logoBg: '#000000',
+    appLink: 'https://www.dazn.com'
   },
   {
     id: 'disneyplus',
@@ -773,8 +825,15 @@ const DIVERSITY_MIN_SCORE = 6.5;
 // recommended match's swipeable stack (see the pass after the DP in
 // resolveViewingPlan) - lower than DIVERSITY_MIN_SCORE on purpose, since
 // browsing a stack is opt-in (a swipe), not something forced in front of
-// everyone by default.
-const STACK_MIN_SCORE = 5;
+// everyone by default. Still a real floor, not "anything that overlaps" -
+// raised from an earlier, looser value after live use showed a low bar let
+// in fixtures nobody would call "equally good".
+const STACK_MIN_SCORE = 6;
+// The second half of "equally good" - an overlapping fixture also has to
+// come within this many points of the recommended match's own score, so a
+// great pick's stack doesn't fill up with merely-decent leftovers just
+// because STACK_MIN_SCORE alone let them through.
+const STACK_MAX_SCORE_GAP = 1.5;
 // Caps how many alternatives one stack can hold - a "swipe to see what
 // else was on" gesture stops being quick past a handful of cards.
 const STACK_MAX_ALTERNATIVES = 3;
@@ -912,40 +971,97 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
     }
   }
 
-  const recommendedSorted = withIntervals.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
-  for (let i = 1; i < recommendedSorted.length; i++) {
-    const minutes = overlapMinutes(recommendedSorted[i], recommendedSorted[i - 1]);
-    if (minutes > 0) {
-      recommendedSorted[i].overlapsWithPrevious = { id: recommendedSorted[i - 1].id, minutes: Math.round(minutes) };
-    }
-  }
+  let recommendedSorted = withIntervals.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
 
-  // Attaches a small set of overlapping-but-not-picked fixtures to each
-  // recommended match, for the swipeable card stack (see
-  // renderRecommendedSection) - unlike the always-expanded "show both at
-  // once" layout this replaced, browsing alternatives here is opt-in (a
-  // swipe), so this can afford to be more generous about what counts as
-  // worth surfacing than a forced side-by-side display could: any
-  // overlapping fixture that's still a genuinely decent watch
-  // (STACK_MIN_SCORE), not only a near-exact tie. Each alternative is
-  // claimed by at most one recommended match (whichever it overlaps that's
-  // processed first, in chronological order) so it never appears in two
-  // different stacks at once.
+  // Two DP picks can still genuinely overlap each other in time - either
+  // the DP's own tolerance (compatible() allows up to
+  // OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES of overlap between two high-score
+  // picks) or the diversity floor above (added without ever checking
+  // against what's already recommended - and specifically because it's
+  // nudged by priorityOrder, it can hand a merely-decent fixture in the
+  // user's favorite sport a "recommended" slot that happens to overlap a
+  // genuinely great one). Left alone, both used to render as separate
+  // top-level recommended cards - exactly the "still shown in separate
+  // stacks" bug a swipeable stack was supposed to fix. Instead, group any
+  // recommended matches that mutually overlap into one cluster (chained,
+  // so a 3-way overlap where only the middle one touches both ends still
+  // lands in a single cluster), keep only the best-scoring member of each
+  // cluster (by effectiveScore, i.e. respecting the user's own priority
+  // order - the same thing the DP itself uses to prefer one match over
+  // another) as a top-level recommended card, and demote the rest.
+  //
+  // A demoted match only joins the primary's stack if it's still
+  // genuinely "equally good" by the SAME raw-score bar the plain
+  // alternative-attachment pass below uses (STACK_MIN_SCORE and
+  // STACK_MAX_SCORE_GAP) - effectiveScore decided who WINS the slot, but
+  // it shouldn't decide who's worth swiping to, since that's exactly the
+  // priority nudge turning a mediocre match into a false "equally good"
+  // by riding the user's own favorite-sport preference. A demoted match
+  // that doesn't clear the bar just loses its recommended status
+  // entirely, same as any other match that lost its slot - it still shows
+  // up in "所有賽事" with the usual "time overlaps what's recommended"
+  // note, it just isn't offered as a swipe option.
+  const clusters = [];
+  recommendedSorted.forEach(match => {
+    const cluster = clusters.find(c => c.some(m => overlapMinutes(m, match) > 0));
+    if (cluster) cluster.push(match);
+    else clusters.push([match]);
+  });
   const claimedStackIds = new Set();
+  clusters
+    .filter(cluster => cluster.length > 1)
+    .forEach(cluster => {
+      const [primary, ...rest] = cluster.slice().sort((a, b) => b.effectiveScore - a.effectiveScore);
+      const worthy = rest.filter(m => m.score >= STACK_MIN_SCORE && m.score >= primary.score - STACK_MAX_SCORE_GAP);
+      rest.forEach(match => { match.recommended = false; });
+      worthy.forEach(match => claimedStackIds.add(match.id));
+      if (worthy.length) {
+        primary.stackAlternativeIds = worthy
+          .map(m => m.id)
+          .sort((a, b) => {
+            const scoreOf = id => withIntervals.find(m => m.id === id).score;
+            return scoreOf(b) - scoreOf(a);
+          });
+      }
+    });
+  recommendedSorted = recommendedSorted.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
+
+  // Attaches a small set of further overlapping-but-not-picked fixtures to
+  // each recommended match's stack (on top of any merged in above), for
+  // the swipeable card stack (see renderRecommendedSection) - unlike the
+  // always-expanded "show both at once" layout this replaced, browsing
+  // alternatives here is opt-in (a swipe), so this can afford to be more
+  // generous than a forced side-by-side display could. Still "equally
+  // good", not "anything that overlaps": a fixture has to clear both an
+  // absolute quality floor (STACK_MIN_SCORE) AND come within
+  // STACK_MAX_SCORE_GAP of the recommended match's own score - a 9-rated
+  // pick's stack shouldn't fill up with 6-rated leftovers just because they
+  // happened to overlap it. Each alternative is claimed by at most one
+  // recommended match (whichever it overlaps that's processed first, in
+  // chronological order) so it never appears in two different stacks at
+  // once, and the merged-in cluster members above are claimed already so
+  // they can't also get pulled into a neighboring stack.
   recommendedSorted.forEach(rec => {
-    const alternativeIds = rec.overlappingIds
+    const alreadyClaimed = rec.stackAlternativeIds || [];
+    const extraIds = rec.overlappingIds
       .filter(id => {
-        if (claimedStackIds.has(id)) return false;
+        if (claimedStackIds.has(id) || alreadyClaimed.includes(id)) return false;
         const other = withIntervals.find(m => m.id === id);
-        return other && !other.recommended && other.score >= STACK_MIN_SCORE;
+        return (
+          other &&
+          !other.recommended &&
+          other.score >= STACK_MIN_SCORE &&
+          other.score >= rec.score - STACK_MAX_SCORE_GAP
+        );
       })
       .sort((a, b) => {
         const scoreOf = id => withIntervals.find(m => m.id === id).score;
         return scoreOf(b) - scoreOf(a);
       })
-      .slice(0, STACK_MAX_ALTERNATIVES);
-    alternativeIds.forEach(id => claimedStackIds.add(id));
-    if (alternativeIds.length) rec.stackAlternativeIds = alternativeIds;
+      .slice(0, Math.max(0, STACK_MAX_ALTERNATIVES - alreadyClaimed.length));
+    extraIds.forEach(id => claimedStackIds.add(id));
+    const combined = [...alreadyClaimed, ...extraIds];
+    if (combined.length) rec.stackAlternativeIds = combined;
   });
 
   return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
@@ -1073,6 +1189,20 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
     // anything without it - see DEFAULT_MY_SERVICE_IDS's own comment on why
     // this stays a nudge, not a filter.
     watchEl.querySelector('.watch-owned').hidden = !(service && state.myServiceIds.has(service.id));
+
+    // Tapping the badge opens that streaming service's own app (see each
+    // SERVICES entry's `appLink`) - only set `href` when a real, verified
+    // link exists (the template's `<a>` has none by default, so it's
+    // otherwise just a plain non-interactive badge, same as before this
+    // existed). stopPropagation runs UNCONDITIONALLY, not only when
+    // `appLink` exists - otherwise tapping a badge for a service with no
+    // link of its own (e.g. 愛爾達) would silently fall through to the
+    // card's own SPORT_APP_LINKS tap-through below, opening the sport's
+    // league app from what looks like a tap on an unrelated, inert badge.
+    // Tapping this badge should always mean either "open this service" or
+    // "nothing happens", never "open something else instead".
+    if (service && service.appLink) badge.href = service.appLink;
+    badge.addEventListener('click', event => event.stopPropagation());
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
@@ -1088,25 +1218,22 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
-  // Three cases, deliberately not layered on top of each other:
-  //   1. Recommended, and it only made the cut by eating into the
-  //      previous pick's slot a little - say so, framed as a deliberate
-  //      trade-off.
-  //   2. Rendered as a card inside another match's swipeable stack (see
+  // Two cases, deliberately not layered on top of each other:
+  //   1. Rendered as a card inside another match's swipeable stack (see
   //      renderRecommendedSection/buildMatchStack) - shown at full
   //      strength, no muting, since being offered as a swipe-to option is
   //      already the point; the plain "所有賽事" listing further down
-  //      still mutes this same fixture on its own, unstacked card.
-  //   3. Genuinely lost its slot with nothing surfacing it as an
+  //      still mutes this same fixture on its own, unstacked card. This
+  //      now also covers what used to be a separate "recommended, but
+  //      overlapping the previous recommended pick" case - two recommended
+  //      matches that overlap in time get merged into one stack in
+  //      resolveViewingPlan rather than shown as two adjacent cards, so
+  //      that case no longer exists on its own.
+  //   2. Genuinely lost its slot with nothing surfacing it as an
   //      alternative anywhere - muted, with a note pointing at what's
   //      recommended instead.
   const conflictNote = node.querySelector('.conflict-note');
-  if (match.recommended && match.overlapsWithPrevious) {
-    const previous = state.matches.find(m => m.id === match.overlapsWithPrevious.id);
-    conflictNote.hidden = false;
-    conflictNote.classList.add('is-allowed-overlap');
-    conflictNote.textContent = `與「${previous ? previous.name : '前一場推薦賽事'}」重疊約 ${match.overlapsWithPrevious.minutes} 分鐘——因賽事精彩仍納入推薦。`;
-  } else if (isStackAlternative) {
+  if (isStackAlternative) {
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
     conflictNote.textContent = '同一時段的另一個選擇——精彩程度也不差，滑動比較看看。';
@@ -1122,6 +1249,28 @@ function buildMatchCard(match, { isStackAlternative = false } = {}) {
 
   const now = Date.now();
   if (!match.timeTbd && now >= start && now < end) node.classList.add('is-live');
+
+  // Tapping the card itself opens the sport's official league app (see
+  // SPORT_APP_LINKS above) - a plain click handler rather than wrapping
+  // the card in a real <a>, since the watch badge above needs its own,
+  // different link and nested <a> elements aren't valid HTML (browsers
+  // reliably mangle them). role="link"/tabIndex/keydown gives this the
+  // same keyboard reachability a real link would have despite not being
+  // one. The watch badge's own click handler stops propagation, so
+  // tapping it opens the streaming app instead of both.
+  const appLink = SPORT_APP_LINKS[match.sport];
+  if (appLink) {
+    node.classList.add('is-tappable');
+    node.setAttribute('role', 'link');
+    node.tabIndex = 0;
+    const openSportApp = () => window.open(appLink, '_blank', 'noopener');
+    node.addEventListener('click', openSportApp);
+    node.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openSportApp();
+    });
+  }
 
   return node;
 }

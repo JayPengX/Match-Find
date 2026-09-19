@@ -426,6 +426,19 @@ main#app {
   color: var(--good);
   font-weight: 700;
 }
+/* Tappable to the sport's own official app - see app.js's SPORT_APP_LINKS
+   and buildMatchCard. role="link"/tabIndex there gives this real keyboard
+   focusability despite not being an actual <a> (the watch badge inside
+   needs its own separate link, and nested <a> elements aren't valid
+   HTML), so it needs its own visible focus ring rather than relying on
+   the browser's native link outline. */
+.match-card.is-tappable {
+  cursor: pointer;
+}
+.match-card.is-tappable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* A recommended match with genuinely decent overlapping alternatives (see
    app.js's resolveViewingPlan/buildMatchStack) renders as a horizontally
@@ -615,6 +628,15 @@ main#app {
   font-weight: 700;
   line-height: 1;
   overflow: hidden;
+  /* Now an <a> (see index.html's match-card-template, for services with a
+     confirmed app link - see SERVICES' appLink) rather than a plain span -
+     reset the browser's own link styling so an unlinked badge (no `href`
+     set) and a linked one look identical, cursor included. */
+  text-decoration: none;
+  cursor: default;
+}
+.watch-badge[href] {
+  cursor: pointer;
 }
 .watch-logo {
   height: 12px;
