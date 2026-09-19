@@ -25,8 +25,6 @@
 <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <button id="settings-btn" class="settings-fab" type="button" aria-label="設定">⚙</button>
-
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>
   <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="設定">
     <div class="settings-panel-header">
@@ -98,7 +96,10 @@
     </section>
 
     <section id="filters-section">
-      <div id="sport-filters" class="filter-row" role="group" aria-label="依運動篩選"></div>
+      <div class="filter-row">
+        <button id="settings-btn" class="settings-chip-btn" type="button" aria-label="設定">⚙</button>
+        <div id="sport-filters" role="group" aria-label="依運動篩選"></div>
+      </div>
     </section>
 
     <section id="recommended-section">

@@ -18,8 +18,8 @@ No sign-up, no app — it's a GitHub Pages site rebuilt every 15 minutes,
 installable as a PWA. There's no in-page header at all (an earlier version
 had a slim one; dropped entirely - an installed PWA's home-screen icon/OS
 title bar already carries the app's identity, so a masthead here was just
-empty space repeating it) - Settings lives behind a floating button fixed
-to the corner instead.
+empty space repeating it) - Settings (⚙) lives inline with the sport filter
+chips instead.
 
 ## How it works
 
@@ -42,45 +42,69 @@ Scoring and picking are split across two different places, deliberately:
    that file's own comment; a team missing from it just shows English-only).
 2. It sends only fixtures it hasn't already scored (see "AI score cache"
    below) to a `/match-recommend` endpoint on a shared Cloudflare Worker
-   (see "AI recommendations" below), which asks Gemini for four things per
+   (see "AI recommendations" below), which asks Gemini for five things per
    fixture: **competitiveness** (how close it's likely to be),
    **watchability** (how entertaining/notable it is regardless of
-   closeness), the venue's **Traditional Chinese name**, and **where to
-   watch it in Taiwan** (a TV channel or streaming service, e.g. 愛爾達體育台
-   or Apple TV — ESPN's API has no concept of Taiwan broadcast rights at
-   all, so this can only come from the model's own knowledge, same as the
-   scoring). None of this depends on who's looking at the page or when, so
-   it's all computed once, at build time, and cached.
+   closeness), **enduranceScore** (how likely it is to STAY worth watching
+   all the way to the end, rather than turning into a blowout - see "The
+   viewing plan" below for how this feeds the schedule itself), the venue's
+   **Traditional Chinese name**, and **where to watch it in Taiwan** (a TV
+   channel or streaming service, e.g. 愛爾達體育台 or Apple TV — ESPN's API
+   has no concept of Taiwan broadcast rights at all, so this can only come
+   from the model's own knowledge, same as the scoring). None of this
+   depends on who's looking at the page or when, so it's all computed once,
+   at build time, and cached.
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
-   decides **one local calendar day at a time** which fixtures are worth
-   recommending. This has to run client-side, not at build time, because
-   its real inputs are relative to *your* clock, and one static build
-   serves every viewer in every timezone at once:
-   - A fixture whose **local** start time falls between midnight and 5am
-     is never eligible to be recommended, however good its score — this
-     site won't tell you a 4am kickoff is unmissable. It still shows up
-     further down in "all matches", just never as a recommended pick.
-   - A fixture is recommended purely on its own merits
-     (`RECOMMENDED_MIN_SCORE`, a flat bar its own score has to clear) -
-     **not** relative to whatever else happens to be airing at the same
-     time. Earlier designs (see `pickDayRecommendations`'s own top comment
-     for the full history: a scheduling DP, then an overlap-clustering pass
-     with one pick per slot and the rest demoted to a swipeable
-     "alternative" or dropped) all shared the same real flaw: two or three
-     genuinely good fixtures airing at once meant only one of them actually
-     got recommended, purely because something else nearby scored slightly
-     higher - not because the others weren't worth watching. Overlap is
-     still surfaced - see the next bullet - it just no longer excludes a
-     good match from being recommended.
-   - Any card whose start overlaps an **earlier** match gets a small note
-     saying so and for how long ("與「X」重疊 45 分鐘") - this is a plain
-     fact about the schedule, shown regardless of whether either match is
-     recommended, so two great fixtures airing at once are both still
-     fully recommended, with a note letting you know they clash.
-   - Whichever recommended fixture is currently live, or (failing that) the
-     soonest one still to come, is pinned to the top of the day's list.
+   converts every fixture's kickoff to your own local time and applies your
+   Settings nudges (sport priority, owned services). The actual "what's
+   worth watching today" decision — **one local calendar day at a time**,
+   because "what counts as an unreasonable hour" and "which fixtures
+   actually conflict" are both relative to *your* clock — happens in
+   `computeDayPlan`, described in "The viewing plan" below.
+
+## The viewing plan
+
+You can only watch one thing at a time, so 推薦賽事 isn't a set of
+independent "this one's good" judgments - it's **one continuous back-to-back
+plan for the day**, built by `computeDayPlan` in `public/app.js`:
+
+- A fixture whose **local** start time falls between midnight and 5am is
+  never a candidate, however good its score — this site won't tell you a
+  4am kickoff is unmissable. It still shows up in "所有賽事", just never in
+  the plan.
+- Two fixtures that overlap so much you genuinely can't sequence them - the
+  overlap covers at least 75% of the SHORTER one's own length
+  (`NEAR_TOTAL_OVERLAP_FRACTION`, `isNearTotalOverlap`) - become one **slot**:
+  a swipeable card stack, not two separate picks. Anything overlapping
+  less than that isn't forced into a choice; the plan below just resolves
+  it on its own.
+- The plan itself is the maximum-total-score set of NON-overlapping slots
+  for the day (a real weighted-interval-scheduling chain, `computeDayPlan`/
+  `weightedIntervalSchedule`) - not a per-match threshold, and not "highest
+  score wins its own little slot, everything else nearby is quality-gated
+  or dropped" (both tried in earlier versions - see that function's own
+  comment for why each one either hid good games or stopped being an
+  actual PLAN). A slot's own `enduranceScore` decides how much of its
+  nominal length actually blocks the next pick from starting
+  (`effectiveDurationMinutes`) - a fixture unlikely to stay watchable to
+  the end frees the schedule up sooner than its full listed length would
+  suggest, letting the next pick start earlier.
+- **Swiping a stack is a real commitment, not just a peek.** Settling on a
+  different card pins that match as the slot's fixed choice
+  (`pinSlotChoice`) and rebuilds the WHOLE day's plan around it — the
+  matches scheduled both before and after it are freshly reasoned about
+  relative to the pin, not just appended after whatever was there before.
+  Picking a shorter alternative can free up enough time for a fixture that
+  didn't fit before to join the plan afterward. Pins are session-only (not
+  saved across a reload) and scoped to one calendar day.
+- Any card whose start overlaps an **earlier** match — regardless of
+  whether either one made the plan — gets a small note saying so and for
+  how long ("與「X」重疊 45 分鐘"), a plain fact about the schedule shown
+  independently of the plan itself.
+- Whichever planned fixture is currently live, or (failing that) the
+  soonest one still to come, is pinned to the top of the day's list.
 
 ## Page layout
 
@@ -123,19 +147,19 @@ Scoring and picking are split across two different places, deliberately:
   than 24 hours out ("2 天 5 小時後", not "53 小時後"), both computed from
   the sport's average broadcast length.
 - No competitiveness/watchability meters on the card - just the one-sentence
-  AI reason. The number still drives whether a fixture clears
-  `RECOMMENDED_MIN_SCORE` behind the scenes; the page itself only ever
-  shows the recommendation, not the data behind it.
-- Two or more fixtures overlapping in time are **each shown as their own
-  full recommended card** if they each clear the bar on their own merits -
-  there's no single "pick" per time slot and nothing to swipe through (an
-  earlier version tried exactly that - one pick, the rest demoted to a
-  swipeable alternative or dropped entirely - and it meant a night with
-  several genuinely good, genuinely simultaneous fixtures surfaced only
-  one of them). A card whose start overlaps an earlier match instead gets
-  a small note naming that match and how long they overlap
-  (`computeOverlapRange` in `buildMatchCard`), so the clash is visible
-  without either fixture losing its recommendation over it.
+  AI reason. The numbers still drive the plan itself behind the scenes; the
+  page itself only ever shows the recommendation, not the data behind it.
+- A recommended fixture with a genuinely can't-watch-both alternative (see
+  "The viewing plan" above) renders as a **horizontally swipeable card
+  stack** (native CSS scroll-snap, the same kind of touch swipe the day
+  picker already uses) - only one card is on screen by default, the other
+  a deliberate swipe away with dots marking how many there are. Unlike an
+  earlier version of this same stack, swiping here is a real choice: it
+  pins that match as the slot's committed pick and rebuilds the rest of
+  the day's plan around it (`pinSlotChoice`). A card whose start overlaps
+  an earlier match - whether or not either one made the plan - gets a
+  small note naming that match and how long they overlap
+  (`computeOverlapRange` in `buildMatchCard`).
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -156,20 +180,17 @@ Scoring and picking are split across two different places, deliberately:
   international rights holder - a genuinely different, unrelated fact from
   who carries it in Taiwan).
 
-## Sport priority (⚙, floating bottom-right)
+## Sport priority (⚙, in the sport filter row)
 
-Since a fixture is now recommended purely on its own score against a flat
-bar (`RECOMMENDED_MIN_SCORE` - see "How it works" above), there's no
-per-slot "competition" left for sport priority to referee - the whole
-reason an earlier design needed it (only one pick per overlapping slot, so
-*something* had to decide which sport won a close one) no longer applies.
-`priorityOrder` still does one real thing: it nudges a match's
-`effectiveScore` up or down slightly before that threshold check, so a
-viewer's preferred sports clear the bar a little more easily and their
-least favorite needs to be a little better to clear it too - a small,
-symmetric tilt (1st-ranked gets the biggest positive nudge, last-ranked the
-biggest negative, the exact middle rank gets none), never enough on its own
-to make a mediocre match recommended or keep a genuinely good one out. The
+`priorityOrder` nudges a match's `effectiveScore` up or down slightly
+before both places that number matters: `groupIntoSlots`' own
+highest-score-first anchor ordering, and `computeDayPlan`'s scheduling
+weight (which fixture wins a genuinely contested, overlapping stretch of
+the day) - a viewer's preferred sports win a close scheduling call a little
+more easily, their least favorite needs to be a little better to win one -
+a small, symmetric tilt (1st-ranked gets the biggest positive nudge,
+last-ranked the biggest negative, the exact middle rank gets none), never
+enough on its own to make a mediocre match beat a genuinely great one. The
 order is stored in `localStorage` (per-browser, nothing sent anywhere) and
 re-ranking re-runs the whole plan and re-renders immediately, without
 closing the panel or reloading.

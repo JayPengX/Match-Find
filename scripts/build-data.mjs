@@ -79,7 +79,13 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // repo's buildMatchRecommendPrompt. Every cached score predates that
 // change, so this bump re-scores the whole window once against the
 // improved prompt.
-const PROMPT_VERSION = 7;
+// v8: added enduranceScore (how likely a fixture is to stay worth watching
+// all the way to its end, rather than becoming a blowout) - public/app.js's
+// viewing-plan builder uses it to decide how much of a fixture's nominal
+// length to actually reserve when building a back-to-back plan. Every
+// match already in the cache predates this field, so this bump re-scores
+// the whole window once to backfill it.
+const PROMPT_VERSION = 8;
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
@@ -514,10 +520,12 @@ function heuristicScore(match) {
     return {
       competitiveness: 5,
       watchability: 5,
-      // No real basis to judge production quality locally either (same
-      // reasoning as venueZh/whereToWatchTw below) - neutral rather than
-      // guessing at a specific platform's reputation.
+      // No real basis to judge production quality or endurance locally
+      // either (same reasoning as venueZh/whereToWatchTw below) - neutral
+      // rather than guessing at a specific platform's reputation or a
+      // matchup's competitive arc.
       broadcastQuality: 5,
+      enduranceScore: 5,
       reason: '目前沒有雙方的戰績資料可供估計。',
       venueZh: '',
       whereToWatchTw: ''
@@ -531,6 +539,7 @@ function heuristicScore(match) {
     watchability: Math.max(1, Math.min(8, Math.round(avg * 10))),
     // See the records.length !== 2 branch above - same reasoning.
     broadcastQuality: 5,
+    enduranceScore: 5,
     reason: `依雙方目前戰績估計（${records[0].wins}勝${records[0].losses}敗 對 ${records[1].wins}勝${records[1].losses}敗）。`,
     // Neither can be guessed locally - no real-world knowledge behind this
     // fallback path at all (see this function's own top comment) - so both
@@ -851,13 +860,15 @@ async function main() {
       pick &&
       Number.isFinite(pick.competitiveness) &&
       Number.isFinite(pick.watchability) &&
-      Number.isFinite(pick.broadcastQuality)
+      Number.isFinite(pick.broadcastQuality) &&
+      Number.isFinite(pick.enduranceScore)
     ) {
       cache[match.id] = {
         startTimeUtc: match.startTimeUtc,
         competitiveness: Math.max(1, Math.min(10, Math.round(pick.competitiveness))),
         watchability: Math.max(1, Math.min(10, Math.round(pick.watchability))),
         broadcastQuality: Math.max(1, Math.min(10, Math.round(pick.broadcastQuality))),
+        enduranceScore: Math.max(1, Math.min(10, Math.round(pick.enduranceScore))),
         reason: String(pick.reason || '').slice(0, 300),
         venueZh: String(pick.venueZh || '').slice(0, 100),
         whereToWatchTw: String(pick.whereToWatchTw || '').slice(0, 100),
@@ -884,6 +895,7 @@ async function main() {
       match.competitiveness = null;
       match.watchability = null;
       match.broadcastQuality = null;
+      match.enduranceScore = null;
       match.reason = '';
       match.venueZh = '';
       match.whereToWatchTw = '';
@@ -894,11 +906,13 @@ async function main() {
     const scored = cache[match.id] || { ...heuristicScore(match), source: 'heuristic' };
     match.competitiveness = scored.competitiveness;
     match.watchability = scored.watchability;
-    // ?? 5 covers a cache entry written before broadcastQuality existed -
-    // PROMPT_VERSION's bump (see its own comment) means this only matters
-    // for the one build before everything currently in the window gets
-    // re-scored, never a permanent gap.
+    // ?? 5 covers a cache entry written before broadcastQuality/
+    // enduranceScore existed - each field's own PROMPT_VERSION bump (see
+    // that constant's own comment) means this only matters for the one
+    // build before everything currently in the window gets re-scored,
+    // never a permanent gap.
     match.broadcastQuality = scored.broadcastQuality ?? 5;
+    match.enduranceScore = scored.enduranceScore ?? 5;
     match.reason = scored.reason;
     match.venueZh = scored.venueZh || '';
     match.whereToWatchTw = scored.whereToWatchTw || '';

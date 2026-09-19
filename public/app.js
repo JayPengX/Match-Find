@@ -38,7 +38,14 @@ const state = {
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
   myServiceIds: [], // subscribed services - see "Broadcast service registry" below
   proxyUrl: '', // from matches.json - where sync calls go (see "Cross-device settings sync")
-  syncPasscode: '' // '' when not paired to a sync code - see "Cross-device settings sync"
+  syncPasscode: '', // '' when not paired to a sync code - see "Cross-device settings sync"
+  // Map<dayKey, Map<slotKey, matchId>> - which member of a multi-match
+  // "slot" (see isNearTotalOverlap) the viewer explicitly swiped to commit
+  // to watching, per day - see computeDayPlan/pinSlotChoice. Deliberately
+  // session-only (never persisted to localStorage/synced): it's "what I'm
+  // watching today", not a durable preference, and naturally stops
+  // mattering once the day's matches are over.
+  pinnedChoices: new Map()
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -916,63 +923,56 @@ function dayLabelFor(date, { short = false } = {}) {
 
 // ---- Client-side viewing plan -------------------------------------------
 //
-// Same algorithm this site used to run at build time (see git history) -
-// moved here because both of its real inputs, "what counts as an
-// unreasonable hour" and "what's the closest match right now", are
+// Same real-world judgment this site used to run at build time (see git
+// history) - moved here because both of its real inputs, "what counts as
+// an unreasonable hour" and "what's the closest match right now", are
 // relative to THIS viewer's own local clock, which a single build running
 // once for every visitor has no way to know. The AI-assigned
-// competitiveness/watchability scores it works from, on the other hand,
-// aren't viewer-relative at all (a match's quality doesn't change by
-// timezone) - so those still only ever get computed once, at build time.
+// competitiveness/watchability/enduranceScore it works from, on the other
+// hand, aren't viewer-relative at all - so those still only ever get
+// computed once, at build time.
 //
 // - QUIET_HOUR_START/END: a match whose LOCAL start falls in this window is
-//   never eligible to be "recommended", however good its score - nobody
+//   never eligible to be recommended, however good its score - nobody
 //   asked to be told a 4am fixture is unmissable. It still shows up in the
 //   full "all matches" list further down, just never pinned as a pick.
 //
-// The plan is built ONE LOCAL CALENDAR DAY AT A TIME (see the `byDay`
-// bucketing below and pickDayRecommendations) rather than as one pass over
-// the whole 14-day window: "what's worth watching today" is inherently a
-// per-day question, and computing it that way means a bug in one day's
-// data or scoring can never reach into a neighboring day.
+// The plan is built ONE LOCAL CALENDAR DAY AT A TIME (computeDayPlan,
+// called per selected day from renderRecommendedSection) rather than as
+// one pass over the whole 14-day window: "what's worth watching today" is
+// inherently a per-day question.
 //
-// ---- Why "recommended" is a per-match threshold, not a per-slot pick ----
+// ---- The model: one back-to-back viewing plan, not independent picks ----
 //
-// Every earlier version of this function - a scheduling DP, then a single
-// overlap-clustering pass with an anchor-plus-swipeable-alternatives stack -
-// shared one assumption: two matches that overlap in time are competing for
-// the same "pick", and only one (or a scored-gated handful) of them could
-// ever actually be `recommended`. In practice that meant a night with
-// several genuinely good, genuinely simultaneous fixtures (MLB in
-// particular routinely has 5-10 games overlapping in the same couple of
-// hours) surfaced only one of them as the pick, with the rest either
-// demoted to a swipe-to-see alternative behind a quality gate or dropped
-// from "推薦賽事" entirely the moment they didn't clear it - not because
-// they weren't good, but purely because something else airing at the same
-// time happened to be rated slightly better. Confirmed directly against
-// real user feedback: that felt like the app was "forcing no overlap" and
-// actively hiding good games, which is the opposite of the goal.
+// You can only actually watch one thing at a time. So 推薦賽事 isn't a set
+// of independent "this is good" judgments - it's ONE continuous plan for
+// the day: a maximum-total-score chain of matches, none of them truly
+// overlapping, that flows from one into the next. Two flawed designs came
+// before this: a per-slot "only the best of whatever overlaps wins, chosen
+// mostly for AI review, others quality-gated to any interested" - and a
+// flat per-match threshold, "clear a fixed score bar and you're
+// recommended, independent of everything else" - added right after that
+// one to fix the first, then immediately dropping the "one continuous
+// plan" idea entirely by not requiring the picks to actually not overlap
+// each other at all, so two heavily-overlapping great matches could BOTH
+// be "recommended" despite genuinely being impossible to watch both of.
+// Direct user feedback on both: the first one silently hid good games,
+// the second stopped being an actual PLAN.
 //
-// So `recommended` is now a plain per-match threshold (RECOMMENDED_MIN_SCORE
-// below) - a match earns it on its own merits, completely independent of
-// whatever else is airing at the same time. Two, three, even more genuinely
-// good matches that overlap each other all show up as their own
-// full-strength recommended cards; there is no single "pick" for a slot and
-// nothing to swipe through. Time overlap is still worth knowing about
-// though - see buildMatchCard's own overlap note, which tells a viewer when
-// a card's start overlaps an earlier match, and for how long, entirely
-// separately from whether either one is recommended.
+// This version is a real (if simplified vs. the earliest, bug-prone
+// attempt - see groupIntoSlots' own comment) weighted-interval-scheduling
+// chain: the maximum-total-effectiveScore set of non-overlapping matches
+// for the day. Two matches that overlap so much you genuinely can't
+// sequence them (see isNearTotalOverlap) become one "slot" - a swipeable
+// choice, not two separate picks - and swiping to a different member PINS
+// it: the plan rebuilds itself around that fixed choice, both before and
+// after it (see computeDayPlan). enduranceScore feeds directly into how
+// long a pick actually blocks the next one from starting (see
+// effectiveDurationMinutes) - a fixture unlikely to stay watchable to the
+// end frees up the schedule sooner than its full nominal length would
+// suggest, letting the plan fit a next pick in earlier.
 const QUIET_HOUR_START = 0;
 const QUIET_HOUR_END = 5;
-// The one bar a match's (nudged) effectiveScore has to clear to be
-// `recommended` - independent of anything else airing at the same time
-// (see the section comment above). Deliberately on the inclusive side: the
-// AI's 1-10 scale already reserves the very top for genuinely elite
-// fixtures, so a flat 6 still means "a real, worth-watching game", not
-// "the best of a bad day" - the failure mode worth avoiding here is an
-// empty or sparse 推薦賽事 list on an otherwise busy night, not a slightly
-// generous one.
-const RECOMMENDED_MIN_SCORE = 6;
 
 function isQuietHours(match) {
   const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
@@ -986,12 +986,12 @@ function matchInterval(match) {
   return { start, end: start + match.durationMinutes * 60_000 };
 }
 
-// Unlike overlapMinutes below (which reads the `.interval` resolveViewingPlan
-// stamps on its own working copies, stripped back off before returning -
-// see that function's own final map), this computes straight from a plain
-// match's own startTimeUtc/durationMinutes, so rendering code (buildMatchCard)
-// can ask "when, exactly, do these two overlap" about the actual objects in
-// state.matches without needing its own copy of that internal field.
+// This file's one and only overlap check - computed straight from a plain
+// match's own startTimeUtc/durationMinutes (its REAL broadcast window, not
+// the endurance-shortened one effectiveInterval below uses for scheduling)
+// so every caller - the day-planner's own slot grouping, buildMatchCard's
+// overlap note - agrees on what "these two overlap, and by how much"
+// actually means.
 function computeOverlapRange(a, b) {
   const ai = matchInterval(a);
   const bi = matchInterval(b);
@@ -1001,94 +1001,229 @@ function computeOverlapRange(a, b) {
 }
 
 function overlapMinutes(a, b) {
-  const overlapStart = Math.max(a.interval.start, b.interval.start);
-  const overlapEnd = Math.min(a.interval.end, b.interval.end);
-  return overlapEnd > overlapStart ? (overlapEnd - overlapStart) / 60_000 : 0;
+  const range = computeOverlapRange(a, b);
+  return range ? (range.end - range.start) / 60_000 : 0;
 }
 
-// Marks each of ONE local calendar day's worth of eligible (non-quiet-hour)
-// matches as `recommended` or not - called once per day from
-// resolveViewingPlan below. Mutates each match in `dayMatches` in place
-// (.recommended), same as the rest of this file's convention. See the
-// top-of-section comment for why this is a flat per-match threshold rather
-// than a per-slot pick: overlap is no longer a reason to exclude a
-// genuinely good match, only something worth telling the viewer about (see
-// buildMatchCard's own overlap note).
-function pickDayRecommendations(dayMatches) {
+// The bar for "these two matches genuinely can't be sequenced, you have to
+// pick one" (see the section comment's own "slot" definition) - a FRACTION
+// of the SHORTER match's own duration, not a flat minute count: 45 shared
+// minutes is nearly all of a 55-minute F1 sprint but barely a quarter of a
+// 190-minute MLB game, so a fixed number can't mean "basically total
+// overlap" for both at once the way a duration-relative fraction does.
+const NEAR_TOTAL_OVERLAP_FRACTION = 0.75;
+function isNearTotalOverlap(a, b) {
+  const overlapMins = overlapMinutes(a, b);
+  if (overlapMins <= 0) return false;
+  const shorter = Math.min(a.durationMinutes, b.durationMinutes);
+  return shorter > 0 && overlapMins / shorter >= NEAR_TOTAL_OVERLAP_FRACTION;
+}
+
+// How much of a match's OWN nominal length actually gets reserved in the
+// day's schedule - see enduranceScore's own comment (shared-proxy's
+// worker.js buildMatchRecommendPrompt) for what it measures. A match
+// projected to definitely stay tense to the end (enduranceScore 10) keeps
+// its full nominal length; one projected to likely turn into an early
+// blowout (enduranceScore 1) frees up the schedule at
+// ENDURANCE_DURATION_FLOOR of it instead - never less than that floor,
+// since even a lopsided match is still ostensibly airing for its whole
+// listed length and the plan shouldn't assume a viewer bails absurdly
+// early. `?? 5` (neutral/middling) covers a heuristic-scored match or one
+// still on an older cache entry from before this field existed.
+const ENDURANCE_DURATION_FLOOR = 0.4;
+function effectiveDurationMinutes(match) {
+  const endurance = Number.isFinite(match.enduranceScore) ? match.enduranceScore : 5;
+  const factor = ENDURANCE_DURATION_FLOOR + (1 - ENDURANCE_DURATION_FLOOR) * (endurance / 10);
+  return match.durationMinutes * factor;
+}
+function effectiveInterval(match) {
+  const start = Date.parse(match.startTimeUtc);
+  return { start, end: start + effectiveDurationMinutes(match) * 60_000 };
+}
+
+// Groups a day's candidate matches into "slots" - anchor-claiming,
+// highest-effectiveScore-first: an unclaimed match becomes a slot's
+// anchor, and only matches that are near-totally overlapping THAT SPECIFIC
+// anchor (never each other transitively) join it and get claimed. This is
+// the one piece of an earlier, more elaborate multi-pass design (see git
+// history) that was never the source of a bug there, so it survives
+// unchanged - the bugs were all in what happened AFTER grouping (a
+// separate density-driven pass, then a pass to clean up what THAT could
+// break); this version replaces all of that with a single, real scheduling
+// DP over the resulting slots (see computeDayPlan) instead of another
+// patch. A match with nothing near-totally overlapping it simply becomes
+// its own one-member slot.
+function groupIntoSlots(dayMatches) {
+  const claimed = new Set();
+  const slots = [];
+  dayMatches
+    .slice()
+    .sort((a, b) => b.effectiveScore - a.effectiveScore)
+    .forEach(anchor => {
+      if (claimed.has(anchor.id)) return;
+      claimed.add(anchor.id);
+      const members = dayMatches.filter(m => !claimed.has(m.id) && isNearTotalOverlap(anchor, m));
+      members.forEach(m => claimed.add(m.id));
+      slots.push({ members: [anchor, ...members] });
+    });
+  return slots;
+}
+
+// A slot's own stable identity across renders/rebuilds - independent of
+// object identity (state.matches is rebuilt from scratch on every data
+// refresh) and independent of WHICH member is currently chosen (pinning a
+// different member must still resolve back to the same slot next time).
+// Grouping itself (groupIntoSlots) is deterministic for a given match set,
+// so this is safe to compute fresh every time rather than needing to be
+// stored anywhere.
+function slotKeyFromMembers(members) {
+  return members.map(m => m.id).sort().join('|');
+}
+
+function bestMember(members) {
+  return members.slice().sort((a, b) => b.effectiveScore - a.effectiveScore)[0];
+}
+
+// Classic weighted interval scheduling: the maximum-total-choice.effectiveScore
+// subset of `items` (each {interval, choice}) whose intervals don't
+// overlap. O(n^2) in the inner "find the latest compatible previous item"
+// scan - fine at the scale one day's fixture list ever reaches (even MLB's
+// own ~15-a-night doesn't come close to where that would matter).
+function weightedIntervalSchedule(items) {
+  const sorted = items.slice().sort((a, b) => a.interval.end - b.interval.end);
+  const dp = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    let prevBest = { score: 0, picks: [] };
+    for (let j = i - 1; j >= 0; j--) {
+      if (sorted[j].interval.end <= cur.interval.start) {
+        prevBest = dp[j];
+        break;
+      }
+    }
+    const withCur = { score: prevBest.score + cur.choice.effectiveScore, picks: [...prevBest.picks, cur] };
+    const without = i > 0 ? dp[i - 1] : { score: 0, picks: [] };
+    dp[i] = withCur.score >= without.score ? withCur : without;
+  }
+  return sorted.length ? dp[sorted.length - 1].picks : [];
+}
+
+// Builds ONE local calendar day's back-to-back viewing plan from its
+// already sport-filtered, non-quiet-hour-excluded candidate matches - see
+// the section comment above for the model. Mutates every match in
+// `dayMatches` in place (.recommended/.alternativeIds), same convention as
+// the rest of this file. `alternativeIds` deliberately stores just the
+// OTHER slot members' ids, same pattern as `.overlappingIds` elsewhere in
+// this file, not full object references - a chosen match's own slot
+// necessarily contains that same match, so storing full objects back onto
+// it would self-reference and break JSON.stringify (the export tool hit
+// exactly this before it was caught). Returns the plan as a plain array of
+// matches, sorted by start time.
+function computeDayPlan(dayKey, dayMatches) {
   dayMatches.forEach(match => {
-    match.recommended = match.effectiveScore >= RECOMMENDED_MIN_SCORE;
+    match.recommended = false;
+    match.alternativeIds = null;
   });
+  const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
+  if (!candidates.length) return [];
+
+  const slots = groupIntoSlots(candidates);
+  const pinnedForDay = state.pinnedChoices.get(dayKey);
+  const resolved = slots.map(slot => {
+    const pinnedId = pinnedForDay && pinnedForDay.get(slotKeyFromMembers(slot.members));
+    const pinnedMember = pinnedId ? slot.members.find(m => m.id === pinnedId) : null;
+    const choice = pinnedMember || bestMember(slot.members);
+    return { members: slot.members, choice, interval: effectiveInterval(choice), isPinned: !!pinnedMember };
+  });
+
+  // Pinned slots split the day into independent gaps - the free (unpinned)
+  // slots in each gap get their own scheduling run, bounded so nothing
+  // scheduled there can creep into a pinned pick's own fixed window. This
+  // is the actual "rebuild before AND after the one I just picked"
+  // behavior: every other slot, on both sides, is being freshly reasoned
+  // about relative to the pin, not just appended after it.
+  const forced = resolved.filter(r => r.isPinned).sort((a, b) => a.interval.start - b.interval.start);
+  const free = resolved.filter(r => !r.isPinned);
+  const picks = [];
+  let cursor = -Infinity;
+  forced.forEach(f => {
+    picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start)));
+    picks.push(f);
+    cursor = f.interval.end;
+  });
+  picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor)));
+
+  picks.sort((a, b) => a.interval.start - b.interval.start);
+  picks.forEach(({ members, choice }) => {
+    choice.recommended = true;
+    if (members.length > 1) choice.alternativeIds = members.filter(m => m.id !== choice.id).map(m => m.id);
+  });
+  return picks.map(p => p.choice);
+}
+
+// The actual "I will watch this" commitment (see buildMatchStack) - records
+// the pin and triggers a full re-render, which recomputes computeDayPlan
+// for the current day and reflows every other slot around it.
+function pinSlotChoice(dayKey, members, matchId) {
+  if (!state.pinnedChoices.has(dayKey)) state.pinnedChoices.set(dayKey, new Map());
+  state.pinnedChoices.get(dayKey).set(slotKeyFromMembers(members), matchId);
+  renderSections();
 }
 
 // `priorityOrder` (see "Sport priority settings" above) nudges
 // effectiveScore away from the AI's own score - the displayed reason/.score
-// always stay the true, un-nudged values; only RECOMMENDED_MIN_SCORE's own
-// threshold check sees the adjusted number, so a viewer's preference can
-// shift which side of that line a close-to-the-bar match falls on, without
-// pretending a mediocre match is actually great. A sport ranked 1st gets
-// the biggest positive nudge, the sport ranked in the exact middle gets
-// none, and the last-ranked sport gets the biggest negative one -
-// symmetric around the middle rank so "no preference at all" (the default
-// order) really does mean zero nudge for everyone, not just for whichever
-// sport happens to be first in the array.
+// always stay the true, un-nudged values; only effectiveScore (the day
+// plan's own DP weight, and groupIntoSlots' own anchor ordering) sees the
+// adjusted number, so a viewer's preference can tip a close scheduling
+// call without pretending a mediocre match is actually great. A sport
+// ranked 1st gets the biggest positive nudge, the sport ranked in the
+// exact middle gets none, and the last-ranked sport gets the biggest
+// negative one - symmetric around the middle rank so "no preference at
+// all" (the default order) really does mean zero nudge for everyone, not
+// just for whichever sport happens to be first in the array.
 function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
   const centerRank = (priorityOrder.length - 1) / 2;
-  const withIntervals = matches.map(match => {
+  const withScores = matches.map(match => {
     const rank = priorityOrder.indexOf(match.sport);
     const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
     const service = resolveService(match.whereToWatchTw);
     const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
     // Overrides the build-time composite with whichever field the chosen
     // style actually ranks by (see recommendStyleScore) - every downstream
-    // consumer of `.score`/`.effectiveScore` (pickDayRecommendations'
-    // threshold check, the overlap note's own display, etc.) then just
-    // works off this one number without needing to know styles exist at
-    // all.
+    // consumer of `.score`/`.effectiveScore` (computeDayPlan's scheduling
+    // weight, the overlap note's own display, etc.) then just works off
+    // this one number without needing to know styles exist at all.
     const styleScore = recommendStyleScore(match, recommendStyle);
     return {
       ...match,
       score: styleScore,
-      interval: matchInterval(match),
       effectiveScore: styleScore + priorityNudge + serviceNudge,
-      recommended: false
+      recommended: false,
+      alternativeIds: null
     };
   });
 
   // Computed across every fetched match regardless of day or quiet hours -
   // used purely for display (buildMatchCard's own overlap note, on ANY
-  // card whose start overlaps an earlier match, recommended or not - see
-  // that function). A finished match is excluded: it's never itself worth
-  // flagging as "overlaps something else" once it's over, and it's not a
-  // meaningful reference point for anything still upcoming either.
-  withIntervals.forEach(match => {
+  // card whose start overlaps an earlier match, recommended or not). A
+  // finished match is excluded: it's never itself worth flagging as
+  // "overlaps something else" once it's over, and it's not a meaningful
+  // reference point for anything still upcoming either.
+  withScores.forEach(match => {
     match.overlappingIds = match.isFinished
       ? []
-      : withIntervals
+      : withScores
           .filter(other => other.id !== match.id && !other.isFinished && overlapMinutes(match, other) > 0)
           .map(other => other.id);
   });
 
-  // "What's worth watching" is decided one local calendar day at a time
-  // (see top-of-section comment) - bucket every eligible (non-quiet-hour,
-  // not-already-finished) match by the local day it starts on, then run the
-  // per-match threshold check independently per day. A match excluded here
-  // (quiet hours, or already over) simply keeps its default
-  // `recommended: false` from above - a finished match has nothing left to
-  // recommend, it's kept around purely so the day's schedule stays visible
-  // and continuous instead of matches disappearing the moment they end.
-  const byDay = new Map();
-  withIntervals
-    .filter(m => !isQuietHours(m) && !m.isFinished)
-    .forEach(match => {
-      const dayKey = localDateKey(new Date(match.interval.start));
-      if (!byDay.has(dayKey)) byDay.set(dayKey, []);
-      byDay.get(dayKey).push(match);
-    });
-  for (const dayMatches of byDay.values()) {
-    pickDayRecommendations(dayMatches);
-  }
-
-  return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
+  // `.recommended`/`.alternativeIds` are deliberately NOT decided here anymore
+  // - that's computeDayPlan's job, run per selected day (and per active
+  // sport filter, and per pin) at render time, since which matches count
+  // as "today's plan" now depends on interactive state this function has
+  // no visibility into. This function's job is purely the viewer-relative
+  // score adjustment and overlap bookkeeping every day's plan draws from.
+  return withScores;
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -1404,10 +1539,76 @@ function renderFilters() {
   );
 }
 
+// A slot with more than one near-total-overlapping member (see
+// groupIntoSlots) - a horizontally swipeable card stack, native CSS
+// scroll-snap, same touch mechanism the day picker already uses. Unlike an
+// earlier version of this stack, swiping here is a real commitment, not
+// just a peek: settling on a different card PINS that match as this
+// slot's fixed choice and rebuilds the whole day's plan around it (see
+// pinSlotChoice/computeDayPlan) - matches before and after it reflow to
+// connect with it instead of with whichever match was the plan's own
+// default pick.
+function buildMatchStack(dayKey, members, primary, isTopOfDay) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'match-stack';
+
+  const hint = document.createElement('p');
+  hint.className = 'match-stack-hint';
+  hint.textContent = '⟷ 這個時段只能擇一收看，滑動選擇要看哪一場';
+
+  const scroller = document.createElement('div');
+  scroller.className = 'match-stack-scroller';
+  // The plan's current choice (the pinned one, if any, else whichever
+  // scored highest) always opens first, then the rest by score - so the
+  // stack always visually agrees with what the rest of the page already
+  // decided this slot's pick is.
+  const ordered = [primary, ...members.filter(m => m.id !== primary.id).sort((a, b) => b.effectiveScore - a.effectiveScore)];
+  ordered.forEach((match, index) => {
+    const card = buildMatchCard(match);
+    if (index === 0 && isTopOfDay) card.classList.add('is-pinned');
+    scroller.appendChild(card);
+  });
+
+  const dots = document.createElement('div');
+  dots.className = 'match-stack-dots';
+  const dotEls = ordered.map((_, index) => {
+    const dot = document.createElement('span');
+    dot.className = 'match-stack-dot' + (index === 0 ? ' is-active' : '');
+    dots.appendChild(dot);
+    return dot;
+  });
+  // One listener does both jobs: the dots update on every scroll tick
+  // (cheap, purely visual), while the actual pin+rebuild only fires once
+  // the gesture SETTLES - a short debounce after scrolling stops, not on
+  // every intermediate tick mid-swipe, which would otherwise re-pin (and
+  // re-render the whole page) dozens of times during one swipe.
+  let settleTimer = null;
+  scroller.addEventListener(
+    'scroll',
+    () => {
+      const activeIndex = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
+      dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        const chosen = ordered[activeIndex];
+        if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, members, chosen.id);
+      }, 180);
+    },
+    { passive: true }
+  );
+
+  wrapper.append(hint, scroller, dots);
+  return wrapper;
+}
+
 function renderRecommendedSection() {
-  const dayMatches = applySportFilter(matchesForSelectedDay().filter(m => m.recommended));
-  dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
-  const ordered = pinCurrentOrNext(dayMatches);
+  const dayKey = state.selectedDayKey;
+  // Computed fresh every render, scoped to whatever's currently active
+  // (day, sport filter, pins) - see computeDayPlan's own comment. Picking
+  // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
+  // plan filtered down to whichever MLB picks happened to survive it.
+  const dayPlan = computeDayPlan(dayKey, applySportFilter(matchesForDay(dayKey)));
+  const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {
     recommendedListEl.replaceChildren();
@@ -1415,11 +1616,21 @@ function renderRecommendedSection() {
     return;
   }
   recommendedEmptyEl.hidden = true;
+  // alternativeIds can point at a fixture on a different (adjacent) local
+  // day if the slot straddles midnight for this viewer - resolved from the
+  // full state.matches, not just today's bucket, so that edge case doesn't
+  // just silently drop the alternative.
+  const byId = new Map(state.matches.map(m => [m.id, m]));
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const card = buildMatchCard(match);
-    if (index === 0) card.classList.add('is-pinned');
-    fragment.appendChild(card);
+    const alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
+    if (alternatives.length) {
+      fragment.appendChild(buildMatchStack(dayKey, [match, ...alternatives], match, index === 0));
+    } else {
+      const card = buildMatchCard(match);
+      if (index === 0) card.classList.add('is-pinned');
+      fragment.appendChild(card);
+    }
   });
   recommendedListEl.replaceChildren(fragment);
 }
@@ -1716,7 +1927,17 @@ refreshDataBtn.addEventListener('click', () => checkForUpdate());
 // state.rawMatches, is deliberately what's exported: the whole point is to
 // inspect the actual .recommended/.score decision this build made, not
 // just the raw fetched fixtures behind it.
+//
+// .recommended/.alternativeIds are now computed on demand per day (see
+// computeDayPlan's own comment) rather than for the whole window at once,
+// so only the currently-viewed day's matches would otherwise carry an
+// accurate flag here. Runs computeDayPlan once per fetched day first
+// (unfiltered by the viewer's own current sport filter - a dev inspecting
+// this wants the full picture, not whatever one filter happens to be
+// showing on screen), respecting whatever's already pinned, so every
+// day's matches carry a real decision by the time this serializes them.
 function exportRecommendationData() {
+  state.days.forEach(day => computeDayPlan(day.key, matchesForDay(day.key)));
   const payload = {
     exportedAt: new Date().toISOString(),
     dataGeneratedAt: state.generatedAt || null,
