@@ -33,7 +33,7 @@ const state = {
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
   activeSport: 'all',
-  recommendStyle: 'competitive', // which per-match score drives "推薦賽事" - see "Recommendation style setting" below
+  recommendStyle: 'entertainment', // which per-match score drives "推薦賽事" - see "Recommendation style setting" below (overwritten by loadRecommendStyle() right after this object)
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
   myServiceIds: [], // subscribed services - see "Broadcast service registry" below
@@ -210,43 +210,41 @@ const syncPromptDismissBtn = document.getElementById('sync-prompt-dismiss-btn');
 // ---- Recommendation style setting ------------------------------------------
 //
 // "Worth watching" isn't one fixed question - different viewers weigh it
-// differently, and none of them is more "correct" than the others:
-// - competitive: the original/default - build-data.mjs's own composite of
-//   competitiveness (how close the game is) and watchability (stakes/
-//   rivalry/star power), averaged. Unchanged for anyone who never opens
-//   this setting.
-// - entertainment: watchability ALONE - already exactly "what a general
-//   sports fan/mainstream media would find notable regardless of how close
-//   it ends up being" per that field's own definition in the shared proxy's
-//   buildMatchRecommendPrompt, so this style needed no new AI field at all,
-//   just a different existing one to lead with.
-// - broadcastQuality: a genuinely NEW dimension (see build-data.mjs/the
-//   shared proxy's worker.js) - how good the viewing EXPERIENCE itself is
-//   expected to be (production value, commentary, camera work, the
-//   reputation of whichever platform/broadcaster carries it), independent
-//   of how good the matchup is. A close, high-stakes game on a bare
-//   regional feed and a one-sided blowout on a marquee, beautifully-shot
-//   national broadcast are exactly the case these two styles disagree on.
+// differently, and none of them is more "correct" than the others. Two
+// selectable styles, not three - broadcast/viewing-experience quality
+// (see BROADCAST_QUALITY_WEIGHT below) turned out to work better as a
+// metric folded into BOTH styles than as a third thing to choose between:
+// nobody actually wants to rank purely by production value on its own, it
+// should just quietly tip a close call the way priority/service nudges
+// already do elsewhere in this file.
+// - entertainment (the DEFAULT): watchability - already exactly "what a
+//   general sports fan/mainstream media would find notable regardless of
+//   how close it ends up being" per that field's own definition in the
+//   shared proxy's buildMatchRecommendPrompt. Defaulted to rather than
+//   competitive because it needs no familiarity with a sport's standings
+//   or current form to make sense of - "is this a big deal" reads fine to
+//   someone new to the sport, "is this a tight game" much less so.
+// - competitive: build-data.mjs's own composite of competitiveness (how
+//   close the game is) and watchability (stakes/rivalry/star power),
+//   averaged - the original behavior, still available for anyone who
+//   wants closeness itself weighted in.
 //
-// Each style maps to one already-scored per-match field (see
-// recommendStyleScore) - no extra Gemini calls, no extra data to fetch,
-// just a different lens on numbers build-data.mjs already computed once
-// for everyone. Synced like priorityOrder/enabledSports/myServiceIds (see
-// "Cross-device settings sync" below) since it's the same kind of "my own
-// preference, same on every device" setting.
+// Synced like priorityOrder/enabledSports/myServiceIds (see "Cross-device
+// settings sync" below) since it's the same kind of "my own preference,
+// same on every device" setting.
 const RECOMMEND_STYLES = [
-  { id: 'competitive', label: '精彩程度', hint: '看重賽事本身的緊張刺激程度（預設方式）。' },
-  { id: 'entertainment', label: '話題熱度', hint: '看重話題性、明星球員、對戰歷史——大眾媒體會關注的那種賽事。' },
-  { id: 'broadcastQuality', label: '轉播品質', hint: '看重轉播的觀賞體驗——畫面製作、球評陣容、轉播平台的口碑。' }
+  { id: 'entertainment', label: '話題熱度', hint: '看重話題性、明星球員、對戰歷史——大眾媒體會關注的那種賽事（預設方式，不需要先熟悉這項運動）。' },
+  { id: 'competitive', label: '精彩程度', hint: '看重賽事本身的緊張刺激程度，適合已經熟悉這項運動、想看勢均力敵對戰的球迷。' }
 ];
+const DEFAULT_RECOMMEND_STYLE = RECOMMEND_STYLES[0].id;
 const RECOMMEND_STYLE_STORAGE_KEY = 'matchfind-recommend-style';
 
 function loadRecommendStyle() {
   try {
     const stored = localStorage.getItem(RECOMMEND_STYLE_STORAGE_KEY);
-    return RECOMMEND_STYLES.some(s => s.id === stored) ? stored : RECOMMEND_STYLES[0].id;
+    return RECOMMEND_STYLES.some(s => s.id === stored) ? stored : DEFAULT_RECOMMEND_STYLE;
   } catch {
-    return RECOMMEND_STYLES[0].id;
+    return DEFAULT_RECOMMEND_STYLE;
   }
 }
 function saveRecommendStyle(style) {
@@ -258,16 +256,27 @@ function saveRecommendStyle(style) {
 }
 state.recommendStyle = loadRecommendStyle();
 
-// The one score each style actually ranks by - falls back to the
-// build-time composite `match.score` whenever the style's own field is
-// missing (an older cache entry from before broadcastQuality existed and
-// not yet re-scored, or a heuristic-scored/finished match with no real AI
-// judgment behind it at all) rather than producing NaN and breaking every
-// comparison downstream.
+// How much broadcastQuality (see build-data.mjs/the shared proxy's
+// worker.js) tips the chosen style's own primary score, on the same 1-10
+// scale both sides are already on. Kept a genuine, noticeably-felt nudge
+// (worth swinging a real close call - a beautifully-produced blowout CAN
+// beat a merely-decent, plainly-shot game) without ever letting it dominate
+// - competitiveness/watchability still make up 85% of the blend, matching
+// "we still prioritize competitiveness and entertainment" over broadcast
+// quality becoming a deciding factor on its own.
+const BROADCAST_QUALITY_WEIGHT = 0.15;
+
+// The chosen style's own primary score, nudged by broadcastQuality when
+// it's actually available - falls back to the build-time composite
+// `match.score` for 'competitive' (or any unrecognized style), and skips
+// the broadcastQuality blend entirely rather than producing NaN when a
+// match has no real basis for it (a heuristic-scored/finished match with
+// no real AI judgment behind it at all).
 function recommendStyleScore(match, style) {
-  if (style === 'entertainment' && Number.isFinite(match.watchability)) return match.watchability;
-  if (style === 'broadcastQuality' && Number.isFinite(match.broadcastQuality)) return match.broadcastQuality;
-  return match.score;
+  const primary =
+    style === 'entertainment' && Number.isFinite(match.watchability) ? match.watchability : match.score;
+  if (!Number.isFinite(match.broadcastQuality)) return primary;
+  return primary * (1 - BROADCAST_QUALITY_WEIGHT) + match.broadcastQuality * BROADCAST_QUALITY_WEIGHT;
 }
 
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
@@ -1027,7 +1036,7 @@ function pickDayRecommendations(dayMatches) {
 // gets the biggest negative one - symmetric around the middle rank so "no
 // preference at all" (the default order) really does mean zero nudge for
 // everyone, not just for whichever sport happens to be first in the array.
-function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'competitive') {
+function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
   const centerRank = (priorityOrder.length - 1) / 2;
   const withIntervals = matches.map(match => {
     const rank = priorityOrder.indexOf(match.sport);
