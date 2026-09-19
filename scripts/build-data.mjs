@@ -64,7 +64,7 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // below retries anything scored under an older one. A one-time full
 // re-score costs quota, but it's the only way an already-cached match ever
 // benefits from a prompt fix instead of keeping a stale answer forever.
-const PROMPT_VERSION = 4;
+const PROMPT_VERSION = 5;
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
