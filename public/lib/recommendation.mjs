@@ -678,22 +678,72 @@ export function recentRepeatPenalty(daysSinceLastRecommended) {
   return RECENT_REPEAT_PENALTY_BY_GAP_DAYS[daysSinceLastRecommended] || 0;
 }
 
-// Sets `.planningScore`/`.recentRepeatPenalty` on every match in
-// `dayMatches` from `lastRecommendedDayKey` (a Map<matchupKey, dayKey> -
-// see computeWindowPlan). Deliberately a separate field from
-// effectiveScore, never overwritten in place: effectiveScore stays the
-// viewer's own true, un-penalized judgment of the match (docs/
-// recommendation-engine-audit.md's Invariant 4 - a diversity penalty can
-// reduce a score, never delete or corrupt the one it's derived from);
-// planningScore is only what the scheduler's DP weighs picks by (see
-// computeDayPlan's `scoreField` option).
-export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey) {
+// ---- Sport-level variety (soft concentration penalty) ---------------------
+//
+// The repeat penalty above only tracks a specific matchup (the same two
+// teams) - docs/recommendation-engine-audit.md section 15 asks for variety
+// "at multiple levels", not just that one: "Avoid accidentally producing:
+// MLB MLB MLB MLB MLB when equally compelling alternatives exist." A sport
+// that plays every day (MLB) is EXPECTED to win most days when it
+// genuinely has the best fixture - this only nudges the call when today's
+// other candidates are close enough for the recent concentration to
+// matter, same "soft, decaying, never a hard ban" design as the matchup
+// penalty.
+//
+// The share of RECENT PICKS (not candidates - a 15-game MLB slate vs. one
+// F1 session isn't "concentration", what actually happened is) that
+// belong to one sport, over the last SPORT_CONCENTRATION_LOOKBACK_DAYS
+// days.
+export const SPORT_CONCENTRATION_LOOKBACK_DAYS = 3;
+// Below this share, a sport isn't "dominating" enough to nudge - two or
+// three sports roughly splitting recent picks is exactly the normal, fine
+// case this should leave alone entirely (0 penalty).
+export const SPORT_CONCENTRATION_THRESHOLD = 0.75;
+export const SPORT_CONCENTRATION_PENALTY = 1;
+
+// Map<sport, share 0..1> of how much of `picks` belongs to each sport -
+// also what "the planner should expose that concentration" (section 15's
+// own words, on team/league concentration) resolves to: computeWindowPlan
+// returns this computed over the WHOLE window's own final picks, not just
+// the short lookback used for the penalty itself, for a caller (or a
+// developer inspecting an export) to actually see it.
+export function computeSportConcentration(picks) {
+  const bySport = new Map();
+  picks.forEach(m => bySport.set(m.sport, (bySport.get(m.sport) || 0) + 1));
+  const total = picks.length;
+  const shares = new Map();
+  bySport.forEach((count, sport) => shares.set(sport, total > 0 ? count / total : 0));
+  return shares;
+}
+
+function sportConcentrationPenalty(sport, recentPicks) {
+  if (!recentPicks.length) return 0;
+  const share = computeSportConcentration(recentPicks).get(sport) || 0;
+  return share >= SPORT_CONCENTRATION_THRESHOLD ? SPORT_CONCENTRATION_PENALTY : 0;
+}
+
+// Sets `.planningScore`/`.recentRepeatPenalty`/`.sportConcentrationPenalty`
+// on every match in `dayMatches`. `lastRecommendedDayKey` (a
+// Map<matchupKey, dayKey>) and `recentPicks` (a flat array of matches
+// recommended over the last SPORT_CONCENTRATION_LOOKBACK_DAYS days, BEFORE
+// today - see computeWindowPlan) both come from a caller that's tracking
+// history across days; this function itself stays a pure function of its
+// arguments. Deliberately separate fields from effectiveScore, never
+// overwritten in place: effectiveScore stays the viewer's own true,
+// un-penalized judgment of the match (docs/recommendation-engine-audit.md's
+// Invariant 4 - a diversity penalty can reduce a score, never delete or
+// corrupt the one it's derived from); planningScore is only what the
+// scheduler's DP weighs picks by (see computeDayPlan's `scoreField`
+// option).
+export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks = []) {
   dayMatches.forEach(match => {
     const lastDayKey = lastRecommendedDayKey.get(matchupKey(match));
     const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
-    const penalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
-    match.recentRepeatPenalty = penalty;
-    match.planningScore = (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - penalty;
+    const repeatPenalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
+    const sportPenalty = sportConcentrationPenalty(match.sport, recentPicks);
+    match.recentRepeatPenalty = repeatPenalty;
+    match.sportConcentrationPenalty = sportPenalty;
+    match.planningScore = (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - repeatPenalty - sportPenalty;
   });
 }
 
@@ -702,22 +752,137 @@ export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDa
 // an earlier day already recommended. `matchesByDayKey` is a
 // Map<dayKey, matches> (app.js's own per-day buckets); `pinnedChoices` is
 // state.pinnedChoices as-is (a Map<dayKey, Map<slotKey, matchId>>).
-// Returns both the per-day picks and the matchup history map itself, since
-// a caller scoped to one (possibly sport-filtered) day - see app.js's
-// renderRecommendedSection - only wants the history, not these unfiltered
-// picks, to compute ITS OWN, differently-scoped plan against.
+//
+// Returns:
+//   - `plan`: Map<dayKey, picks>
+//   - `lastRecommendedDayKey`: the matchup-repeat history (see
+//     applyRecentRepeatPenalties)
+//   - `recentPicksByDayKey`: Map<dayKey, matches[]> - exactly the rolling
+//     "last few days' picks" this function itself used to weigh THAT day's
+//     sport-concentration penalty, reusable as-is by a caller scoped to
+//     one (possibly sport-filtered) day - see app.js's
+//     renderRecommendedSection - so it doesn't have to re-derive the same
+//     rolling window from `plan` itself.
+//   - `sportConcentration`: Map<sport, share> over the WHOLE window's own
+//     final picks (see computeSportConcentration) - the "expose that
+//     concentration" diagnostic section 15 asks for.
 export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
   const dayKeys = [...matchesByDayKey.keys()].sort();
   const lastRecommendedDayKey = new Map();
   const plan = new Map();
+  const recentPicksByDayKey = new Map();
+  const recentDayPicks = []; // rolling [{dayKey, picks}], oldest first
   dayKeys.forEach(dayKey => {
     const dayMatches = matchesByDayKey.get(dayKey) || [];
-    applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey);
+    const recentPicks = recentDayPicks
+      .filter(entry => daysBetweenDayKeys(dayKey, entry.dayKey) <= SPORT_CONCENTRATION_LOOKBACK_DAYS)
+      .flatMap(entry => entry.picks);
+    recentPicksByDayKey.set(dayKey, recentPicks);
+    applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks);
     const picks = computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
     picks.forEach(match => lastRecommendedDayKey.set(matchupKey(match), dayKey));
+    recentDayPicks.push({ dayKey, picks });
     plan.set(dayKey, picks);
   });
-  return { plan, lastRecommendedDayKey };
+  return {
+    plan,
+    lastRecommendedDayKey,
+    recentPicksByDayKey,
+    sportConcentration: computeSportConcentration(recentDayPicks.flatMap(entry => entry.picks))
+  };
+}
+
+// ---- "Why not" explanations (docs/recommendation-engine-audit.md §27) -----
+//
+// computeDayPlan/computeWindowPlan answer "what got picked" - this answers
+// the complementary question a developer debugging one specific decision
+// actually needs: "why wasn't THIS ONE picked". Deliberately a separate,
+// ON-DEMAND function (call it for one candidate you're curious about) -
+// not something eagerly computed for every non-recommended match on every
+// render, which would mean re-running the scheduler dozens of times for
+// answers nobody asked for. It gets a REAL answer by re-running the actual
+// scheduler, once as it actually ran and once with this specific candidate
+// forced in (the same mechanism a real pin uses - see groupIntoSlots/
+// slotKeyFromMembers) and comparing the two plans' total value, rather
+// than guessing from static rules - so the explanation is exactly as
+// trustworthy as the scheduler itself, per the audit's own framing: "It
+// also prevents the developer from having to inspect five functions to
+// understand one decision."
+function round3(n) {
+  return Math.round(n * 1000) / 1000;
+}
+
+// `dayMatches` is cloned internally (never mutates the caller's own match
+// objects/flags) so this is safe to call speculatively without disturbing
+// whatever's currently rendered - same signature shape as computeDayPlan
+// (dayKey, dayMatches, pinnedForDay) plus the one candidate id being asked
+// about, and the same `scoreField` option so the comparison uses whichever
+// score the real plan was actually built with.
+export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinnedForDay = null, { scoreField = 'planningScore' } = {}) {
+  const getScore = m => {
+    const value = m[scoreField];
+    return Number.isFinite(value) ? value : Number.isFinite(m.effectiveScore) ? m.effectiveScore : 0;
+  };
+
+  const actual = dayMatches.map(m => ({ ...m }));
+  const actualPicks = computeDayPlan(dayKey, actual, pinnedForDay, { scoreField });
+  const actualMatch = actual.find(m => m.id === candidateId);
+  if (!actualMatch) return { reason: 'notFound', detail: 'No such candidate on this day.' };
+  if (actualMatch.recommended) return { reason: 'recommended', detail: 'This match is already part of the plan - there is nothing to explain.' };
+  if (actualMatch.isFinished) return { reason: 'finished', detail: 'The match has already finished, so it was never a candidate.' };
+  if (isQuietHours(actualMatch)) {
+    return { reason: 'quietHours', detail: 'Its local start time falls in quiet hours (00:00-05:00), which is never recommended however good its score.' };
+  }
+
+  const actualValue = actualPicks.reduce((sum, m) => sum + getScore(m), 0);
+
+  // Force this exact candidate in via the same pinning mechanism a real
+  // viewer swipe uses (see pinSlotChoice in app.js), then let the
+  // scheduler find the best plan that actually includes it.
+  const forced = dayMatches.map(m => ({ ...m }));
+  const forcedCandidates = forced.filter(m => !isQuietHours(m) && !m.isFinished);
+  const cluster = groupIntoSlots(forcedCandidates).find(c => c.members.some(m => m.id === candidateId));
+  const forcedKey = cluster ? slotKeyFromMembers(cluster.members) : candidateId;
+  const forcedPinnedForDay = new Map(pinnedForDay ? pinnedForDay.entries() : []);
+  forcedPinnedForDay.set(forcedKey, candidateId);
+  const forcedPicks = computeDayPlan(dayKey, forced, forcedPinnedForDay, { scoreField });
+  const forcedValue = forcedPicks.reduce((sum, m) => sum + getScore(m), 0);
+
+  if (forcedValue > actualValue + 1e-9) {
+    // Forcing it in would have made the plan MORE valuable by the
+    // scheduler's own numbers - so a value judgment isn't what excluded
+    // it. The only other thing that can override the scheduler is a
+    // DIFFERENT pinned choice occupying the same window.
+    return {
+      reason: 'blockedByPin',
+      detail: 'Including this candidate would have produced a higher-value plan - a different pinned choice is overriding the scheduler here, not a scoring decision.',
+      actualValue: round3(actualValue),
+      wouldBeValue: round3(forcedValue)
+    };
+  }
+
+  const conflictsWithRecommended = actualPicks.filter(m => !canWatchSequentially(m, actualMatch));
+  if (conflictsWithRecommended.length) {
+    return {
+      reason: 'lostToBetterSequence',
+      detail: `It conflicts with ${conflictsWithRecommended.map(m => m.name || m.id).join(', ')}, and the sequence that was actually chosen is worth at least as much (${round3(actualValue)}) as any plan built around this candidate instead (${round3(forcedValue)}).`,
+      conflictsWith: conflictsWithRecommended.map(m => m.id),
+      actualValue: round3(actualValue),
+      wouldBeValue: round3(forcedValue)
+    };
+  }
+
+  // Doesn't conflict with anything actually picked, and forcing it in
+  // wouldn't raise the plan's total value either - the rare, genuinely
+  // low-value case (a heavily penalized or near-zero-score candidate the
+  // scheduler correctly judged not worth its own slot even with nothing
+  // competing for it).
+  return {
+    reason: 'lowValue',
+    detail: "It doesn't conflict with anything in the actual plan, but its own score wasn't enough to be worth including even on its own.",
+    actualValue: round3(actualValue),
+    wouldBeValue: round3(forcedValue)
+  };
 }
 
 // ---- Viewer-relative score resolution --------------------------------------

@@ -45,7 +45,10 @@ import {
   describeEvidence,
   isEvidenceFresh,
   EVIDENCE_CATEGORY_LABELS,
-  EVIDENCE_FRESH_MAX_AGE_HOURS
+  EVIDENCE_FRESH_MAX_AGE_HOURS,
+  computeSportConcentration,
+  SPORT_CONCENTRATION_PENALTY,
+  explainWhyNotRecommended
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -567,6 +570,94 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
   });
 });
 
+describe('§15 sport-level variety (soft concentration penalty)', () => {
+  test('computeSportConcentration reports each sport\'s share of a pick list', () => {
+    const picks = [
+      makeMatch({ id: 'a', sport: 'MLB' }),
+      makeMatch({ id: 'b', sport: 'MLB' }),
+      makeMatch({ id: 'c', sport: 'MLB' }),
+      makeMatch({ id: 'd', sport: 'F1' })
+    ];
+    const shares = computeSportConcentration(picks);
+    assert.equal(shares.get('MLB'), 0.75);
+    assert.equal(shares.get('F1'), 0.25);
+  });
+
+  test('an empty pick list reports no shares at all, not NaN', () => {
+    assert.deepEqual([...computeSportConcentration([])], []);
+  });
+
+  test('a sport dominating the recent lookback window is penalized enough to let a close alternative from another sport win', () => {
+    // Three straight days of MLB winning the slot (100% share in the
+    // lookback window) - a comparably-scored NBA candidate should win
+    // today instead, per section 15's own "MLB MLB MLB MLB MLB" example.
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-17T20:00:00.000Z', effectiveScore: 8 })];
+    const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-18T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup 2' })];
+    const day3 = [mlbMatch({ id: 'd3', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup 3' })];
+    const mlbToday = mlbMatch({ id: 'mlb-today', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup 4' });
+    const nbaToday = makeMatch({
+      id: 'nba-today',
+      sport: 'NBA',
+      startTimeUtc: '2026-09-20T20:00:00.000Z',
+      durationMinutes: 150,
+      enduranceScore: 10,
+      effectiveScore: 7.5
+    });
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-17', day1],
+        ['2026-09-18', day2],
+        ['2026-09-19', day3],
+        ['2026-09-20', [mlbToday, nbaToday]]
+      ])
+    );
+    assert.equal(mlbToday.sportConcentrationPenalty, SPORT_CONCENTRATION_PENALTY);
+    assert.equal(nbaToday.sportConcentrationPenalty, 0); // NBA had zero share of the recent window
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['nba-today']);
+  });
+
+  test('two sports roughly splitting recent picks are never penalized - only genuine domination is', () => {
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-18T20:00:00.000Z', effectiveScore: 8 })];
+    const day2 = [makeMatch({ id: 'd2', sport: 'NBA', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 150, enduranceScore: 10, effectiveScore: 8 })];
+    const mlbToday = mlbMatch({ id: 'mlb-today', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' });
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-18', day1],
+        ['2026-09-19', day2],
+        ['2026-09-20', [mlbToday]]
+      ])
+    );
+    assert.equal(mlbToday.sportConcentrationPenalty, 0); // MLB was only 50% of the recent window
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['mlb-today']);
+  });
+
+  test('a lone sport with no genuine alternative today still wins despite the penalty - it\'s soft, not a ban', () => {
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8 })];
+    const mlbToday = mlbMatch({ id: 'mlb-today', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' });
+    const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [mlbToday]]]));
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['mlb-today']);
+  });
+
+  test('computeWindowPlan exposes sportConcentration over the whole window\'s own final picks', () => {
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8 })];
+    const day2 = [makeMatch({ id: 'd2', sport: 'F1', startTimeUtc: '2026-09-20T20:00:00.000Z', durationMinutes: 75, enduranceScore: 10, effectiveScore: 8 })];
+    const { sportConcentration } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', day2]]));
+    assert.equal(sportConcentration.get('MLB'), 0.5);
+    assert.equal(sportConcentration.get('F1'), 0.5);
+  });
+
+  test('recentPicksByDayKey exposes exactly the rolling window each day\'s own penalty was weighed against', () => {
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8 })];
+    const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' })];
+    const { recentPicksByDayKey } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', day2]]));
+    assert.deepEqual(recentPicksByDayKey.get('2026-09-19'), []); // nothing before the first day
+    assert.deepEqual(
+      recentPicksByDayKey.get('2026-09-20').map(m => m.id),
+      ['d1']
+    );
+  });
+});
+
 describe('Test 9 - deterministic planning', () => {
   test('the same input always produces the same plan', () => {
     const build = () => [
@@ -631,7 +722,12 @@ describe('Invariant checks', () => {
     const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [a2]]]));
     assert.ok(plan.get('2026-09-20').some(m => m.id === 'a2')); // still recommended - no rival to lose to
     assert.equal(a2.effectiveScore, 8); // never mutated
-    assert.equal(a2.planningScore, 6.5); // only planningScore carries the penalty
+    // Both the matchup-repeat penalty (1.5, same matchup as yesterday) AND
+    // the sport-concentration penalty (1, day1's only pick was also
+    // Premier League - 100% share) apply here since this is a
+    // single-candidate day with nothing to diversify against; still never
+    // enough to drop the pick when nothing else is competing for the slot.
+    assert.equal(a2.planningScore, 5.5);
   });
 });
 
@@ -659,6 +755,74 @@ describe('a pinned choice only excludes matches it directly conflicts with', () 
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
     assert.deepEqual(plan.map(m => m.id), ['b']);
     assert.equal(b.recommended, true);
+  });
+});
+
+describe('§27 explainWhyNotRecommended', () => {
+  test('a match that IS recommended has nothing to explain', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8 });
+    computeDayPlan('2026-09-19', [a]);
+    const result = explainWhyNotRecommended('a', '2026-09-19', [a]);
+    assert.equal(result.reason, 'recommended');
+  });
+
+  test('a finished match is explained as finished, never re-scheduled', () => {
+    const a = footballMatch({ id: 'a', isFinished: true, effectiveScore: 99 });
+    assert.equal(explainWhyNotRecommended('a', '2026-09-19', [a]).reason, 'finished');
+  });
+
+  test('a quiet-hours match is explained as such', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T03:00:00.000Z', effectiveScore: 99 });
+    assert.equal(explainWhyNotRecommended('a', '2026-09-19', [a]).reason, 'quietHours');
+  });
+
+  test('lostToBetterSequence: names the real conflicting winners and gives real, comparable values', () => {
+    // Same "A alone (10) loses to B+C (18)" scenario as Test 3.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10, name: 'A' });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9, name: 'B' });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9, name: 'C' });
+    computeDayPlan('2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
+    const result = explainWhyNotRecommended('a', '2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
+    assert.equal(result.reason, 'lostToBetterSequence');
+    assert.deepEqual(new Set(result.conflictsWith), new Set(['b', 'c']));
+    assert.equal(result.actualValue, 18);
+    assert.equal(result.wouldBeValue, 10);
+  });
+
+  test('blockedByPin: a pin is genuinely what excluded a candidate that would otherwise have won', () => {
+    const pinned = footballMatch({ id: 'pinned', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 2, name: 'Pinned' });
+    const wouldWin = footballMatch({ id: 'would-win', startTimeUtc: '2026-09-19T18:01:00.000Z', effectiveScore: 9, name: 'Would Win' });
+    const key = [pinned.id, wouldWin.id].sort().join('|');
+    const pinnedForDay = new Map([[key, 'pinned']]);
+    computeDayPlan('2026-09-19', [pinned, wouldWin], pinnedForDay, { scoreField: 'effectiveScore' });
+    assert.equal(pinned.recommended, true);
+    assert.equal(wouldWin.recommended, false);
+    const result = explainWhyNotRecommended('would-win', '2026-09-19', [pinned, wouldWin], pinnedForDay, { scoreField: 'effectiveScore' });
+    assert.equal(result.reason, 'blockedByPin');
+    assert.equal(result.wouldBeValue, 9);
+    assert.equal(result.actualValue, 2);
+  });
+
+  test('lowValue: a standalone candidate whose own score genuinely wasn\'t worth its slot', () => {
+    const negative = footballMatch({ id: 'negative', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: -5 });
+    const result = explainWhyNotRecommended('negative', '2026-09-19', [negative], null, { scoreField: 'effectiveScore' });
+    assert.equal(result.reason, 'lowValue');
+    assert.deepEqual(result.conflictsWith, undefined);
+  });
+
+  test('an unknown candidate id is reported plainly, never throws', () => {
+    const a = footballMatch({ id: 'a', effectiveScore: 5 });
+    assert.equal(explainWhyNotRecommended('does-not-exist', '2026-09-19', [a]).reason, 'notFound');
+  });
+
+  test('never mutates the caller\'s own match objects (clones internally)', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    computeDayPlan('2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
+    const beforeA = { ...a };
+    explainWhyNotRecommended('a', '2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
+    assert.deepEqual(a, beforeA); // untouched by the speculative re-runs
   });
 });
 

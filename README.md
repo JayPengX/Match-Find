@@ -112,6 +112,15 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
   genuinely much better repeat (see `RECENT_REPEAT_PENALTY_BY_GAP_DAYS`).
   This only affects which fixture wins the plan, never the underlying
   score shown on the card.
+- **Nor does one sport get to dominate the plan by default.** The same
+  function ALSO tracks the last few days' own picks by sport
+  (`SPORT_CONCENTRATION_LOOKBACK_DAYS`) and applies a small penalty once
+  one sport has genuinely dominated that window (≥75% of recent picks,
+  `SPORT_CONCENTRATION_THRESHOLD`) - MLB winning most days is normal and
+  expected, MLB winning literally every day when a comparable alternative
+  exists isn't. `computeWindowPlan`'s own `sportConcentration` return
+  value exposes the whole window's actual sport split for anyone
+  inspecting the data (also in the Settings "匯出資料" export).
 - **Swiping a stack is a real commitment, not just a peek.** Settling on a
   different card pins that match as the slot's fixed choice
   (`pinSlotChoice`) and rebuilds the WHOLE day's plan around it — the

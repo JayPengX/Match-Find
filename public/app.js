@@ -74,7 +74,19 @@ const state = {
   // recommend this exact matchup on an earlier day" no matter which day
   // or sport filter the viewer currently has open - see docs/
   // recommendation-engine-audit.md's "cross-day repetition" finding.
-  recommendationHistory: new Map()
+  recommendationHistory: new Map(),
+  // Map<dayKey, matches[]> - the rolling window of recently-recommended
+  // matches (see computeWindowPlan's own comment) each day's soft
+  // sport-concentration penalty was actually weighed against, reused as-is
+  // by renderRecommendedSection's own (possibly sport-filtered) call so it
+  // doesn't have to re-derive the same rolling window a second way.
+  recentPicksByDayKey: new Map(),
+  // Map<sport, share 0..1> over the whole fetched window's own final
+  // picks - docs/recommendation-engine-audit.md section 15's "the planner
+  // should expose that concentration" (team/league concentration), not
+  // itself used for any scheduling decision - purely a diagnostic
+  // surfaced in exportRecommendationData's own payload.
+  sportConcentration: new Map()
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -1436,7 +1448,7 @@ function renderRecommendedSection() {
   // asking about what was ACTUALLY recommended, not what a differently
   // filtered view would have picked.
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory);
+  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory, state.recentPicksByDayKey.get(dayKey) || []);
   const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   const ordered = pinCurrentOrNext(dayPlan);
 
@@ -1490,7 +1502,10 @@ function renderSections() {
   // its `plan` half is intentionally discarded here since it's this
   // unfiltered plan, not necessarily what actually renders below.
   const matchesByDayKey = new Map(state.days.map(day => [day.key, matchesForDay(day.key)]));
-  state.recommendationHistory = computeWindowPlan(matchesByDayKey, state.pinnedChoices).lastRecommendedDayKey;
+  const windowPlan = computeWindowPlan(matchesByDayKey, state.pinnedChoices);
+  state.recommendationHistory = windowPlan.lastRecommendedDayKey;
+  state.recentPicksByDayKey = windowPlan.recentPicksByDayKey;
+  state.sportConcentration = windowPlan.sportConcentration;
   renderRecommendedSection();
   renderAllMatchesSection();
 }
@@ -1781,13 +1796,17 @@ function exportRecommendationData() {
   // exported .recommended/.planningScore/.recentRepeatPenalty reflect the
   // SAME cross-day repeat-penalty-aware decision renderRecommendedSection
   // itself makes, chronologically ordered - see that function's own comment.
-  computeWindowPlan(new Map(state.days.map(day => [day.key, matchesForDay(day.key)])), state.pinnedChoices);
+  const windowPlan = computeWindowPlan(new Map(state.days.map(day => [day.key, matchesForDay(day.key)])), state.pinnedChoices);
   const payload = {
     exportedAt: new Date().toISOString(),
     dataGeneratedAt: state.generatedAt || null,
     recommendStyle: state.recommendStyle,
     priorityOrder: state.priorityOrder,
     enabledSports: [...state.enabledSports],
+    // docs/recommendation-engine-audit.md section 15's "the planner should
+    // expose that concentration" (team/league concentration) - a plain
+    // object since Map doesn't survive JSON.stringify on its own.
+    sportConcentration: Object.fromEntries(windowPlan.sportConcentration),
     matches: state.matches
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
