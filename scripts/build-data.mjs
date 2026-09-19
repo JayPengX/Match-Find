@@ -71,7 +71,15 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // recommendation style - see public/app.js's "Recommendation style
 // setting". Every match already in the cache predates that field, so this
 // bump re-scores the whole window once to backfill it.
-const PROMPT_VERSION = 6;
+// v7: the shared proxy's scoring prompt now reads real, current signals
+// (betting odds via this script's own oddsContext, plus a live-search
+// "[Recent: ...]" note the Worker itself adds) out of "context" instead of
+// scoring competitiveness/watchability purely from Gemini's own
+// (possibly stale) training-data knowledge of the two teams - see that
+// repo's buildMatchRecommendPrompt. Every cached score predates that
+// change, so this bump re-scores the whole window once against the
+// improved prompt.
+const PROMPT_VERSION = 7;
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
@@ -217,6 +225,27 @@ function buildCompetitor(leagueId, c) {
 function competitorContext(competitor) {
   const record = competitor.record;
   return record ? `${competitor.name} (${record.wins}-${record.losses})` : competitor.name;
+}
+
+// ESPN's own on-record betting line for the fixture, when a provider has
+// actually posted one (mainstream US sports only in practice - MLB/NBA
+// typically have one most days, soccer/EPL and F1 essentially never do
+// via this API) - real, current market data handed to Gemini as an
+// objective competitiveness/scoring-pace signal (see the shared proxy's
+// buildMatchRecommendPrompt) instead of leaning entirely on its own
+// general knowledge of the two teams, which has no way to reflect
+// TODAY's actual line. `details` is already a short, human-readable
+// string ESPN itself provides (e.g. "LAD -1.5") - used as-is rather than
+// reconstructed from the raw spread/team fields, since that's exactly the
+// phrasing a sports fan already reads anywhere else odds are shown.
+// Returns '' (no bracketed clause at all) when no provider has one, which
+// is the common case for a given fixture, not an error.
+function oddsContext(competition) {
+  const odds = competition.odds?.[0];
+  const details = typeof odds?.details === 'string' ? odds.details.trim() : '';
+  if (!details) return '';
+  const overUnder = Number(odds?.overUnder);
+  return ` [Odds: ${details}${Number.isFinite(overUnder) ? `, O/U ${overUnder}` : ''}]`;
 }
 
 async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
@@ -372,7 +401,9 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         logo: '',
         competitors,
         context:
-          competitors.map(competitorContext).join(' vs ') + (isPostseason ? ' (postseason/playoff game)' : '')
+          competitors.map(competitorContext).join(' vs ') +
+          (isPostseason ? ' (postseason/playoff game)' : '') +
+          oddsContext(competition)
       });
     }
   }
