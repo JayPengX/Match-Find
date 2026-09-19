@@ -16,9 +16,10 @@
 //
 // Nothing in this file reads or writes localStorage, the network, or the
 // DOM - every function here is a pure function of its arguments (aside from
-// isQuietHours/effectiveInterval's own use of the current wall clock via
-// `new Date`, which is inherent to "is this match on right now", not a
-// hidden dependency on outside state).
+// isQuietHours/effectiveInterval/isEvidenceFresh's own use of the current
+// wall clock via `new Date`, which is inherent to "is this match on right
+// now"/"is this evidence still current", not a hidden dependency on
+// outside state).
 //
 // The viewing-plan pipeline (see docs/recommendation-engine-audit.md for
 // the fuller writeup this follows) is deliberately one straight line:
@@ -217,6 +218,66 @@ export function computeRecommendationScore(match, context = {}) {
     eventScore: breakdown.baseScore,
     viewerScore: breakdown.effectiveScore
   };
+}
+
+// ---- Structured evidence -----------------------------------------------
+//
+// scripts/build-data.mjs's cache stores each match's `evidence` (a small
+// array of {category, finding, source, retrievedAt} - see that script's
+// EVIDENCE_CATEGORIES/sanitizeCachedEvidenceItem, and the shared proxy's
+// own worker.js for where it's actually produced) and surfaces it, along
+// with `evidenceRetrievedAt` (the most recent item's own timestamp), onto
+// every match this module's resolveViewingPlan hands back - both fields
+// pass straight through resolveViewingPlan's own `{...match, ...}` spread
+// with no extra work needed there. This section is what turns that raw
+// array into something a caller (app.js's buildMatchCard, or a future UI)
+// can render without re-deriving the same grouping/labels itself, and
+// gives "how current is this" its own explicit signal - separate from
+// confidence (which is about how much the SCORE should be trusted, not how
+// current the evidence behind it is; see computeConfidence's own "refined
+// does not mean current" comment above).
+export const EVIDENCE_CATEGORY_LABELS = {
+  competitiveness: '競爭力',
+  mediaAttention: '媒體關注度',
+  eventImportance: '重要性',
+  recentContext: '近況'
+};
+
+// A display-ready form of match.evidence - never mutates or re-validates
+// the array itself (scripts/build-data.mjs already did that before it ever
+// reached matches.json), just attaches the Traditional Chinese label a
+// caller would otherwise have to look up in EVIDENCE_CATEGORY_LABELS
+// itself. Returns [] for a match with no evidence, same "explicit empty,
+// not absent" convention the rest of this pipeline uses.
+export function describeEvidence(match) {
+  if (!Array.isArray(match?.evidence) || !match.evidence.length) return [];
+  return match.evidence.map(item => ({
+    category: item.category,
+    label: EVIDENCE_CATEGORY_LABELS[item.category] || EVIDENCE_CATEGORY_LABELS.recentContext,
+    finding: item.finding,
+    source: item.source,
+    retrievedAt: item.retrievedAt
+  }));
+}
+
+// How long a match's own evidence stays "fresh" for display purposes -
+// intentionally the same threshold build-data.mjs's own
+// EVIDENCE_MAX_AGE_HOURS uses to decide when to actually re-fetch, so a
+// viewer is never shown a "current as of..." claim that the build pipeline
+// itself would already consider stale enough to be retrying.
+export const EVIDENCE_FRESH_MAX_AGE_HOURS = 24;
+
+// True when match.evidenceRetrievedAt exists and is within
+// EVIDENCE_FRESH_MAX_AGE_HOURS of right now - reads the wall clock via
+// `new Date`, the same documented exception this file's own top comment
+// already carves out for isQuietHours/effectiveInterval ("is this current
+// right now" is inherently relative to the current moment, not a hidden
+// dependency on outside state). A match with no evidence at all is never
+// "fresh" - there's nothing to be fresh.
+export function isEvidenceFresh(match, maxAgeHours = EVIDENCE_FRESH_MAX_AGE_HOURS) {
+  if (!match?.evidenceRetrievedAt) return false;
+  const ageMs = Date.now() - Date.parse(match.evidenceRetrievedAt);
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeHours * 60 * 60 * 1000;
 }
 
 // ---- Overlap / duration helpers --------------------------------------------

@@ -5,7 +5,14 @@
 // these helpers could be unit-tested without a network call.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTimeTbd, parseOverallRecord, oddsContext, heuristicScore } from '../scripts/build-data.mjs';
+import {
+  isTimeTbd,
+  parseOverallRecord,
+  oddsContext,
+  heuristicScore,
+  isEvidenceStale,
+  sanitizeCachedEvidenceItem
+} from '../scripts/build-data.mjs';
 
 describe('isTimeTbd', () => {
   test('flags a status whose shortDetail contains TBD', () => {
@@ -72,5 +79,76 @@ describe('heuristicScore (the local, no-AI fallback)', () => {
     const result = heuristicScore({ competitors: [{ record: { wins: 1, losses: 1 } }, { record: { wins: 2, losses: 2 } }] });
     assert.equal(typeof result.broadcastQuality, 'number');
     assert.equal(typeof result.enduranceScore, 'number');
+  });
+});
+
+describe('sanitizeCachedEvidenceItem', () => {
+  test('keeps a well-formed item as-is', () => {
+    const item = sanitizeCachedEvidenceItem({
+      category: 'eventImportance',
+      finding: 'This decides the division.',
+      source: 'current standings',
+      retrievedAt: '2026-09-19T12:00:00.000Z'
+    });
+    assert.deepEqual(item, {
+      category: 'eventImportance',
+      finding: 'This decides the division.',
+      source: 'current standings',
+      retrievedAt: '2026-09-19T12:00:00.000Z'
+    });
+  });
+
+  test('an unrecognized category falls back to recentContext, never dropped', () => {
+    const item = sanitizeCachedEvidenceItem({ category: 'bogus', finding: 'still a real fact', source: 'x', retrievedAt: 'now' });
+    assert.equal(item.category, 'recentContext');
+    assert.equal(item.finding, 'still a real fact');
+  });
+
+  test('non-string fields become empty strings rather than throwing', () => {
+    const item = sanitizeCachedEvidenceItem({ category: null, finding: 42, source: {}, retrievedAt: null });
+    assert.equal(item.finding, '');
+    assert.equal(item.source, '');
+    assert.equal(typeof item.retrievedAt, 'string'); // stamped with a real timestamp, not null
+  });
+
+  test('bounds finding/source length', () => {
+    const item = sanitizeCachedEvidenceItem({ category: 'recentContext', finding: 'x'.repeat(500), source: 'y'.repeat(500) });
+    assert.ok(item.finding.length <= 200);
+    assert.ok(item.source.length <= 80);
+  });
+});
+
+describe('isEvidenceStale', () => {
+  const now = new Date('2026-09-19T12:00:00.000Z');
+
+  test('an entry with no evidence at all is never flagged stale', () => {
+    assert.equal(isEvidenceStale({ evidence: [] }, now), false);
+    assert.equal(isEvidenceStale({}, now), false);
+    assert.equal(isEvidenceStale(null, now), false);
+  });
+
+  test('evidence retrieved within the freshness window is not stale', () => {
+    const cached = { evidence: [{ retrievedAt: '2026-09-19T00:00:00.000Z' }] }; // 12h ago
+    assert.equal(isEvidenceStale(cached, now), false);
+  });
+
+  test('evidence older than EVIDENCE_MAX_AGE_HOURS (24h) is stale', () => {
+    const cached = { evidence: [{ retrievedAt: '2026-09-18T00:00:00.000Z' }] }; // 36h ago
+    assert.equal(isEvidenceStale(cached, now), true);
+  });
+
+  test('uses the MOST RECENT item when an entry has several evidence items', () => {
+    const cached = {
+      evidence: [
+        { retrievedAt: '2026-09-01T00:00:00.000Z' }, // very old
+        { retrievedAt: '2026-09-19T06:00:00.000Z' } // 6h ago - recent
+      ]
+    };
+    assert.equal(isEvidenceStale(cached, now), false);
+  });
+
+  test('a malformed/missing retrievedAt never throws or crashes staleness detection', () => {
+    assert.equal(isEvidenceStale({ evidence: [{ retrievedAt: 'not a date' }] }, now), false);
+    assert.equal(isEvidenceStale({ evidence: [{}] }, now), false);
   });
 });

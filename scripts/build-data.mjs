@@ -94,7 +94,72 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // length to actually reserve when building a back-to-back plan. Every
 // match already in the cache predates this field, so this bump re-scores
 // the whole window once to backfill it.
-const PROMPT_VERSION = 8;
+// v9: the shared proxy's /match-recommend now returns structured
+// "evidence" (category/finding/source/retrievedAt) per fixture instead of
+// folding one opaque search note straight into scoring with nothing kept
+// afterward (see that repo's worker.js, sanitizeEvidence/
+// withResearchEvidence) - see docs/recommendation-engine-audit.md's
+// "structured evidence layer" section. Every match already in the cache
+// predates this field, so this bump re-scores the whole window once to
+// backfill it.
+const PROMPT_VERSION = 9;
+
+// Allowed evidence categories - the audit's own vocabulary (see
+// docs/recommendation-engine-audit.md section 19), kept identical to the
+// shared proxy's own EVIDENCE_CATEGORIES so both sides of this boundary
+// agree on what a category value means without either one importing the
+// other (separate repos - see sanitizeCachedEvidenceItem's own comment for
+// why this re-validates rather than trusting the proxy's own
+// already-sanitized response blindly).
+const EVIDENCE_CATEGORIES = ['competitiveness', 'mediaAttention', 'eventImportance', 'recentContext'];
+
+// How stale a cached match's own evidence is allowed to get before a run
+// retries it even though its promptVersion is already current - online
+// public/media attention can change within hours in a way a team's
+// underlying quality never does (see docs/recommendation-engine-audit.md
+// section 22: "online context should be refreshed more aggressively than
+// static team quality"), so evidence gets its own, shorter refresh cadence
+// instead of waiting on the next unrelated PROMPT_VERSION bump. This stays
+// one flag, not the fuller per-category freshness-class model that section
+// also describes - real per-category signal (how fast standings vs.
+// injury-news vs. media-attention actually change) isn't something this
+// pipeline has ever measured, so a single coarse threshold is honest about
+// what's actually known, same reasoning as computeConfidence's own
+// "known limitations".
+const EVIDENCE_MAX_AGE_HOURS = 24;
+
+// True when a cached match's OWN evidence (not its score) is old enough to
+// be worth a fresh search pass on the next eligible run - see
+// EVIDENCE_MAX_AGE_HOURS. An entry with no evidence at all (a genuine
+// "search found nothing worth adding" result, or a heuristic-scored match
+// that never got a real search pass) is never flagged stale here - retrying
+// it belongs to needsScoring's own `source !== 'ai'` check instead, not
+// this one, so a fixture with reliably boring news coverage doesn't get
+// re-sent to Gemini forever just because it has nothing to go stale.
+export function isEvidenceStale(cached, now) {
+  if (!Array.isArray(cached?.evidence) || !cached.evidence.length) return false;
+  const retrievedAtMs = Math.max(
+    ...cached.evidence.map(item => Date.parse(item.retrievedAt || '')).filter(Number.isFinite)
+  );
+  if (!Number.isFinite(retrievedAtMs)) return false;
+  return now.getTime() - retrievedAtMs > EVIDENCE_MAX_AGE_HOURS * 60 * 60 * 1000;
+}
+
+// Bounds/re-validates one evidence item pulled from the shared proxy's
+// /match-recommend response before it's written into the durable cache -
+// the proxy already sanitizes its own response (see that repo's
+// sanitizeEvidence), but this is still a network response crossing a repo
+// boundary into a file this script commits back to git, so it gets the
+// same "never fully trust upstream" treatment as competitiveness/
+// watchability's own Math.max/min clamping just below.
+export function sanitizeCachedEvidenceItem(item) {
+  return {
+    category: EVIDENCE_CATEGORIES.includes(item?.category) ? item.category : 'recentContext',
+    finding: typeof item?.finding === 'string' ? item.finding.slice(0, 200) : '',
+    source: typeof item?.source === 'string' ? item.source.slice(0, 80) : '',
+    retrievedAt: typeof item?.retrievedAt === 'string' ? item.retrievedAt : new Date().toISOString()
+  };
+}
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine 6-hourly rerun, 'push' for a real commit landing on main, or
@@ -838,7 +903,12 @@ async function main() {
   const needsScoring = matches.filter(m => {
     if (m.isFinished) return false;
     const cached = cache[m.id];
-    return !cached || cached.source !== 'ai' || cached.promptVersion !== PROMPT_VERSION;
+    return (
+      !cached ||
+      cached.source !== 'ai' ||
+      cached.promptVersion !== PROMPT_VERSION ||
+      isEvidenceStale(cached, now)
+    );
   });
 
   // A routine scheduled run skips calling Gemini at all when the last real
@@ -881,6 +951,14 @@ async function main() {
         reason: String(pick.reason || '').slice(0, 300),
         venueZh: String(pick.venueZh || '').slice(0, 100),
         whereToWatchTw: String(pick.whereToWatchTw || '').slice(0, 100),
+        // Structured, durable evidence (see this file's own EVIDENCE_CATEGORIES
+        // comment) - kept even when empty (a genuine "search found nothing
+        // current" is real information, not a missing field) rather than
+        // only ever existing as a transient prompt clause the way the old
+        // single "note" string did.
+        evidence: Array.isArray(pick.evidence)
+          ? pick.evidence.slice(0, 5).map(sanitizeCachedEvidenceItem).filter(item => item.finding)
+          : [],
         source: 'ai',
         promptVersion: PROMPT_VERSION
       };
@@ -908,6 +986,8 @@ async function main() {
       match.reason = '';
       match.venueZh = '';
       match.whereToWatchTw = '';
+      match.evidence = [];
+      match.evidenceRetrievedAt = null;
       match.source = 'finished';
       match.score = 0;
       match.refined = false;
@@ -927,6 +1007,22 @@ async function main() {
     match.reason = scored.reason;
     match.venueZh = scored.venueZh || '';
     match.whereToWatchTw = scored.whereToWatchTw || '';
+    // Same "explicit empty, not absent" convention as the cache entry
+    // itself - a heuristic-scored match (never actually searched) also
+    // just gets [] here, not undefined.
+    match.evidence = Array.isArray(scored.evidence) ? scored.evidence : [];
+    // The single freshness signal docs/recommendation-engine-audit.md
+    // section 20-21 asks for, kept separate from `confidence` below on
+    // purpose: confidence is about how much the SCORE itself should be
+    // trusted (source/refined), this is about how CURRENT the evidence
+    // behind it is - "refined" doesn't mean "fresh" (see computeConfidence's
+    // own comment in recommendation.mjs). null when there's no evidence at
+    // all to date.
+    match.evidenceRetrievedAt = match.evidence.length
+      ? new Date(
+          Math.max(...match.evidence.map(item => Date.parse(item.retrievedAt)).filter(Number.isFinite))
+        ).toISOString()
+      : null;
     match.source = scored.source;
     // Surfaced alongside `source` (not just kept inside the cache entry) so
     // computeConfidence - and anyone reading matches.json directly - can

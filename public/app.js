@@ -40,7 +40,9 @@ import {
   slotKeyFromMembers,
   computeOverlapRange,
   computeWindowPlan,
-  applyRecentRepeatPenalties
+  applyRecentRepeatPenalties,
+  describeEvidence,
+  isEvidenceFresh
 } from './lib/recommendation.mjs';
 
 const state = {
@@ -1000,6 +1002,51 @@ function renderVenue(el, match) {
   el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
+// Grounds the one-sentence AI "reason" in the actual structured evidence
+// (see recommendation.mjs's describeEvidence/isEvidenceFresh) it was
+// scored from, per docs/recommendation-engine-audit.md's "explanations
+// should be grounded in evidence" - rather than trying to auto-assemble
+// Chinese prose from raw findings (a real risk of reading worse than
+// Gemini's own directly-generated reason), this lets a viewer see the
+// actual current facts behind that sentence and judge for themselves.
+// Collapsed by default (a <details> element, no JS needed to toggle it) -
+// this is a "how was this decided" drill-down, not something that belongs
+// competing for attention with the card's own primary content. Inserted
+// directly after `reasonEl` in the DOM rather than living in the card
+// template itself, since most matches (no evidence at all) render nothing
+// here.
+function buildEvidenceDetails(match, reasonEl) {
+  const items = describeEvidence(match);
+  if (!items.length) return;
+
+  const details = document.createElement('details');
+  details.className = 'match-evidence';
+
+  const summary = document.createElement('summary');
+  summary.textContent = isEvidenceFresh(match) ? '評分依據' : '評分依據（較舊）';
+  details.appendChild(summary);
+
+  const list = document.createElement('ul');
+  items.forEach(item => {
+    const li = document.createElement('li');
+    const label = document.createElement('span');
+    label.className = 'match-evidence-label';
+    label.textContent = item.label;
+    li.appendChild(label);
+    li.appendChild(document.createTextNode(` ${item.finding}`));
+    if (item.source) {
+      const source = document.createElement('span');
+      source.className = 'match-evidence-source';
+      source.textContent = `（${item.source}）`;
+      li.appendChild(source);
+    }
+    list.appendChild(li);
+  });
+  details.appendChild(list);
+
+  reasonEl.insertAdjacentElement('afterend', details);
+}
+
 function buildMatchCard(match) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   const start = Date.parse(match.startTimeUtc);
@@ -1111,6 +1158,8 @@ function buildMatchCard(match) {
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
+
+  buildEvidenceDetails(match, reasonEl);
 
   // A plain fact, independent of recommendation state entirely (see
   // resolveViewingPlan's own top comment on why overlap no longer decides

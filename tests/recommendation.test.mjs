@@ -41,7 +41,11 @@ import {
   daysBetweenDayKeys,
   recentRepeatPenalty,
   applyRecentRepeatPenalties,
-  computeWindowPlan
+  computeWindowPlan,
+  describeEvidence,
+  isEvidenceFresh,
+  EVIDENCE_CATEGORY_LABELS,
+  EVIDENCE_FRESH_MAX_AGE_HOURS
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -639,5 +643,50 @@ describe('a pinned choice only excludes matches it directly conflicts with', () 
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
     assert.deepEqual(plan.map(m => m.id), ['b']);
     assert.equal(b.recommended, true);
+  });
+});
+
+describe('describeEvidence / isEvidenceFresh (structured evidence)', () => {
+  function evidenceMatch(overrides = {}) {
+    return makeMatch({
+      evidence: [
+        { category: 'eventImportance', finding: 'This decides the division.', source: 'current standings', retrievedAt: '2026-09-19T06:00:00.000Z' },
+        { category: 'bogus', finding: 'mislabeled but real', source: 'x', retrievedAt: '2026-09-19T00:00:00.000Z' }
+      ],
+      evidenceRetrievedAt: '2026-09-19T06:00:00.000Z',
+      ...overrides
+    });
+  }
+
+  test('describeEvidence attaches the Traditional Chinese label for each category', () => {
+    const items = describeEvidence(evidenceMatch());
+    assert.equal(items.length, 2);
+    assert.equal(items[0].label, EVIDENCE_CATEGORY_LABELS.eventImportance);
+    assert.equal(items[0].finding, 'This decides the division.');
+  });
+
+  test('an unrecognized category still gets labeled (falls back to the recentContext label), never dropped', () => {
+    const items = describeEvidence(evidenceMatch());
+    assert.equal(items[1].category, 'bogus'); // the raw category is passed through as-is
+    assert.equal(items[1].label, EVIDENCE_CATEGORY_LABELS.recentContext);
+  });
+
+  test('a match with no evidence returns an empty array, not null/undefined', () => {
+    assert.deepEqual(describeEvidence(makeMatch({ evidence: [] })), []);
+    assert.deepEqual(describeEvidence(makeMatch({ evidence: undefined })), []);
+    assert.deepEqual(describeEvidence(null), []);
+  });
+
+  test('isEvidenceFresh is true within the freshness window, false once past it', () => {
+    const recent = evidenceMatch({ evidenceRetrievedAt: new Date(Date.now() - 60_000).toISOString() });
+    assert.equal(isEvidenceFresh(recent), true);
+
+    const stale = evidenceMatch({ evidenceRetrievedAt: new Date(Date.now() - (EVIDENCE_FRESH_MAX_AGE_HOURS + 1) * 3_600_000).toISOString() });
+    assert.equal(isEvidenceFresh(stale), false);
+  });
+
+  test('isEvidenceFresh is false when there is no evidenceRetrievedAt at all', () => {
+    assert.equal(isEvidenceFresh(makeMatch({ evidenceRetrievedAt: null })), false);
+    assert.equal(isEvidenceFresh(makeMatch({})), false);
   });
 });

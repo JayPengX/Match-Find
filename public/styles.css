@@ -672,6 +672,50 @@ main#app {
   color: var(--text-faint);
 }
 
+/* The AI reason's own structured evidence (see app.js's buildEvidenceDetails)
+   - a collapsed drill-down, deliberately understated (small, faint,
+   indented) so it never competes with the card's own primary content;
+   opening it is an explicit choice, not something skimming the list ever
+   has to look past. */
+.match-evidence {
+  margin: 8px 0 0;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+.match-evidence summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+  list-style: none;
+}
+.match-evidence summary::-webkit-details-marker { display: none; }
+.match-evidence summary::before {
+  content: "▸ ";
+}
+.match-evidence[open] summary::before {
+  content: "▾ ";
+}
+.match-evidence ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+.match-evidence li {
+  margin: 3px 0;
+  line-height: 1.4;
+}
+.match-evidence-label {
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.match-evidence-label::after {
+  content: "：";
+}
+.match-evidence-source {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 /* Bold + a saturated color (not the muted/faint text tones used elsewhere)
    so this never reads as "did that text even render" the way a thinner,
    smaller version of it did before. */
