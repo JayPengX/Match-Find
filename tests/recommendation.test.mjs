@@ -302,6 +302,16 @@ describe('computeDayPlan', () => {
     assert.equal(plan[0].id, 'b');
     assert.equal(b.recommended, true);
     assert.equal(a.recommended, false);
+    // A viewer-swiped pick is "偏好" (isPreferred), not "推薦" (the
+    // system's own unforced judgment) - see app.js's buildMatchCard.
+    assert.equal(b.isPreferred, true);
+  });
+
+  test('a match the scheduler picks on its own merits is never flagged isPreferred', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', durationMinutes: 60, effectiveScore: 6 });
+    const plan = computeDayPlan('2026-09-19', [a]);
+    assert.equal(plan[0].id, 'a');
+    assert.equal(a.isPreferred, false);
   });
 
   test('non-overlapping fixtures across the day are all recommended independently', () => {

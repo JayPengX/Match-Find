@@ -450,7 +450,8 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 //
 // Builds ONE local calendar day's back-to-back viewing plan from its
 // already sport-filtered, non-quiet-hour-excluded candidate matches. Mutates
-// every match in `dayMatches` in place (.recommended/.alternativeIds), same
+// every match in `dayMatches` in place (.recommended/.alternativeIds/
+// .isPreferred), same
 // convention as the rest of this codebase. Returns the plan as a plain
 // array of matches, sorted by start time.
 //
@@ -475,6 +476,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
+    match.isPreferred = false;
   });
   const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
   if (!candidates.length) return [];
@@ -536,6 +538,13 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   picks.sort((a, b) => a.interval.start - b.interval.start);
   picks.forEach(({ choice }) => {
     choice.recommended = true;
+    // Distinguishes "the system picked this" (推薦) from "you swiped to
+    // this" (偏好, see app.js's buildMatchCard) - a viewer-made choice
+    // isn't the same claim as the algorithm's own judgment. forcedIds is
+    // exactly the set of pinned matches (see above) - every pick in it
+    // got there because the viewer overrode the scheduler, not because
+    // the scheduler chose it on its own merits.
+    choice.isPreferred = forcedIds.has(choice.id);
   });
 
   // alternativeIds is purely presentational, computed AFTER scheduling:
@@ -667,7 +676,8 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
       scoreBreakdown: breakdown,
       confidence: computeConfidence(match),
       recommended: false,
-      alternativeIds: null
+      alternativeIds: null,
+      isPreferred: false
     };
   });
 
