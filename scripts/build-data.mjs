@@ -37,7 +37,16 @@
 // run, burning quota for a judgment that doesn't change between builds.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
+// Confidence is computed from exactly the same source/refined signals this
+// script's own AI score cache already tracks (see computeConfidence's own
+// comment) - shared with public/app.js's resolveViewingPlan (which
+// recomputes the same number client-side purely for display, since a
+// finished/heuristic match's confidence can't be baked in once and stay
+// correct forever the way the AI scores themselves can) so there's exactly
+// one definition of what "confidence" means, not two that could drift.
+import { computeConfidence } from '../public/lib/recommendation.mjs';
 
 const PROXY_URL = (process.env.PROXY_URL || '').trim().replace(/\/+$/, '');
 // The commit this build ran from (.github/workflows/deploy.yml passes
@@ -191,7 +200,7 @@ function yyyymmddUtc(date) {
 // for MLB/NBA playoff games scheduled before their exact date and time is
 // announced - see fetchTeamLeagueMatches below for how this changes what
 // gets built.
-function isTimeTbd(statusType) {
+export function isTimeTbd(statusType) {
   return /\bTBD\b/i.test(statusType?.shortDetail || statusType?.detail || '');
 }
 
@@ -208,7 +217,7 @@ async function fetchJson(url) {
 // fallback and for the short human-readable context string handed to
 // Gemini - never trusted for anything more precise than "roughly how good
 // is this team right now".
-function parseOverallRecord(competitor) {
+export function parseOverallRecord(competitor) {
   const summary = (competitor.records || []).find(r => r.type === 'total' || r.name === 'overall')
     ?.summary;
   const match = /^(\d+)-(\d+)(?:-(\d+))?$/.exec(summary || '');
@@ -252,7 +261,7 @@ function competitorContext(competitor) {
 // phrasing a sports fan already reads anywhere else odds are shown.
 // Returns '' (no bracketed clause at all) when no provider has one, which
 // is the common case for a given fixture, not an error.
-function oddsContext(competition) {
+export function oddsContext(competition) {
   const odds = competition.odds?.[0];
   const details = typeof odds?.details === 'string' ? odds.details.trim() : '';
   if (!details) return '';
@@ -508,7 +517,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
 // to show. Closer win-loss records score more "competitive"; two strong
 // records score more "watchable". Deliberately conservative (never above 8)
 // since this has no real sports knowledge behind it.
-function heuristicScore(match) {
+export function heuristicScore(match) {
   const records = match.competitors.map(c => c.record).filter(Boolean);
   // The site is Traditional Chinese throughout (see public/app.js) - this
   // reason has to read that way too even though it never touched Gemini,
@@ -901,6 +910,8 @@ async function main() {
       match.whereToWatchTw = '';
       match.source = 'finished';
       match.score = 0;
+      match.refined = false;
+      match.confidence = computeConfidence(match);
       continue;
     }
     const scored = cache[match.id] || { ...heuristicScore(match), source: 'heuristic' };
@@ -917,8 +928,22 @@ async function main() {
     match.venueZh = scored.venueZh || '';
     match.whereToWatchTw = scored.whereToWatchTw || '';
     match.source = scored.source;
+    // Surfaced alongside `source` (not just kept inside the cache entry) so
+    // computeConfidence - and anyone reading matches.json directly - can
+    // tell a base-pass AI score apart from one that also survived a
+    // second, comparative refine pass (see refineContestedClusters) without
+    // needing the cache file itself.
+    match.refined = !!scored.refined;
     if (scored.source === 'ai') usedAi = true;
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
+    // How much this score should actually be trusted - see
+    // computeConfidence's own comment for what it's grounded in. Computed
+    // here (not just left to the client) so a downstream consumer of
+    // matches.json alone - e.g. scripts/evaluate-recommendations.mjs, or an
+    // export like the one this repo's own "匯出資料" Settings button
+    // produces - always has it, not only a browser that ran
+    // resolveViewingPlan.
+    match.confidence = computeConfidence(match);
   }
 
   // Same throttle as the base scoring pass above - a comparative re-score
@@ -935,6 +960,8 @@ async function main() {
         match.watchability = scored.watchability;
         match.reason = scored.reason;
         match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
+        match.refined = true;
+        match.confidence = computeConfidence(match);
       }
     }
   }
@@ -978,7 +1005,16 @@ async function main() {
   );
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+// Only actually runs the build when this file is executed directly (`node
+// scripts/build-data.mjs`, exactly how the workflow/README's "Running
+// locally" section both invoke it) - not when it's merely imported, e.g. by
+// tests/build-data.test.mjs importing the exported pure helpers above. A
+// bare top-level `main()` call used to fire a live ESPN/Gemini fetch as a
+// side effect of import alone, which is exactly wrong for a unit test.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch(error => {
+    console.error(error);
+    process.exit(1);
+  });
+}

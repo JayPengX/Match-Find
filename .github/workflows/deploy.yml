@@ -39,6 +39,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Run tests
+        # No runtime dependencies to install (see package.json) - this runs
+        # the scoring/viewing-plan/evaluator unit tests (tests/, node:test)
+        # against every push/schedule/dispatch, same as the build step right
+        # after it - a bad change to public/lib/recommendation.mjs or
+        # scripts/build-data.mjs's pure helpers fails here before it ever
+        # reaches a live deploy.
+        run: npm test
       - name: Fetch fixtures and build match recommendations
         env:
           # Base URL of Orbit's shared Cloudflare Worker (no path suffix) -
