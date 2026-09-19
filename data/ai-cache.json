@@ -539,11 +539,11 @@
     "startTimeUtc": "2026-09-19T00:10:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "科羅拉多洛磯主場迎戰西雅圖水手。",
+    "reason": "兩隊戰績皆無緣季後賽，預期過程平淡。",
     "venueZh": "庫爾斯球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 4
+    "promptVersion": 5
   },
   "mlb-401816991": {
     "startTimeUtc": "2026-09-19T00:15:00.000Z",
@@ -559,41 +559,44 @@
     "startTimeUtc": "2026-09-19T01:38:00.000Z",
     "competitiveness": 5,
     "watchability": 5,
-    "reason": "洛杉磯天使主場迎戰明尼蘇達雙城。",
+    "reason": "雙方戰績落後，近期競爭張力有限。",
     "venueZh": "天使球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 4
+    "promptVersion": 5
   },
   "mlb-401816993": {
     "startTimeUtc": "2026-09-19T01:40:00.000Z",
     "competitiveness": 7,
     "watchability": 7,
-    "reason": "聖地牙哥教士主場迎戰邁阿密馬林魚。",
-    "venueZh": "沛可公園",
+    "reason": "教士正處於外卡競爭關鍵期，對決馬林魚雖具看點，但整體關注度與重要性不及洋基之戰。",
+    "venueZh": "沛可公園球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 4
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401816995": {
     "startTimeUtc": "2026-09-19T01:40:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 8,
     "watchability": 8,
-    "reason": "亞利桑那響尾蛇主場迎戰紐約洋基。",
+    "reason": "洋基與響尾蛇皆全力爭取季後賽席位，戰況激烈且球星雲集，精彩程度超越同時段賽事。",
     "venueZh": "大通球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 4
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401816996": {
     "startTimeUtc": "2026-09-19T02:15:00.000Z",
-    "competitiveness": 7,
-    "watchability": 9,
-    "reason": "世仇之戰！洛杉磯道奇主場迎戰舊金山巨人。",
+    "competitiveness": 6,
+    "watchability": 8,
+    "reason": "世仇對決話題性十足，但道奇戰力明顯優於巨人，競爭張力略遜於季後賽邊緣之戰。",
     "venueZh": "道奇體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 4
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817001": {
     "startTimeUtc": "2026-09-19T20:05:00.000Z",
