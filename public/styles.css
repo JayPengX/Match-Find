@@ -409,7 +409,8 @@ main#app {
 .match-card.is-recommended {
   border-color: rgba(91, 140, 255, 0.4);
 }
-.match-card.is-muted {
+.match-card.is-muted,
+.match-card.is-finished {
   opacity: 0.55;
   box-shadow: none;
 }
