@@ -458,21 +458,43 @@ async function syncFetch(method, { passcode = state.syncPasscode, body } = {}) {
   return data;
 }
 
-// Pulls the synced payload and applies it - called once on load (see
-// init()) when a passcode is already stored, deliberately BEFORE the
-// viewer does anything else, so a setting changed on another device is
-// what actually applies here, not whatever this device happened to have
-// cached from before ("if the app is updated it should always fetch
-// first" applies just as much to a viewer's own synced settings as it
-// does to matches.json/buildId). Silent on failure (offline, proxy down)
-// - this device's own local settings are still a perfectly good fallback.
-async function syncPull() {
+// The raw payload string this device last actually applied (from a pull
+// OR its own push - see persistSettingsAndSync/syncPush) - lets the
+// periodic poll below (see SYNC_POLL_INTERVAL_MS) tell "something
+// actually changed on another device" apart from "the usual no-op poll",
+// so it only re-renders (and, if Settings happens to be open, redraws
+// that panel) when there's a real change to show, not every single tick.
+let lastAppliedSyncPayloadRaw = '';
+
+// Pulls the synced payload and applies it if it's actually different from
+// what this device already has (see lastAppliedSyncPayloadRaw). Called
+// once unconditionally on load (see init()) when a passcode is already
+// stored, deliberately BEFORE the viewer does anything else, so a setting
+// changed on another device is what actually applies here, not whatever
+// this device happened to have cached from before ("if the app is updated
+// it should always fetch first" applies just as much to a viewer's own
+// synced settings as it does to matches.json/buildId) - and again on
+// SYNC_POLL_INTERVAL_MS's own interval and on tab focus after that (see
+// init()), which is the actual fix for "changing settings on one device
+// doesn't show up on another" for a tab that was already open: a single
+// pull on load only ever caught a change made BEFORE this tab loaded,
+// never one made while it was sitting open. Silent on failure (offline,
+// proxy down) - this device's own local settings are still a perfectly
+// good fallback, and the next poll tries again on its own.
+async function syncPull({ renderIfOpen = false } = {}) {
   try {
     const data = await syncFetch('GET');
-    if (data.exists && typeof data.payload === 'string' && data.payload) {
-      applySyncPayloadObject(JSON.parse(data.payload));
-      applyEnabledSportsAndRender();
-    }
+    if (!data.exists || typeof data.payload !== 'string' || !data.payload) return;
+    if (data.payload === lastAppliedSyncPayloadRaw) return; // nothing new
+    lastAppliedSyncPayloadRaw = data.payload;
+    applySyncPayloadObject(JSON.parse(data.payload));
+    applyEnabledSportsAndRender();
+    // The initial on-load pull runs before Settings could possibly be
+    // open, so this only actually matters for the periodic poll/focus
+    // pull - redraws the open panel's chip states/priority list so a
+    // change made on another device shows up there too, not just in the
+    // match list behind it.
+    if (renderIfOpen && !settingsPanel.hidden) renderSettingsPanel();
   } catch (error) {
     console.warn('sync pull failed', error);
   }
@@ -485,7 +507,13 @@ async function syncPull() {
 // itself.
 async function syncPush() {
   try {
-    await syncFetch('PATCH', { body: { payload: JSON.stringify(buildSyncPayloadObject()) } });
+    const payload = JSON.stringify(buildSyncPayloadObject());
+    await syncFetch('PATCH', { body: { payload } });
+    // This device's own change is now the server's own latest - recorded
+    // so the next periodic pull (see syncPull) recognizes it as already
+    // applied instead of redundantly re-applying/re-rendering it the
+    // moment it polls back.
+    lastAppliedSyncPayloadRaw = payload;
   } catch (error) {
     console.warn('sync push failed', error);
   }
@@ -495,9 +523,11 @@ async function syncCreate() {
   syncErrorText.hidden = true;
   syncCreateBtn.disabled = true;
   try {
-    const data = await syncFetch('POST', { body: { payload: JSON.stringify(buildSyncPayloadObject()) } });
+    const payload = JSON.stringify(buildSyncPayloadObject());
+    const data = await syncFetch('POST', { body: { payload } });
     state.syncPasscode = data.passcode;
     saveSyncPasscode(state.syncPasscode);
+    lastAppliedSyncPayloadRaw = payload; // see syncPush's own comment
     renderSyncPanel();
   } catch (error) {
     syncErrorText.hidden = false;
@@ -520,6 +550,7 @@ async function syncConnect(passcode) {
     state.syncPasscode = passcode;
     saveSyncPasscode(passcode);
     if (typeof data.payload === 'string' && data.payload) {
+      lastAppliedSyncPayloadRaw = data.payload; // see syncPush's own comment
       applySyncPayloadObject(JSON.parse(data.payload));
       applyEnabledSportsAndRender();
     }
@@ -543,6 +574,10 @@ async function syncConnect(passcode) {
 function syncDisconnect() {
   state.syncPasscode = '';
   saveSyncPasscode('');
+  // A future reconnect - possibly to a DIFFERENT passcode - should never
+  // skip applying its payload just because it happens to match whatever
+  // string this device last saw under the old one.
+  lastAppliedSyncPayloadRaw = '';
   renderSyncPanel();
 }
 
@@ -1584,6 +1619,19 @@ function pickInitialDay(days, matches) {
 // the network for anything new).
 const DATA_POLL_INTERVAL_MS = 5 * 60_000;
 
+// Same "an already-open tab has to actually ask again" reasoning as
+// DATA_POLL_INTERVAL_MS above, for cross-device settings sync - a plain
+// GET against Firestore through the shared proxy (MATCH_FIND_SYNC_READ_RATE_LIMIT
+// there is 6000/hour per IP, so a poll every 30s from one tab, or even a
+// handful of tabs behind the same IP, is nowhere close to that), not the
+// heavier matches.json fetch, so this can run noticeably more often
+// without it costing anything real. This is the actual fix for "changing
+// settings on one device doesn't show up on another" for a tab that was
+// already open when the change happened elsewhere - previously sync only
+// ever pulled once, on that tab's own initial load (see syncPull's own
+// comment).
+const SYNC_POLL_INTERVAL_MS = 30_000;
+
 // "Gemini last used" (see build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS) -
 // purely informational, so a viewer curious why a brand new fixture still
 // shows an "(估計，非 AI 推薦)" heuristic reason can see this isn't stuck,
@@ -1738,12 +1786,26 @@ async function init() {
 
     // Pull first if already paired (so another device's more recent
     // settings win over whatever this one has cached), otherwise offer to
-    // pair - never both, and only once, on the initial load.
+    // pair - never both, on the initial load.
     if (state.syncPasscode) syncPull();
     else maybeShowSyncPrompt();
 
     setInterval(() => renderSections(), 60_000);
     setInterval(pollForUpdates, DATA_POLL_INTERVAL_MS);
+    // Periodic + on-focus sync pulls (see SYNC_POLL_INTERVAL_MS's own
+    // comment) - both no-ops while unpaired, and both safe to fire
+    // whenever: syncPull only ever actually applies/re-renders when the
+    // fetched payload is genuinely different from what this device
+    // already has. The focus listener is what makes switching back to an
+    // already-open tab feel immediate rather than waiting out the rest of
+    // the poll interval - the single most common real case ("I changed it
+    // on my phone, now I'm looking at my laptop's tab again").
+    setInterval(() => {
+      if (state.syncPasscode) syncPull({ renderIfOpen: true });
+    }, SYNC_POLL_INTERVAL_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.syncPasscode) syncPull({ renderIfOpen: true });
+    });
   } catch (error) {
     console.error(error);
     errorState.hidden = false;
