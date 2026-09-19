@@ -2075,15 +2075,16 @@
   "mlb-401817106": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
+    "watchability": 5,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "大都會對決國民。",
+    "reason": "大都會與國民戰績相近，但兩隊皆無季後賽機會，關注度相對較低。",
     "venueZh": "國民球場",
     "whereToWatchTw": "愛爾達體育台",
     "evidence": [],
     "source": "ai",
-    "promptVersion": 9
+    "promptVersion": 9,
+    "refined": true
   },
   "mlb-401817108": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
@@ -2101,16 +2102,17 @@
   },
   "mlb-401817115": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
+    "competitiveness": 5,
+    "watchability": 5,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "太空人對決運動家。",
+    "reason": "太空人戰績持平，運動家戰績低迷，實力有段差距。",
     "venueZh": "薩特健康球場",
     "whereToWatchTw": "愛爾達體育台",
     "evidence": [],
     "source": "ai",
-    "promptVersion": 9
+    "promptVersion": 9,
+    "refined": true
   },
   "mlb-401817116": {
     "startTimeUtc": "2026-09-27T19:05:00.000Z",
@@ -2128,16 +2130,17 @@
   },
   "mlb-401817105": {
     "startTimeUtc": "2026-09-27T19:07:00.000Z",
-    "competitiveness": 7,
+    "competitiveness": 6,
     "watchability": 5,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "美聯兩隊戰績接近，實力相當的一場比賽。",
+    "reason": "紅人與藍鳥戰績接近，雙方近期表現平平。",
     "venueZh": "羅傑斯中心",
     "whereToWatchTw": "愛爾達體育台",
     "evidence": [],
     "source": "ai",
-    "promptVersion": 9
+    "promptVersion": 9,
+    "refined": true
   },
   "mlb-401817102": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
@@ -2194,29 +2197,31 @@
   },
   "mlb-401817111": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
-    "competitiveness": 5,
-    "watchability": 7,
+    "competitiveness": 4,
+    "watchability": 6,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "釀酒人戰績傲視群雄，迎戰紅雀。",
+    "reason": "釀酒人戰績顯著領先紅雀，實力懸殊較大。",
     "venueZh": "美國家族球場",
     "whereToWatchTw": "愛爾達體育台",
     "evidence": [],
     "source": "ai",
-    "promptVersion": 9
+    "promptVersion": 9,
+    "refined": true
   },
   "mlb-401817112": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
     "competitiveness": 7,
-    "watchability": 5,
+    "watchability": 6,
     "broadcastQuality": 6,
     "enduranceScore": 6,
-    "reason": "遊騎兵與雙城勝場數接近，競爭激烈。",
+    "reason": "遊騎兵與雙城勝率接近，比賽膠著度較高。",
     "venueZh": "標靶球場",
     "whereToWatchTw": "愛爾達體育台",
     "evidence": [],
     "source": "ai",
-    "promptVersion": 9
+    "promptVersion": 9,
+    "refined": true
   },
   "mlb-401817113": {
     "startTimeUtc": "2026-09-27T19:10:00.000Z",
