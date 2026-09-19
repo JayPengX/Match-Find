@@ -788,36 +788,63 @@ function dayLabelFor(date, { short = false } = {}) {
 //
 // - QUIET_HOUR_START/END: a match whose LOCAL start falls in this window is
 //   never eligible to be "recommended", however good its score - nobody
-//   asked to be told a 3am fixture is unmissable. It still shows up in the
+//   asked to be told a 4am fixture is unmissable. It still shows up in the
 //   full "all matches" list further down, just never pinned as a pick.
-// - OVERLAP_TOLERANCE_BASE_MINUTES absorbs the fact that durationMinutes is
-//   only ever a per-sport AVERAGE broadcast length, not this match's real
-//   one - without it, a match that overruns its sport's average by even a
-//   few minutes would look like a "conflict" with whatever's lined up next.
-// - OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES is deliberately much larger, and
-//   only kicks in when either match involved scores highly: a must-watch
-//   fixture is allowed to eat into the next slot a bit rather than being
-//   dropped, or bumping its neighbor, over a genuinely minor overlap.
+// - OVERLAP_TOLERANCE_MINUTES absorbs the fact that durationMinutes is only
+//   ever a per-sport AVERAGE broadcast length, not this match's real one -
+//   without it, a match that overruns its sport's average by even a few
+//   minutes would look like a "conflict" with whatever's lined up next.
 //
-// This is a good, cheap heuristic for a day's viewing plan, not a
-// certified globally-optimal schedule - with arbitrary (non-monotonic)
-// compatibility between matches, "pick the best plan" in general is the
-// maximum-weight independent set problem, which is NP-hard. At the scale
-// this ever runs at (a couple hundred fixtures across the fetched window),
-// checking every pair directly is both fast enough and good enough.
+// The plan is built ONE LOCAL CALENDAR DAY AT A TIME (see the `byDay`
+// bucketing below and pickDayRecommendations) rather than as one pass over
+// the whole 14-day window: "what's worth watching today" is inherently a
+// per-day question, and computing it that way means a bug in one day's
+// data or scoring can never reach into a neighboring day, and every pass
+// below (the scheduling DP, the diversity floor, the stack-clustering) only
+// ever has to reason about one day's fixtures at a time.
+//
+// An earlier version of the scheduling DP let a pair's OWN scores widen how
+// much they were allowed to overlap (a much larger tolerance kicked in
+// whenever either match scored highly, so a must-watch fixture could eat
+// into the next slot a bit). That's a reasonable idea for two fixtures
+// being compared directly, but it quietly broke the DP itself: the
+// standard weighted-interval-scheduling algorithm below only works because
+// "is match A compatible with match B" is a PURE function of their times,
+// which makes compatibility monotonic under end-time order (if A is
+// compatible with B, it's compatible with everything that ends before B
+// too) - the whole reason `best[]` can be trusted as a rolling maximum
+// without re-checking every match a chain actually passed through. Once
+// compatibility could also depend on which two specific matches were being
+// compared, that guarantee no longer held: `best[j]` could be a chain built
+// through some earlier match k whose OWN pairwise tolerance against the
+// current match was narrower than j's, yet the code only ever checked i
+// against j, not against k - silently letting a real conflict through, or
+// picking a worse pair over a genuinely better one with nothing in the UI
+// to explain why. OVERLAP_TOLERANCE_MINUTES below is deliberately a single,
+// fixed number - a little more forgiving than the old "duration is only an
+// average" allowance, with no per-pair exception - which keeps every
+// match's compatibility with every other purely time-based, restores that
+// monotonic guarantee, and makes the DP's result an actual guaranteed
+// optimum again, not just "usually about right."
+//
+// This is still a good, cheap heuristic for a day's viewing plan, not a
+// certified globally-optimal schedule in every respect (the diversity floor
+// and stack-clustering passes after it are heuristics layered on top), but
+// the scheduling DP itself is now a textbook maximum-weight independent set
+// over an interval graph, solved exactly - at the scale this ever runs at
+// (at most a few dozen fixtures on any one calendar day) there's no need
+// for anything looser.
 const QUIET_HOUR_START = 0;
-const QUIET_HOUR_END = 7;
-const OVERLAP_TOLERANCE_BASE_MINUTES = 10;
-const OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES = 40;
-const HIGH_SCORE_THRESHOLD = 8;
+const QUIET_HOUR_END = 5;
+const OVERLAP_TOLERANCE_MINUTES = 15;
 // The bar a sport's best still-unpicked fixture has to clear to get a
 // diversity-floor slot for the day (see the pass right after the DP in
-// resolveViewingPlan) - deliberately a real "this is genuinely worth
+// pickDayRecommendations) - deliberately a real "this is genuinely worth
 // watching" score, not just "the best of a bad day" for that sport.
 const DIVERSITY_MIN_SCORE = 6.5;
 // How good an overlapping-but-not-picked fixture has to be to join a
 // recommended match's swipeable stack (see the pass after the DP in
-// resolveViewingPlan) - lower than DIVERSITY_MIN_SCORE on purpose, since
+// pickDayRecommendations) - lower than DIVERSITY_MIN_SCORE on purpose, since
 // browsing a stack is opt-in (a swipe), not something forced in front of
 // everyone by default. Still a real floor, not "anything that overlaps" -
 // raised from an earlier, looser value after live use showed a low bar let
@@ -850,81 +877,70 @@ function overlapMinutes(a, b) {
   return overlapEnd > overlapStart ? (overlapEnd - overlapStart) / 60_000 : 0;
 }
 
+// Pure function of the two matches' OWN times, deliberately never their
+// scores (see the top-of-section comment on why that used to be true, and
+// what it broke) - `later`/`earlier` name which side of the gap each
+// argument plays, not a claim about which one scores better.
 function compatible(later, earlier) {
-  const toleranceMinutes =
-    Math.max(later.effectiveScore, earlier.effectiveScore) >= HIGH_SCORE_THRESHOLD
-      ? OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES
-      : OVERLAP_TOLERANCE_BASE_MINUTES;
   const gapMinutes = (later.interval.start - earlier.interval.end) / 60_000;
-  return gapMinutes >= -toleranceMinutes;
+  return gapMinutes >= -OVERLAP_TOLERANCE_MINUTES;
 }
 
-// Runs once, across every fetched match regardless of day, right after
-// matches.json loads (and again, cheaply, whenever the viewer changes a
-// sport priority in Settings - see recomputeAndRender) - not per day tab,
-// so a plan spanning a day boundary (e.g. an 11pm match still running past
-// midnight) is considered as a whole rather than getting artificially cut
-// at each day's edge.
+// The scheduling DP, diversity floor, and stack-clustering for ONE local
+// calendar day's worth of eligible (non-quiet-hour) matches - called once
+// per day from resolveViewingPlan below. Mutates each match in `dayMatches`
+// in place (.recommended/.isDiversityPick/.stackAlternativeIds), same as
+// the rest of this file's convention.
 //
-// `priorityOrder` (see "Sport priority settings" above) nudges
-// effectiveScore away from the AI's own score - the displayed reason/.score
-// always stay the true, un-nudged values; only the DP's notion of "which
-// match wins this slot" sees the adjusted number, so a viewer's preference
-// can tip a close call without pretending a mediocre match is actually
-// great. A sport ranked 1st gets the biggest positive nudge, the sport
-// ranked in the exact middle gets none, and the last-ranked sport gets the
-// biggest negative one - symmetric around the middle rank so "no
-// preference at all" (the default order) really does mean zero nudge for
-// everyone, not just for whichever sport happens to be first in the array.
-function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set()) {
-  const centerRank = (priorityOrder.length - 1) / 2;
-  const withIntervals = matches.map(match => {
-    const rank = priorityOrder.indexOf(match.sport);
-    const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
-    const service = resolveService(match.whereToWatchTw);
-    const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
-    return { ...match, interval: matchInterval(match), effectiveScore: match.score + priorityNudge + serviceNudge };
-  });
-  const eligible = withIntervals.filter(m => !isQuietHours(m)).sort((a, b) => a.interval.end - b.interval.end);
+// `priorityOrder`'s nudge and quiet-hour exclusion already happened before
+// this runs (see resolveViewingPlan) - everything here only ever sees one
+// day's already-eligible matches, so no pass below needs its own day-key or
+// quiet-hour re-check the way an earlier, whole-window version of this code
+// did.
+function pickDayRecommendations(dayMatches) {
+  // Classic weighted-interval-scheduling: sorted by end time, `best[i]` is
+  // the best total score achievable using only matches 0..i, and `dp[i]` is
+  // the best total score of any compatible chain that ENDS by picking match
+  // i. Because `compatible()` above is a pure function of times, it's
+  // monotonic under this sort order (see top-of-section comment) - the set
+  // of earlier matches compatible with any given match is always a PREFIX
+  // of this order, which is exactly what makes scanning for the single
+  // largest compatible predecessor (rather than checking every match a
+  // chain ever passed through) both correct and enough.
+  const sorted = dayMatches.slice().sort((a, b) => a.interval.end - b.interval.end);
+  const n = sorted.length;
+  const dp = new Array(n).fill(0);
+  const predecessor = new Array(n).fill(-1);
+  const best = new Array(n).fill(0);
 
-  const dp = new Array(eligible.length).fill(0);
-  const predecessor = new Array(eligible.length).fill(-1);
-  const best = new Array(eligible.length).fill(0);
-
-  for (let i = 0; i < eligible.length; i++) {
-    let bestPredScore = 0;
-    let bestPredIndex = -1;
-    for (let j = 0; j < i; j++) {
-      if (compatible(eligible[i], eligible[j]) && best[j] > bestPredScore) {
-        bestPredScore = best[j];
-        bestPredIndex = j;
+  for (let i = 0; i < n; i++) {
+    let p = -1;
+    for (let j = i - 1; j >= 0; j--) {
+      if (compatible(sorted[i], sorted[j])) {
+        p = j;
+        break; // the first (largest-index) hit scanning backward is the answer - see comment above
       }
     }
-    dp[i] = eligible[i].effectiveScore + bestPredScore;
-    predecessor[i] = bestPredIndex;
+    const bestPred = p >= 0 ? best[p] : 0;
+    dp[i] = sorted[i].effectiveScore + bestPred;
+    predecessor[i] = p;
     best[i] = Math.max(i > 0 ? best[i - 1] : 0, dp[i]);
   }
 
   const selected = new Set();
-  let cursor = eligible.length - 1;
-  let target = eligible.length ? best[eligible.length - 1] : 0;
+  let cursor = n - 1;
+  let target = n ? best[n - 1] : 0;
   while (cursor >= 0) {
     if (cursor > 0 && best[cursor - 1] === target) {
       cursor -= 1;
       continue;
     }
-    selected.add(eligible[cursor].id);
-    target = dp[cursor] - eligible[cursor].effectiveScore;
+    selected.add(sorted[cursor].id);
+    target = dp[cursor] - sorted[cursor].effectiveScore;
     cursor = predecessor[cursor];
   }
-
-  withIntervals.forEach(match => {
+  dayMatches.forEach(match => {
     match.recommended = selected.has(match.id);
-  });
-  withIntervals.forEach(match => {
-    match.overlappingIds = withIntervals
-      .filter(other => other.id !== match.id && overlapMinutes(match, other) > 0)
-      .map(other => other.id);
   });
 
   // Diversity floor: the DP above picks the single highest-scoring option
@@ -937,99 +953,65 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // a perfectly good MLS game never gets picked on a day it never
   // genuinely lost a head-to-head comparison - it just never got a turn.
   // This doesn't touch the DP's own math or override a real priority
-  // ranking - it only looks at what's LEFT OUT after the DP has run, and,
-  // once per calendar day, gives a sport with zero picks that day its
-  // single best-scoring eligible fixture anyway, but only if that fixture
-  // clears DIVERSITY_MIN_SCORE (a real "this is a good match" bar, not
-  // "the least bad option this sport had"). A sport that already won a
-  // slot today - including one boosted here on an earlier iteration of
-  // this same loop - is left alone.
-  const diversityByDay = new Map();
-  eligible.forEach(match => {
-    const dayKey = localDateKey(new Date(match.interval.start));
-    if (!diversityByDay.has(dayKey)) diversityByDay.set(dayKey, []);
-    diversityByDay.get(dayKey).push(match);
-  });
-  for (const dayMatches of diversityByDay.values()) {
-    const sportsToday = new Set(dayMatches.map(m => m.sport));
-    for (const sport of sportsToday) {
-      const sportMatches = dayMatches.filter(m => m.sport === sport);
-      if (sportMatches.some(m => m.recommended)) continue;
-      const best = sportMatches
-        .filter(m => m.score >= DIVERSITY_MIN_SCORE)
-        .sort((a, b) => b.score - a.score)[0];
-      if (best) {
-        best.recommended = true;
-        best.isDiversityPick = true;
-      }
+  // ranking - it only looks at what's LEFT OUT after the DP has run, and
+  // gives a sport with zero picks today its single best-scoring eligible
+  // fixture anyway, but only if that fixture clears DIVERSITY_MIN_SCORE (a
+  // real "this is a good match" bar, not "the least bad option this sport
+  // had").
+  const sportsToday = new Set(dayMatches.map(m => m.sport));
+  for (const sport of sportsToday) {
+    const sportMatches = dayMatches.filter(m => m.sport === sport);
+    if (sportMatches.some(m => m.recommended)) continue;
+    const best = sportMatches.filter(m => m.score >= DIVERSITY_MIN_SCORE).sort((a, b) => b.score - a.score)[0];
+    if (best) {
+      best.recommended = true;
+      best.isDiversityPick = true;
     }
   }
 
-  let recommendedSorted = withIntervals.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
-
-  // Two DP picks can still genuinely overlap each other in time - either
-  // the DP's own tolerance (compatible() allows up to
-  // OVERLAP_TOLERANCE_HIGH_SCORE_MINUTES of overlap between two high-score
-  // picks) or the diversity floor above (added without ever checking
-  // against what's already recommended - and specifically because it's
-  // nudged by priorityOrder, it can hand a merely-decent fixture in the
-  // user's favorite sport a "recommended" slot that happens to overlap a
-  // genuinely great one). Left alone, both used to render as separate
-  // top-level recommended cards - exactly the "still shown in separate
-  // stacks" bug a swipeable stack was supposed to fix.
+  // Two picks can still genuinely overlap each other in time - the DP's own
+  // small fixed tolerance, or the diversity floor above (added without ever
+  // checking against what's already recommended - and specifically because
+  // it's nudged by priorityOrder, it can hand a merely-decent fixture in
+  // the user's favorite sport a "recommended" slot that happens to overlap
+  // a genuinely great one). Left alone, both would render as separate
+  // top-level recommended cards.
   //
-  // Grouping has to be ANCHORED, not transitive/chained: a first version
-  // of this grouped any recommended matches connected by a CHAIN of
-  // pairwise overlaps into one cluster (A overlaps B, B overlaps C => one
-  // cluster even if A and C don't overlap at all) - which is exactly
-  // "connected components", and on a real night's data it silently
-  // collapsed almost the WHOLE evening into one cluster: MLB alone can
-  // field ~15 staggered, ~3+ hour games, so game 1 overlaps game 2, game 2
-  // overlaps game 3, and so on for hours, with zero requirement that game
-  // 1 and game 10 share a single minute of airtime. Whatever else that
-  // chain happened to touch (an EPL or MLS pick, usually ranked higher by
-  // priorityOrder and so most likely to end up "primary") absorbed 3-4
-  // otherwise-unrelated MLB slots into its own stack and wiped out their
-  // independent recommended status - "only Premier League shows today,
-  // MLB/MLS disappeared" was this bug, not a hypothetical.
+  // Grouping has to be ANCHORED, not transitive/chained: grouping any
+  // recommended matches connected by a CHAIN of pairwise overlaps into one
+  // cluster (A overlaps B, B overlaps C => one cluster even if A and C
+  // don't overlap at all) is exactly "connected components", and on a real
+  // night's data that can silently collapse almost the WHOLE evening into
+  // one cluster: MLB alone can field ~15 staggered, ~3+ hour games, so game
+  // 1 overlaps game 2, game 2 overlaps game 3, and so on for hours, with
+  // zero requirement that game 1 and game 10 share a single minute of
+  // airtime. Whatever else that chain happened to touch (an EPL or MLS
+  // pick, usually ranked higher by priorityOrder and so most likely to end
+  // up "primary") would absorb several otherwise-unrelated slots into its
+  // own stack and wipe out their independent recommended status - a real
+  // bug seen in production ("only Premier League shows today, MLB/MLS
+  // disappeared"), not a hypothetical.
   //
   // The fix: process recommended matches highest-effectiveScore-first: an
   // unclaimed match becomes an anchor, and ONLY matches that overlap that
   // SPECIFIC anchor directly (never each other transitively) join its
   // cluster and get claimed. A match overlapping two different anchors
   // joins whichever is processed first (the higher-scored one) - it never
-  // bridges them into one.
-  //
-  // Same-LOCAL-CALENDAR-DAY only, even though overlapMinutes itself is
-  // day-agnostic (matchesForDay groups everything downstream of this by
-  // localDateKey, same as the rest of the file - see that function's own
-  // comment). A match just after local midnight can still genuinely
-  // overlap one just before it (matchesForDay's own recognized case in
-  // resolveViewingPlan's own top comment: "an 11pm match still running
-  // past midnight"), but folding it into the earlier match's stack would
-  // display it - and quietly retire its OWN independent recommended slot
-  // - under the WRONG day tab: exactly the "matches missing from today,
-  // turning up stacked into tomorrow with times that make no sense there"
-  // bug this guard exists to prevent. The DP above stays deliberately
-  // day-agnostic (a genuine cross-midnight single fixture is still one
-  // fixture, correctly placed on whichever day its own startTimeUtc falls
-  // on); only THIS pass, which can move a DIFFERENT match's visible
-  // recommended status somewhere else entirely, needs the boundary.
+  // bridges them into one. Everything here already belongs to the same
+  // local day (that's the whole point of pickDayRecommendations being
+  // called once per day), so unlike an earlier whole-window version of this
+  // pass, there's no separate day-key check needed to avoid folding a match
+  // into the wrong day's stack.
   const claimedStackIds = new Set();
   const claimedAsClusterMember = new Set();
-  recommendedSorted
+  let recommended = dayMatches.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
+  recommended
     .slice()
     .sort((a, b) => b.effectiveScore - a.effectiveScore)
     .forEach(anchor => {
       if (claimedAsClusterMember.has(anchor.id)) return;
       claimedAsClusterMember.add(anchor.id);
-      const anchorDayKey = localDateKey(new Date(anchor.interval.start));
-      const rest = recommendedSorted.filter(
-        m =>
-          !claimedAsClusterMember.has(m.id) &&
-          overlapMinutes(anchor, m) > 0 &&
-          localDateKey(new Date(m.interval.start)) === anchorDayKey
-      );
+      const rest = recommended.filter(m => !claimedAsClusterMember.has(m.id) && overlapMinutes(anchor, m) > 0);
       if (!rest.length) return;
       rest.forEach(match => claimedAsClusterMember.add(match.id));
       // A demoted match only joins the anchor's stack if it's still
@@ -1051,52 +1033,47 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
         anchor.stackAlternativeIds = worthy
           .map(m => m.id)
           .sort((a, b) => {
-            const scoreOf = id => withIntervals.find(m => m.id === id).score;
+            const scoreOf = id => dayMatches.find(m => m.id === id).score;
             return scoreOf(b) - scoreOf(a);
           });
       }
     });
-  recommendedSorted = recommendedSorted.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
+  recommended = recommended.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
 
   // Attaches a small set of further overlapping-but-not-picked fixtures to
   // each recommended match's stack (on top of any merged in above), for
-  // the swipeable card stack (see renderRecommendedSection) - unlike the
-  // always-expanded "show both at once" layout this replaced, browsing
-  // alternatives here is opt-in (a swipe), so this can afford to be more
-  // generous than a forced side-by-side display could. Still "equally
-  // good", not "anything that overlaps": a fixture has to clear both an
-  // absolute quality floor (STACK_MIN_SCORE) AND come within
-  // STACK_MAX_SCORE_GAP of the recommended match's own score - a 9-rated
-  // pick's stack shouldn't fill up with 6-rated leftovers just because they
-  // happened to overlap it. Each alternative is claimed by at most one
-  // recommended match (whichever it overlaps that's processed first, in
-  // chronological order) so it never appears in two different stacks at
-  // once, and the merged-in cluster members above are claimed already so
-  // they can't also get pulled into a neighboring stack. Also excludes
-  // quiet-hour fixtures (isQuietHours) - rec.overlappingIds was built from
-  // EVERY match regardless of quiet hours (only the DP's own `eligible`
-  // list filters those out), so without this check a 4am fixture could
-  // still ride a legitimately-recommended 7am match's own high score
-  // straight into its swipeable stack - exactly the one thing quiet hours
-  // exist to keep off this page at all.
-  recommendedSorted.forEach(rec => {
+  // the swipeable card stack (see renderRecommendedSection) - unlike an
+  // always-expanded "show both at once" layout, browsing alternatives here
+  // is opt-in (a swipe), so this can afford to be more generous than a
+  // forced side-by-side display could. Still "equally good", not "anything
+  // that overlaps": a fixture has to clear both an absolute quality floor
+  // (STACK_MIN_SCORE) AND come within STACK_MAX_SCORE_GAP of the
+  // recommended match's own score - a 9-rated pick's stack shouldn't fill
+  // up with 6-rated leftovers just because they happened to overlap it.
+  // Each alternative is claimed by at most one recommended match (whichever
+  // it overlaps that's processed first, in chronological order) so it
+  // never appears in two different stacks at once, and the merged-in
+  // cluster members above are claimed already so they can't also get
+  // pulled into a neighboring stack. `rec.overlappingIds` was built from
+  // EVERY fetched match regardless of day or quiet hours (see
+  // resolveViewingPlan) - looking candidates up via `dayMatches.find` here
+  // is what actually excludes anything outside today's eligible set,
+  // without needing its own day-key or quiet-hour re-check.
+  recommended.forEach(rec => {
     const alreadyClaimed = rec.stackAlternativeIds || [];
-    const recDayKey = localDateKey(new Date(rec.interval.start));
     const extraIds = rec.overlappingIds
       .filter(id => {
         if (claimedStackIds.has(id) || alreadyClaimed.includes(id)) return false;
-        const other = withIntervals.find(m => m.id === id);
+        const other = dayMatches.find(m => m.id === id);
         return (
           other &&
           !other.recommended &&
-          !isQuietHours(other) &&
           other.score >= STACK_MIN_SCORE &&
-          other.score >= rec.score - STACK_MAX_SCORE_GAP &&
-          localDateKey(new Date(other.interval.start)) === recDayKey
+          other.score >= rec.score - STACK_MAX_SCORE_GAP
         );
       })
       .sort((a, b) => {
-        const scoreOf = id => withIntervals.find(m => m.id === id).score;
+        const scoreOf = id => dayMatches.find(m => m.id === id).score;
         return scoreOf(b) - scoreOf(a);
       })
       .slice(0, Math.max(0, STACK_MAX_ALTERNATIVES - alreadyClaimed.length));
@@ -1104,6 +1081,59 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
     const combined = [...alreadyClaimed, ...extraIds];
     if (combined.length) rec.stackAlternativeIds = combined;
   });
+}
+
+// `priorityOrder` (see "Sport priority settings" above) nudges
+// effectiveScore away from the AI's own score - the displayed reason/.score
+// always stay the true, un-nudged values; only the scheduling DP's notion
+// of "which match wins this slot" sees the adjusted number, so a viewer's
+// preference can tip a close call without pretending a mediocre match is
+// actually great. A sport ranked 1st gets the biggest positive nudge, the
+// sport ranked in the exact middle gets none, and the last-ranked sport
+// gets the biggest negative one - symmetric around the middle rank so "no
+// preference at all" (the default order) really does mean zero nudge for
+// everyone, not just for whichever sport happens to be first in the array.
+function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set()) {
+  const centerRank = (priorityOrder.length - 1) / 2;
+  const withIntervals = matches.map(match => {
+    const rank = priorityOrder.indexOf(match.sport);
+    const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
+    const service = resolveService(match.whereToWatchTw);
+    const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
+    return {
+      ...match,
+      interval: matchInterval(match),
+      effectiveScore: match.score + priorityNudge + serviceNudge,
+      recommended: false
+    };
+  });
+
+  // Computed across every fetched match regardless of day or quiet hours -
+  // used purely for display (the "time overlaps what's recommended" note on
+  // a non-recommended card) and as the candidate pool pickDayRecommendations
+  // draws its stack alternatives from.
+  withIntervals.forEach(match => {
+    match.overlappingIds = withIntervals
+      .filter(other => other.id !== match.id && overlapMinutes(match, other) > 0)
+      .map(other => other.id);
+  });
+
+  // "What's worth watching" is decided one local calendar day at a time
+  // (see top-of-section comment) - bucket every eligible (non-quiet-hour)
+  // match by the local day it starts on, then run the whole DP/diversity/
+  // stacking pipeline independently per day. A match excluded here
+  // (quiet hours) simply keeps its default `recommended: false` from above.
+  const byDay = new Map();
+  withIntervals
+    .filter(m => !isQuietHours(m))
+    .forEach(match => {
+      const dayKey = localDateKey(new Date(match.interval.start));
+      if (!byDay.has(dayKey)) byDay.set(dayKey, []);
+      byDay.get(dayKey).push(match);
+    });
+  for (const dayMatches of byDay.values()) {
+    pickDayRecommendations(dayMatches);
+  }
 
   return withIntervals.map(({ interval, effectiveScore, ...match }) => match);
 }
