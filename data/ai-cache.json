@@ -372,13 +372,14 @@
   },
   "mls-761837": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "明尼蘇達聯作客西雅圖海灣者。",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "雙方戰績接近且實力相當，競爭激烈但星光度略遜於美職頂級對決。",
     "venueZh": "世紀鏈球場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761840": {
     "startTimeUtc": "2026-09-27T01:30:00.000Z",
@@ -394,22 +395,24 @@
   "mls-761841": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
-    "reason": "科羅拉多急流作客洛杉磯銀河。",
+    "watchability": 8,
+    "reason": "科羅拉多急流戰績占優，洛杉磯銀河主場作戰具備不俗的可看性。",
     "venueZh": "尊嚴健康體育公園",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761843": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "波特蘭提伐者作客聖荷西地震。",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "聖荷西地震近期表現突出，面對波特蘭伐木者預期是一場硬仗。",
     "venueZh": "PayPal公園",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761842": {
     "startTimeUtc": "2026-09-27T02:30:00.000Z",
@@ -1576,11 +1579,12 @@
     "startTimeUtc": "2026-09-26T19:07:00.000Z",
     "competitiveness": 6,
     "watchability": 6,
-    "reason": "跨聯盟對戰。",
+    "reason": "兩隊皆處於季後賽邊緣或無緣晉級，戰意與關注度相對有限。",
     "venueZh": "羅傑斯中心",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817091": {
     "startTimeUtc": "2026-09-26T20:05:00.000Z",
@@ -1616,23 +1620,25 @@
   },
   "mlb-401817097": {
     "startTimeUtc": "2026-09-26T20:10:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
-    "reason": "實力接近。",
+    "reason": "遊騎兵勝率拉鋸，面對雙城主場力求突破，對戰組合張力一般。",
     "venueZh": "標靶球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817094": {
     "startTimeUtc": "2026-09-26T23:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "守護者出賽。",
+    "competitiveness": 7,
+    "watchability": 7,
+    "reason": "守護者力拚季後賽席位，對決皇家較具實際戰績意義與看點。",
     "venueZh": "考夫曼球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817095": {
     "startTimeUtc": "2026-09-26T23:10:00.000Z",
