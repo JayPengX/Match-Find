@@ -49,25 +49,36 @@ Scoring and picking are split across two different places, deliberately:
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
-   picks, **one local calendar day at a time**, the set of that day's
-   fixtures that maximizes total score while staying watchable back-to-back
-   — an exact weighted-interval-scheduling solution over each sport's
-   *average* broadcast length (ESPN never gives an actual end time). This
-   has to run client-side, not at build time, because its two real inputs
-   are both relative to *your* clock, and one static build serves every
-   viewer in every timezone at once:
+   groups **one local calendar day at a time** into **viewing slots** and
+   picks each slot's best fixture. This has to run client-side, not at
+   build time, because its real inputs are relative to *your* clock, and
+   one static build serves every viewer in every timezone at once:
    - A fixture whose **local** start time falls between midnight and 5am
      is never eligible to be picked, however good its score — this site
      won't tell you a 4am kickoff is unmissable. It still shows up further
      down in "all matches", just never as a recommended pick.
-   - A single small, fixed tolerance (`OVERLAP_TOLERANCE_MINUTES`) absorbs
-     the fact that a duration is only ever a per-sport average, not this
-     match's real length — deliberately fixed rather than score-dependent,
-     since letting two fixtures' own scores widen how much overlap counted
-     as "compatible" used to let a chain of picks slip past the scheduler's
-     own correctness guarantee (see that constant's comment in `app.js` for
-     the full story) and produce a worse, occasionally outright wrong,
-     lineup.
+   - Two fixtures belong to the same viewing slot only if they genuinely,
+     substantially overlap in real time — `MEANINGFUL_OVERLAP_MINUTES`, a
+     large, unambiguous chunk of shared broadcast window (see
+     `pickDayRecommendations`'s own top comment for why this replaced an
+     earlier, much more elaborate design: a formal scheduling algorithm
+     plus a separate "make sure a crowded-out sport still gets a turn"
+     pass plus a third pass to clean up what the second one could break —
+     three interacting passes that kept finding new ways to misbehave,
+     each patch fixing one bug by opening a different one. One rule -
+     "does the actual overlap justify treating these as the same slot" -
+     turned out to be the only question that mattered, and answering it
+     directly needed none of that machinery). Within a slot, the
+     highest-scoring fixture is the pick; any slot-mate that's genuinely
+     "equally good" (close score, same sport) or "a good game from a
+     different sport" becomes a swipeable alternative (see "Page layout"
+     below) - a slot-mate that clears neither just loses its pick status
+     entirely, shown only in "所有賽事" with a note pointing at what's
+     recommended for that slot instead. A sport with nothing else airing
+     at the same time simply becomes its own one-fixture slot, recommended
+     on its own merits - there's no separate "make sure every sport gets a
+     turn" step, because there's no scheduling-driven crowding-out left to
+     correct for in the first place.
    - Whichever pick is currently live, or (failing that) the soonest one
      still to come, is pinned to the top of the day's list.
 
@@ -115,39 +126,26 @@ Scoring and picking are split across two different places, deliberately:
   AI reason. The numbers still drive the scheduling and tie-breaking behind
   the scenes; the page itself only ever shows the recommendation, not the
   data behind it.
-- A recommended fixture with a genuinely stack-worthy overlapping
-  alternative (see `isStackQualityWorthy` in `resolveViewingPlan`) renders
-  as a **horizontally swipeable card stack** (native CSS scroll-snap, the
-  same kind of touch swipe the day picker already uses) instead of either
+- A recommended fixture with a genuinely stack-worthy slot-mate (see
+  `isStackQualityWorthy` in `resolveViewingPlan`) renders as a
+  **horizontally swipeable card stack** (native CSS scroll-snap, the same
+  kind of touch swipe the day picker already uses) instead of either
   silently picking one or showing several at once - only one card is ever
   on screen by default, the others are a deliberate swipe away with dots
   marking how many there are. A version of this that showed every
   alternative expanded at once was tried first and dropped as too
-  cluttered. What counts as "worth stacking" went through a few rounds of
-  tuning: `isStackQualityWorthy` gates on exactly two cases - the
-  alternative is genuinely "equally good" (a close score, same sport as
-  the anchor), or it's a good game from a *different* sport - but the two
-  places that call it use **different timing gates**, since they turned
-  out to need different answers to "does this actually belong in the same
-  slot":
-  - Merging two matches that *each independently earned* their own
-    recommended slot (one from the DP, one from the diversity floor, say)
-    additionally requires their own **start times** to be close
-    (`STACK_TIME_TOLERANCE_MINUTES`) - not just a duration that happens to
-    overlap - so a ~7am pick can't silently absorb an unrelated ~8am pick
-    that also won its own slot.
-  - Attaching *extra*, never-independently-recommended fixtures to an
-    already-decided anchor's stack instead uses real time overlap (the
-    same `overlapMinutes` the rest of the scheduler uses) with no extra
-    start-time gate - a start-time-only gate was tried here too and
-    reverted: MLB alone routinely has several good, genuinely-simultaneous
-    games starting 40-60 minutes apart (each running ~3 hours), and a
-    tighter gate was quietly excluding real, good alternatives instead of
-    surfacing them.
-  
-  A diversity-floor pick (see above) is never absorbed into another
-  match's stack either, so a sport rescued by the diversity floor can't
-  lose that guaranteed slot just because it overlaps a higher-scored pick.
+  cluttered. Whether two fixtures can stack together at all is decided
+  once, by cluster membership itself (`MEANINGFUL_OVERLAP_MINUTES` - see
+  `pickDayRecommendations`'s own comment for why this replaced an earlier,
+  much more elaborate multi-pass design): a large, unambiguous chunk of
+  ACTUAL shared broadcast window, not merely close start times - two
+  fixtures whose durations technically graze by five minutes don't
+  qualify, and two fixtures that start 45+ minutes apart but are both
+  still genuinely on together for the next two hours do. Whether a
+  slot-mate is worth SHOWING as an alternative is then a separate,
+  quality-only question (`isStackQualityWorthy`): genuinely "equally good"
+  (a close score, same sport as the pick), or a good game from a
+  *different* sport.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -186,19 +184,23 @@ nudges `resolveViewingPlan`'s own scoring when picks are close - the AI's
 underlying scores never change, and re-ranking re-runs the whole plan and
 re-renders immediately, without closing the panel or reloading.
 
-**A diversity floor keeps a lower-ranked sport from disappearing entirely.**
-Ranking MLB above MLS doesn't mean "never show MLS" - but MLB's sheer
-volume (~15 games most evenings, all competing with EACH OTHER too) means
-it can end up winning nearly every slot on density alone, leaving a
-perfectly good MLS game with nothing to do with its evening even though it
-never actually lost a straight comparison - it just never got one. After
-the normal DP-based plan is built for a day, `pickDayRecommendations` checks
-that day for any sport that ended up with zero picks despite having at least
-one fixture that clears a real "this is worth watching" bar
-(`DIVERSITY_MIN_SCORE`), and gives that sport's best such fixture a slot
-anyway. This never overrides a genuine priority preference or a real
-head-to-head loss - it only rescues a sport that got shut out entirely, at
-most once per sport per day.
+**A lower-ranked sport doesn't disappear just because a busier one shares
+its evening.** Ranking MLB above MLS doesn't mean "never show MLS". An
+earlier design ran a formal scheduling algorithm over the WHOLE day first
+(so MLB's sheer volume - ~15 games most evenings - could win nearly every
+slot on density alone, needing a separate "diversity floor" pass afterward
+to rescue a sport that got crowded out despite never actually losing a
+straight comparison) - see `pickDayRecommendations`'s own comment for why
+that turned out fragile enough to replace. The current design sidesteps
+the problem instead of patching around it: two fixtures only ever compete
+for the same pick when they genuinely, substantially overlap in real time
+(`MEANINGFUL_OVERLAP_MINUTES`), so an MLS game that isn't actually
+airing at the same time as whichever MLB game is winning ITS slot was
+never competing with it in the first place - it gets its own slot
+automatically. `priorityOrder`'s nudge (and `isStackQualityWorthy`'s
+"good game from a different sport" case, when two fixtures DO genuinely
+overlap) still decide close calls the same way as before; there's just no
+separate rescue mechanism needed for the common case anymore.
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 

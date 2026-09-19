@@ -731,109 +731,101 @@ function dayLabelFor(date, { short = false } = {}) {
 //   never eligible to be "recommended", however good its score - nobody
 //   asked to be told a 4am fixture is unmissable. It still shows up in the
 //   full "all matches" list further down, just never pinned as a pick.
-// - OVERLAP_TOLERANCE_MINUTES absorbs the fact that durationMinutes is only
-//   ever a per-sport AVERAGE broadcast length, not this match's real one -
-//   without it, a match that overruns its sport's average by even a few
-//   minutes would look like a "conflict" with whatever's lined up next.
 //
 // The plan is built ONE LOCAL CALENDAR DAY AT A TIME (see the `byDay`
 // bucketing below and pickDayRecommendations) rather than as one pass over
 // the whole 14-day window: "what's worth watching today" is inherently a
 // per-day question, and computing it that way means a bug in one day's
-// data or scoring can never reach into a neighboring day, and every pass
-// below (the scheduling DP, the diversity floor, the stack-clustering) only
-// ever has to reason about one day's fixtures at a time.
+// data or scoring can never reach into a neighboring day.
 //
-// An earlier version of the scheduling DP let a pair's OWN scores widen how
-// much they were allowed to overlap (a much larger tolerance kicked in
-// whenever either match scored highly, so a must-watch fixture could eat
-// into the next slot a bit). That's a reasonable idea for two fixtures
-// being compared directly, but it quietly broke the DP itself: the
-// standard weighted-interval-scheduling algorithm below only works because
-// "is match A compatible with match B" is a PURE function of their times,
-// which makes compatibility monotonic under end-time order (if A is
-// compatible with B, it's compatible with everything that ends before B
-// too) - the whole reason `best[]` can be trusted as a rolling maximum
-// without re-checking every match a chain actually passed through. Once
-// compatibility could also depend on which two specific matches were being
-// compared, that guarantee no longer held: `best[j]` could be a chain built
-// through some earlier match k whose OWN pairwise tolerance against the
-// current match was narrower than j's, yet the code only ever checked i
-// against j, not against k - silently letting a real conflict through, or
-// picking a worse pair over a genuinely better one with nothing in the UI
-// to explain why. OVERLAP_TOLERANCE_MINUTES below is deliberately a single,
-// fixed number - a little more forgiving than the old "duration is only an
-// average" allowance, with no per-pair exception - which keeps every
-// match's compatibility with every other purely time-based, restores that
-// monotonic guarantee, and makes the DP's result an actual guaranteed
-// optimum again, not just "usually about right."
+// ---- Why this is a single clustering pass, not a scheduling DP ----------
 //
-// This is still a good, cheap heuristic for a day's viewing plan, not a
-// certified globally-optimal schedule in every respect (the diversity floor
-// and stack-clustering passes after it are heuristics layered on top), but
-// the scheduling DP itself is now a textbook maximum-weight independent set
-// over an interval graph, solved exactly - at the scale this ever runs at
-// (at most a few dozen fixtures on any one calendar day) there's no need
-// for anything looser.
+// Earlier versions of this file ran a formal weighted-interval-scheduling
+// DP over the whole day first (picking a maximum-total-score, mutually-
+// non-overlapping chain of matches), then bolted a "diversity floor" pass
+// onto it to rescue a sport the DP's own density bias had crowded out
+// (MLB alone can field ~15 games an evening, so it could win almost every
+// slot on volume even when a specific MLS game was never actually beaten
+// head-to-head - it just never got a turn), then a THIRD pass to clean up
+// the overlaps the diversity floor could reintroduce (a diversity pick
+// added without checking the DP's own picks could still collide with one).
+// Each pass existed to patch a hole the previous one opened, and each of
+// those patches shipped its own real bug at least once: a transitively-
+// chained "cluster" that silently swallowed unrelated sports across a
+// whole evening, a start-time tolerance so tight it excluded genuinely
+// simultaneous MLB games, a diversity pick that could still be absorbed
+// and quietly dropped by a higher-scored anchor. Three interacting passes
+// tuned by trial and error kept finding new ways to misbehave.
+//
+// The actual, single thing every one of those bugs was ultimately about is
+// "does match A genuinely belong in the same viewing slot as match B" -
+// and that question has one honest answer: how much of their broadcast
+// windows ACTUALLY overlap, in real minutes, not whether their start times
+// happen to be close, not whether they were both independently "recommended"
+// by some earlier pass. MEANINGFUL_OVERLAP_MINUTES below is that one
+// number. Everything in pickDayRecommendations is now a single pass:
+// group the day's matches into clusters by REAL, SUBSTANTIAL time overlap
+// (using the same anchor-claiming technique - process highest-score-first,
+// each unclaimed match becomes its own anchor, only matches that overlap
+// THAT SPECIFIC anchor by enough join its cluster, never each other
+// transitively - the one piece of the old design that was never the
+// source of a bug, so it survives unchanged), then within each cluster the
+// anchor is the pick and any cluster-mate that's genuinely "equally good"
+// or "a good game from a different sport" (isStackQualityWorthy) becomes a
+// swipeable alternative. A sport with nothing genuinely overlapping
+// anything else just becomes its own one-match cluster automatically -
+// there's no separate diversity floor to fall through, because there's no
+// DP-driven density bias left to correct in the first place: two matches
+// only ever compete for the same slot when they're ACTUALLY on at the same
+// time.
 const QUIET_HOUR_START = 0;
 const QUIET_HOUR_END = 5;
-const OVERLAP_TOLERANCE_MINUTES = 15;
-// The bar a sport's best still-unpicked fixture has to clear to get a
-// diversity-floor slot for the day (see the pass right after the DP in
-// pickDayRecommendations) - deliberately a real "this is genuinely worth
-// watching" score, not just "the best of a bad day" for that sport.
+// How much of two fixtures' broadcast windows actually have to overlap, in
+// real minutes, to be considered "the same viewing slot" at all - the one
+// timing gate the whole file now has, replacing both the old DP's
+// compatibility tolerance and the separate stack-timing gates that used to
+// disagree with each other. Deliberately a large, unambiguous chunk of
+// real simultaneous airtime (most of an hour), not a start-time-closeness
+// proxy: two matches starting 5 minutes apart from a durationMinutes
+// rounding quirk but airing back-to-back rather than together shouldn't
+// cluster, and two matches starting 45 minutes apart but both still very
+// much on for the next two hours absolutely should - "does the overlap
+// itself justify treating these as one slot" is the only question that
+// actually matches what a viewer means by "at the same time".
+const MEANINGFUL_OVERLAP_MINUTES = 45;
+// The bar a cluster-mate has to clear, on top of MEANINGFUL_OVERLAP_MINUTES,
+// to join the cluster's anchor as a swipeable alternative rather than just
+// losing its slot outright (see isStackQualityWorthy below) - deliberately
+// a real "this is genuinely worth watching" score, not just "the best of a
+// bad day" for that sport.
 const DIVERSITY_MIN_SCORE = 6.5;
-// How good an overlapping-but-not-picked fixture has to be to join a
-// recommended match's swipeable stack (see the pass after the DP in
-// pickDayRecommendations) - lower than DIVERSITY_MIN_SCORE on purpose, since
-// browsing a stack is opt-in (a swipe), not something forced in front of
-// everyone by default. Still a real floor, not "anything that overlaps" -
-// raised from an earlier, looser value after live use showed a low bar let
-// in fixtures nobody would call "equally good".
+// The same-sport half of "equally good" (see isStackQualityWorthy) - a
+// same-sport cluster-mate also has to score at least this well outright,
+// not merely close to the anchor, so a stack never fills up with a
+// mediocre leftover just because it happened to be the anchor's own kind
+// of match.
 const STACK_MIN_SCORE = 6;
-// The second half of "equally good" (same-sport case only - see
-// isStackQualityWorthy below) - a same-sport overlapping fixture also has
-// to come within this many points of the recommended match's own score, so
-// a great pick's stack doesn't fill up with merely-decent leftovers just
-// because STACK_MIN_SCORE alone let them through.
+// The second half of "equally good" (same-sport case only) - a same-sport
+// cluster-mate also has to come within this many points of the anchor's
+// own score, so a great pick's stack doesn't fill up with merely-decent
+// leftovers just because STACK_MIN_SCORE alone let them through.
 const STACK_MAX_SCORE_GAP = 1.5;
 // Caps how many alternatives one stack can hold - a "swipe to see what
 // else was on" gesture stops being quick past a handful of cards. MLB
-// alone can field ~15 games a night, several genuinely good at once, so
-// this stays generous enough that a real slate of good options isn't cut
-// down to one or two arbitrarily.
+// alone can field several genuinely good, genuinely simultaneous games at
+// once, so this stays generous enough that a real slate of good options
+// isn't cut down arbitrarily.
 const STACK_MAX_ALTERNATIVES = 3;
-// How close two fixtures' own START times have to be to merge as the SAME
-// recommended slot (see the cluster/anchor-merge pass in
-// pickDayRecommendations) - deliberately separate from
-// OVERLAP_TOLERANCE_MINUTES/durationMinutes overlap above: two matches that
-// EACH independently earned their own recommended slot (one from the DP,
-// one from the diversity floor, say) shouldn't collapse into one just
-// because their broadcast windows graze each other - durationMinutes is
-// only ever a per-sport average, so a match's real broadcast window is
-// wider than its recorded interval, and treating any graze as "the same
-// slot" is what let a 7am pick's stack absorb an unrelated 8am pick, or
-// two genuinely separate slots bleed into one. This tighter, start-time-
-// based gate ONLY applies to merging two already-independently-recommended
-// picks - see isStackQualityWorthy's own comment for why the
-// alternative-attachment pass (surfacing EXTRA good, not-independently-
-// recommended fixtures airing at the same time) uses real overlap instead.
-const STACK_TIME_TOLERANCE_MINUTES = 30;
 
-// The quality half of "worth stacking" - shared by both the cluster-merge
-// pass and the alternative-attachment pass in pickDayRecommendations, so
-// "what counts as good enough to stack" only has one definition. Two, and
-// only two, things justify a stack entry: the fixture is genuinely
-// "equally good" (a close score AND the SAME sport as the anchor - two
-// comparable options for the same kind of viewing), or it's "a good game
-// from a different sport" (a real diversity pick, not required to be close
-// to the anchor's own score, since the point there is a different kind of
-// match entirely, not a closer call on the same one). This is deliberately
-// just the quality half - see each call site for its own TIMING gate
-// (STACK_TIME_TOLERANCE_MINUTES for the cluster-merge pass, real
-// overlapMinutes for the alternative-attachment pass), since "is this
-// worth stacking at all" and "does it actually belong in THIS slot" turned
-// out to need different timing answers depending on what's being merged.
+// The quality gate for "worth stacking" - MEANINGFUL_OVERLAP_MINUTES
+// already decided a candidate genuinely shares the anchor's own viewing
+// slot; this decides whether it's actually worth offering as a swipe
+// option there. Two, and only two, things justify it: the fixture is
+// genuinely "equally good" (a close score AND the SAME sport as the anchor
+// - two comparable options for the same kind of viewing), or it's "a good
+// game from a different sport" (not required to be close to the anchor's
+// own score, since the point there is a different kind of match entirely,
+// not a closer call on the same one).
 function isStackQualityWorthy(candidate, anchor) {
   if (candidate.sport === anchor.sport) {
     return candidate.score >= STACK_MIN_SCORE && candidate.score >= anchor.score - STACK_MAX_SCORE_GAP;
@@ -859,240 +851,63 @@ function overlapMinutes(a, b) {
   return overlapEnd > overlapStart ? (overlapEnd - overlapStart) / 60_000 : 0;
 }
 
-// Pure function of the two matches' OWN times, deliberately never their
-// scores (see the top-of-section comment on why that used to be true, and
-// what it broke) - `later`/`earlier` name which side of the gap each
-// argument plays, not a claim about which one scores better.
-function compatible(later, earlier) {
-  const gapMinutes = (later.interval.start - earlier.interval.end) / 60_000;
-  return gapMinutes >= -OVERLAP_TOLERANCE_MINUTES;
+function meaningfullyOverlaps(a, b) {
+  return overlapMinutes(a, b) >= MEANINGFUL_OVERLAP_MINUTES;
 }
 
-// The scheduling DP, diversity floor, and stack-clustering for ONE local
-// calendar day's worth of eligible (non-quiet-hour) matches - called once
+// Groups ONE local calendar day's worth of eligible (non-quiet-hour)
+// matches into viewing slots and decides each slot's pick - called once
 // per day from resolveViewingPlan below. Mutates each match in `dayMatches`
-// in place (.recommended/.isDiversityPick/.stackAlternativeIds), same as
-// the rest of this file's convention.
+// in place (.recommended/.stackAlternativeIds), same as the rest of this
+// file's convention. See the top-of-section comment for why this is one
+// clustering pass rather than a scheduling DP plus separate diversity/
+// merge passes.
 //
 // `priorityOrder`'s nudge and quiet-hour exclusion already happened before
 // this runs (see resolveViewingPlan) - everything here only ever sees one
-// day's already-eligible matches, so no pass below needs its own day-key or
-// quiet-hour re-check the way an earlier, whole-window version of this code
-// did.
+// day's already-eligible matches, so this never needs its own day-key or
+// quiet-hour re-check.
 function pickDayRecommendations(dayMatches) {
-  // Classic weighted-interval-scheduling: sorted by end time, `best[i]` is
-  // the best total score achievable using only matches 0..i, and `dp[i]` is
-  // the best total score of any compatible chain that ENDS by picking match
-  // i. Because `compatible()` above is a pure function of times, it's
-  // monotonic under this sort order (see top-of-section comment) - the set
-  // of earlier matches compatible with any given match is always a PREFIX
-  // of this order, which is exactly what makes scanning for the single
-  // largest compatible predecessor (rather than checking every match a
-  // chain ever passed through) both correct and enough.
-  const sorted = dayMatches.slice().sort((a, b) => a.interval.end - b.interval.end);
-  const n = sorted.length;
-  const dp = new Array(n).fill(0);
-  const predecessor = new Array(n).fill(-1);
-  const best = new Array(n).fill(0);
+  dayMatches.forEach(match => { match.recommended = false; });
 
-  for (let i = 0; i < n; i++) {
-    let p = -1;
-    for (let j = i - 1; j >= 0; j--) {
-      if (compatible(sorted[i], sorted[j])) {
-        p = j;
-        break; // the first (largest-index) hit scanning backward is the answer - see comment above
-      }
-    }
-    const bestPred = p >= 0 ? best[p] : 0;
-    dp[i] = sorted[i].effectiveScore + bestPred;
-    predecessor[i] = p;
-    best[i] = Math.max(i > 0 ? best[i - 1] : 0, dp[i]);
-  }
-
-  const selected = new Set();
-  let cursor = n - 1;
-  let target = n ? best[n - 1] : 0;
-  while (cursor >= 0) {
-    if (cursor > 0 && best[cursor - 1] === target) {
-      cursor -= 1;
-      continue;
-    }
-    selected.add(sorted[cursor].id);
-    target = dp[cursor] - sorted[cursor].effectiveScore;
-    cursor = predecessor[cursor];
-  }
-  dayMatches.forEach(match => {
-    match.recommended = selected.has(match.id);
-  });
-
-  // Diversity floor: the DP above picks the single highest-scoring option
-  // per slot, which is correct on its own terms, but a high-VOLUME sport
-  // (MLB fielding ~15 games most evenings) can end up winning nearly every
-  // slot on pure density alone - not because it's ranked higher, but
-  // because there's almost always SOME MLB game overlapping any given
-  // window, where a one-game-a-day sport only gets to compete for the one
-  // slot its single fixture happens to fall in. Left alone, that can mean
-  // a perfectly good MLS game never gets picked on a day it never
-  // genuinely lost a head-to-head comparison - it just never got a turn.
-  // This doesn't touch the DP's own math or override a real priority
-  // ranking - it only looks at what's LEFT OUT after the DP has run, and
-  // gives a sport with zero picks today its single best-scoring eligible
-  // fixture anyway, but only if that fixture clears DIVERSITY_MIN_SCORE (a
-  // real "this is a good match" bar, not "the least bad option this sport
-  // had").
-  const sportsToday = new Set(dayMatches.map(m => m.sport));
-  for (const sport of sportsToday) {
-    const sportMatches = dayMatches.filter(m => m.sport === sport);
-    if (sportMatches.some(m => m.recommended)) continue;
-    const best = sportMatches.filter(m => m.score >= DIVERSITY_MIN_SCORE).sort((a, b) => b.score - a.score)[0];
-    if (best) {
-      best.recommended = true;
-      best.isDiversityPick = true;
-    }
-  }
-
-  // Two picks can still genuinely overlap each other in time - the DP's own
-  // small fixed tolerance, or the diversity floor above (added without ever
-  // checking against what's already recommended - and specifically because
-  // it's nudged by priorityOrder, it can hand a merely-decent fixture in
-  // the user's favorite sport a "recommended" slot that happens to overlap
-  // a genuinely great one). Left alone, both would render as separate
-  // top-level recommended cards.
-  //
-  // Grouping has to be ANCHORED, not transitive/chained: grouping any
-  // recommended matches connected by a CHAIN of pairwise overlaps into one
-  // cluster (A overlaps B, B overlaps C => one cluster even if A and C
-  // don't overlap at all) is exactly "connected components", and on a real
-  // night's data that can silently collapse almost the WHOLE evening into
-  // one cluster: MLB alone can field ~15 staggered, ~3+ hour games, so game
-  // 1 overlaps game 2, game 2 overlaps game 3, and so on for hours, with
-  // zero requirement that game 1 and game 10 share a single minute of
-  // airtime. Whatever else that chain happened to touch (an EPL or MLS
-  // pick, usually ranked higher by priorityOrder and so most likely to end
-  // up "primary") would absorb several otherwise-unrelated slots into its
-  // own stack and wipe out their independent recommended status - a real
-  // bug seen in production ("only Premier League shows today, MLB/MLS
-  // disappeared"), not a hypothetical.
-  //
-  // The fix: process recommended matches highest-effectiveScore-first: an
-  // unclaimed match becomes an anchor, and ONLY matches that overlap that
-  // SPECIFIC anchor directly (never each other transitively) join its
-  // cluster and get claimed. A match overlapping two different anchors
-  // joins whichever is processed first (the higher-scored one) - it never
-  // bridges them into one. Everything here already belongs to the same
-  // local day (that's the whole point of pickDayRecommendations being
-  // called once per day), so unlike an earlier whole-window version of this
-  // pass, there's no separate day-key check needed to avoid folding a match
-  // into the wrong day's stack.
-  //
-  // A diversity pick (see isDiversityPick above) is never eligible to be
-  // absorbed as a cluster member: its entire purpose is guaranteeing that
-  // sport a slot today, and letting it get folded into a higher-scored
-  // anchor's cluster - then possibly fail the stack-worthy checks below and
-  // get dropped outright - would silently defeat that guarantee the moment
-  // its one
-  // fixture happens to overlap something else. Live symptom this fixes: a
-  // day's only MLB/MLS pick existed purely as a diversity pick, overlapped
-  // a higher-scored Premier League anchor, didn't clear the "equally good"
-  // bar against it, and vanished entirely - "only Premier League shows
-  // today". A diversity pick can still anchor its OWN cluster (so a
-  // genuinely equally-good or diverse fixture overlapping IT can still
-  // join its stack), it just can never be someone else's stack member.
-  const claimedStackIds = new Set();
-  const claimedAsClusterMember = new Set();
-  let recommended = dayMatches.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
-  recommended
+  // Anchor-claiming, highest-effectiveScore-first: an unclaimed match
+  // becomes a cluster's anchor, and only matches that MEANINGFULLY overlap
+  // that SPECIFIC anchor (never each other transitively - see top-of-
+  // section comment on why chained/connected-component grouping silently
+  // swallowed whole evenings in an earlier version of this file) join its
+  // cluster and get claimed. A match that meaningfully overlaps two
+  // different anchors joins whichever is processed first (the higher-
+  // scored one) - it never bridges them into one cluster. A match with no
+  // meaningful overlap with anything else simply becomes its own
+  // single-member cluster, which is exactly how a sport with nothing else
+  // airing at the same time ends up recommended without needing a separate
+  // diversity mechanism at all.
+  const claimed = new Set();
+  const clusters = [];
+  dayMatches
     .slice()
     .sort((a, b) => b.effectiveScore - a.effectiveScore)
     .forEach(anchor => {
-      if (claimedAsClusterMember.has(anchor.id)) return;
-      claimedAsClusterMember.add(anchor.id);
-      const rest = recommended.filter(
-        m => !claimedAsClusterMember.has(m.id) && !m.isDiversityPick && overlapMinutes(anchor, m) > 0
-      );
-      if (!rest.length) return;
-      rest.forEach(match => claimedAsClusterMember.add(match.id));
-      // A demoted match only joins the anchor's stack if it's both
-      // genuinely stack-worthy on quality (isStackQualityWorthy) AND its
-      // own start time is actually close to the anchor's
-      // (STACK_TIME_TOLERANCE_MINUTES) - this second, stricter timing gate
-      // is what keeps two INDEPENDENTLY recommended picks (each already
-      // earned its own slot via the DP or the diversity floor) from
-      // collapsing into one stack just because their broadcast windows
-      // graze each other; see STACK_TIME_TOLERANCE_MINUTES's own comment
-      // for the live "7am stack absorbing an unrelated 8am pick" bug this
-      // guards against. effectiveScore decided who anchors the slot, but
-      // it shouldn't decide who's worth swiping to, since that's exactly
-      // the priority nudge turning a mediocre match into a false "equally
-      // good" by riding the user's own favorite-sport preference. A
-      // demoted match that isn't stack-worthy just loses its recommended
-      // status entirely, same as any other match that lost its slot - it
-      // still shows up in "所有賽事" with the usual "time overlaps what's
-      // recommended" note, it just isn't offered as a swipe option.
-      const worthy = rest.filter(
-        m =>
-          Math.abs(m.interval.start - anchor.interval.start) / 60_000 <= STACK_TIME_TOLERANCE_MINUTES &&
-          isStackQualityWorthy(m, anchor)
-      );
-      rest.forEach(match => { match.recommended = false; });
-      worthy.forEach(match => claimedStackIds.add(match.id));
-      if (worthy.length) {
-        anchor.stackAlternativeIds = worthy
-          .map(m => m.id)
-          .sort((a, b) => {
-            const scoreOf = id => dayMatches.find(m => m.id === id).score;
-            return scoreOf(b) - scoreOf(a);
-          });
-      }
+      if (claimed.has(anchor.id)) return;
+      claimed.add(anchor.id);
+      const members = dayMatches.filter(m => !claimed.has(m.id) && meaningfullyOverlaps(anchor, m));
+      members.forEach(m => claimed.add(m.id));
+      clusters.push({ anchor, members });
     });
-  recommended = recommended.filter(m => m.recommended).sort((a, b) => a.interval.start - b.interval.start);
 
-  // Attaches a small set of further overlapping-but-not-picked fixtures to
-  // each recommended match's stack (on top of any merged in above), for
-  // the swipeable card stack (see renderRecommendedSection) - unlike an
-  // always-expanded "show both at once" layout, browsing alternatives here
-  // is opt-in (a swipe), so this can afford to be more generous than a
-  // forced side-by-side display could. Gated on quality by
-  // isStackQualityWorthy - same-sport has to be genuinely equally good (a
-  // close score), a different sport only has to be genuinely good on its
-  // own - but NOT by the cluster-merge pass's own strict
-  // STACK_TIME_TOLERANCE_MINUTES: these are fixtures that never won their
-  // own recommended slot in the first place, so surfacing one here as "還
-  // 有得選" isn't at risk of the "two independently-recommended picks
-  // collapsed into one" bug that gate exists for - real overlapMinutes
-  // (already computed as `rec.overlappingIds`) is the right bar instead,
-  // since the whole point is "what else is genuinely ON RIGHT NOW while
-  // you'd be watching this". A tighter start-time-only gate here was tried
-  // and reverted - MLB alone routinely has several good, genuinely-
-  // simultaneous games that start 40-60 minutes apart (each running ~3
-  // hours), and excluding them left real, good options off the stack. A
-  // 9-rated pick's stack still shouldn't fill up with 6-rated leftovers
-  // just because they happened to overlap it - isStackQualityWorthy's
-  // score gate still applies. Each alternative is claimed by at most one
-  // recommended match (whichever it overlaps that's processed first, in
-  // chronological order) so it never appears in two different stacks at
-  // once, and the merged-in cluster members above are claimed already so
-  // they can't also get pulled into a neighboring stack. `rec.overlappingIds`
-  // was built from EVERY fetched match regardless of day or quiet hours
-  // (see resolveViewingPlan) - looking candidates up via `dayMatches.find`
-  // here is what actually excludes anything outside today's eligible set,
-  // without needing its own day-key or quiet-hour re-check.
-  recommended.forEach(rec => {
-    const alreadyClaimed = rec.stackAlternativeIds || [];
-    const extraIds = rec.overlappingIds
-      .filter(id => {
-        if (claimedStackIds.has(id) || alreadyClaimed.includes(id)) return false;
-        const other = dayMatches.find(m => m.id === id);
-        return other && !other.recommended && isStackQualityWorthy(other, rec);
-      })
-      .sort((a, b) => {
-        const scoreOf = id => dayMatches.find(m => m.id === id).score;
-        return scoreOf(b) - scoreOf(a);
-      })
-      .slice(0, Math.max(0, STACK_MAX_ALTERNATIVES - alreadyClaimed.length));
-    extraIds.forEach(id => claimedStackIds.add(id));
-    const combined = [...alreadyClaimed, ...extraIds];
-    if (combined.length) rec.stackAlternativeIds = combined;
+  // Each cluster's anchor is the pick for that slot; any cluster-mate that
+  // clears isStackQualityWorthy becomes a swipeable alternative, capped at
+  // STACK_MAX_ALTERNATIVES and ranked by score. A cluster-mate that doesn't
+  // clear it just loses its slot entirely, same as before - it still shows
+  // up in "所有賽事" with the usual "time overlaps what's recommended"
+  // note (see buildMatchCard), it just isn't offered as a swipe option.
+  clusters.forEach(({ anchor, members }) => {
+    anchor.recommended = true;
+    const worthy = members
+      .filter(m => isStackQualityWorthy(m, anchor))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, STACK_MAX_ALTERNATIVES);
+    if (worthy.length) anchor.stackAlternativeIds = worthy.map(m => m.id);
   });
 }
 
