@@ -29,7 +29,7 @@ const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
   rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
-  matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.stackAlternativeIds/.overlappingIds
+  matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
   activeSport: 'all',
@@ -75,20 +75,23 @@ const LEAGUE_LOGOS = {
 // sport, drawn inline rather than hotlinked, used only when a league logo
 // actually fails to load (see buildSportIcon's own onerror handler), same
 // defensive-fallback posture as team/service logos elsewhere in this file.
-// `currentColor` picks up the badge's own text color (see styles.css's
-// .sport-badge[data-sport] rules), so one icon works across every badge
-// color without its own fill.
+// A fixed dark stroke color, not `currentColor` - every .sport-icon now
+// sits on its own fixed white backdrop circle regardless of context (see
+// styles.css's own comment on why), so a fixed color that reads clearly on
+// white is correct everywhere this appears, rather than inheriting
+// whatever text color happens to surround it in one particular context.
+const SPORT_ICON_STROKE = '#1f2433';
 const SPORT_ICONS = {
   'Premier League':
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="currentColor" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>',
+    `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="${SPORT_ICON_STROKE}" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>`,
   MLS:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="currentColor" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>',
+    `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="${SPORT_ICON_STROKE}" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>`,
   MLB:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M6.7 6.2c2.6 2.2 2.6 9.4 0 11.6M17.3 6.2c-2.6 2.2-2.6 9.4 0 11.6" stroke-linecap="round"/></svg>',
+    `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M6.7 6.2c2.6 2.2 2.6 9.4 0 11.6M17.3 6.2c-2.6 2.2-2.6 9.4 0 11.6" stroke-linecap="round"/></svg>`,
   NBA:
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6v16.8M6.2 5.8c2.1 3 2.1 9.4 0 12.4M17.8 5.8c-2.1 3-2.1 9.4 0 12.4" stroke-linecap="round"/></svg>',
+    `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6v16.8M6.2 5.8c2.1 3 2.1 9.4 0 12.4M17.8 5.8c-2.1 3-2.1 9.4 0 12.4" stroke-linecap="round"/></svg>`,
   F1:
-    '<svg viewBox="0 0 24 24" fill="none"><path d="M5.2 21V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><rect x="5.2" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="12.4" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="8.8" y="7.6" width="3.6" height="3.6" fill="currentColor"/><rect x="16" y="7.6" width="3.6" height="3.6" fill="currentColor"/></svg>'
+    `<svg viewBox="0 0 24 24" fill="none"><path d="M5.2 21V3" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4" stroke-linecap="round"/><rect x="5.2" y="4" width="3.6" height="3.6" fill="${SPORT_ICON_STROKE}"/><rect x="12.4" y="4" width="3.6" height="3.6" fill="${SPORT_ICON_STROKE}"/><rect x="8.8" y="7.6" width="3.6" height="3.6" fill="${SPORT_ICON_STROKE}"/><rect x="16" y="7.6" width="3.6" height="3.6" fill="${SPORT_ICON_STROKE}"/></svg>`
 };
 
 // Builds one `<span class="sport-icon">` for a given sport - the one place
@@ -104,7 +107,14 @@ function buildSportIcon(sport) {
     const img = document.createElement('img');
     img.src = LEAGUE_LOGOS[sport];
     img.alt = '';
-    img.loading = 'lazy';
+    // Deliberately no loading="lazy" - these are tiny (16-22px) icons, so
+    // there's nothing meaningful to save by deferring them, and native lazy
+    // loading has a real, confirmed bug inside the Settings panel
+    // specifically: that panel is `position: fixed` with its own internal
+    // `overflow-y: auto` scroll, and Safari's lazy-load engine can lose
+    // track of an image's visibility inside a scrolled FIXED container -
+    // scrolling it out and back in left the logo blank instead of
+    // reloading it. Eager loading sidesteps the bug entirely.
     img.referrerPolicy = 'no-referrer';
     img.addEventListener(
       'error',
@@ -926,117 +936,43 @@ function dayLabelFor(date, { short = false } = {}) {
 // per-day question, and computing it that way means a bug in one day's
 // data or scoring can never reach into a neighboring day.
 //
-// ---- Why this is a single clustering pass, not a scheduling DP ----------
+// ---- Why "recommended" is a per-match threshold, not a per-slot pick ----
 //
-// Earlier versions of this file ran a formal weighted-interval-scheduling
-// DP over the whole day first (picking a maximum-total-score, mutually-
-// non-overlapping chain of matches), then bolted a "diversity floor" pass
-// onto it to rescue a sport the DP's own density bias had crowded out
-// (MLB alone can field ~15 games an evening, so it could win almost every
-// slot on volume even when a specific MLS game was never actually beaten
-// head-to-head - it just never got a turn), then a THIRD pass to clean up
-// the overlaps the diversity floor could reintroduce (a diversity pick
-// added without checking the DP's own picks could still collide with one).
-// Each pass existed to patch a hole the previous one opened, and each of
-// those patches shipped its own real bug at least once: a transitively-
-// chained "cluster" that silently swallowed unrelated sports across a
-// whole evening, a start-time tolerance so tight it excluded genuinely
-// simultaneous MLB games, a diversity pick that could still be absorbed
-// and quietly dropped by a higher-scored anchor. Three interacting passes
-// tuned by trial and error kept finding new ways to misbehave.
+// Every earlier version of this function - a scheduling DP, then a single
+// overlap-clustering pass with an anchor-plus-swipeable-alternatives stack -
+// shared one assumption: two matches that overlap in time are competing for
+// the same "pick", and only one (or a scored-gated handful) of them could
+// ever actually be `recommended`. In practice that meant a night with
+// several genuinely good, genuinely simultaneous fixtures (MLB in
+// particular routinely has 5-10 games overlapping in the same couple of
+// hours) surfaced only one of them as the pick, with the rest either
+// demoted to a swipe-to-see alternative behind a quality gate or dropped
+// from "推薦賽事" entirely the moment they didn't clear it - not because
+// they weren't good, but purely because something else airing at the same
+// time happened to be rated slightly better. Confirmed directly against
+// real user feedback: that felt like the app was "forcing no overlap" and
+// actively hiding good games, which is the opposite of the goal.
 //
-// The actual, single thing every one of those bugs was ultimately about is
-// "does match A genuinely belong in the same viewing slot as match B" -
-// and that question has one honest answer: how much of their broadcast
-// windows ACTUALLY overlap, in real minutes, not whether their start times
-// happen to be close, not whether they were both independently "recommended"
-// by some earlier pass. MEANINGFUL_OVERLAP_MINUTES below is that one
-// number. Everything in pickDayRecommendations is now a single pass:
-// group the day's matches into clusters by REAL, SUBSTANTIAL time overlap
-// (using the same anchor-claiming technique - process highest-score-first,
-// each unclaimed match becomes its own anchor, only matches that overlap
-// THAT SPECIFIC anchor by enough join its cluster, never each other
-// transitively - the one piece of the old design that was never the
-// source of a bug, so it survives unchanged), then within each cluster the
-// anchor is the pick and any cluster-mate that's genuinely "equally good"
-// or "a good game from a different sport" (isStackQualityWorthy) becomes a
-// swipeable alternative. A sport with nothing genuinely overlapping
-// anything else just becomes its own one-match cluster automatically -
-// there's no separate diversity floor to fall through, because there's no
-// DP-driven density bias left to correct in the first place: two matches
-// only ever compete for the same slot when they're ACTUALLY on at the same
-// time.
+// So `recommended` is now a plain per-match threshold (RECOMMENDED_MIN_SCORE
+// below) - a match earns it on its own merits, completely independent of
+// whatever else is airing at the same time. Two, three, even more genuinely
+// good matches that overlap each other all show up as their own
+// full-strength recommended cards; there is no single "pick" for a slot and
+// nothing to swipe through. Time overlap is still worth knowing about
+// though - see buildMatchCard's own overlap note, which tells a viewer when
+// a card's start overlaps an earlier match, and for how long, entirely
+// separately from whether either one is recommended.
 const QUIET_HOUR_START = 0;
 const QUIET_HOUR_END = 5;
-// How much of two fixtures' broadcast windows actually have to overlap, in
-// real minutes, to be considered "the same viewing slot" at all - the one
-// timing gate the whole file now has, replacing both the old DP's
-// compatibility tolerance and the separate stack-timing gates that used to
-// disagree with each other. Deliberately a large, unambiguous chunk of
-// real simultaneous airtime (most of an hour), not a start-time-closeness
-// proxy: two matches starting 5 minutes apart from a durationMinutes
-// rounding quirk but airing back-to-back rather than together shouldn't
-// cluster, and two matches starting 45 minutes apart but both still very
-// much on for the next two hours absolutely should - "does the overlap
-// itself justify treating these as one slot" is the only question that
-// actually matches what a viewer means by "at the same time".
-const MEANINGFUL_OVERLAP_MINUTES = 45;
-// The bar a cluster-mate has to clear, on top of MEANINGFUL_OVERLAP_MINUTES,
-// to join the cluster's anchor as a swipeable alternative rather than just
-// losing its slot outright (see isStackQualityWorthy below) - deliberately
-// a real "this is genuinely worth watching" score, not just "the best of a
-// bad day" for that sport.
-const DIVERSITY_MIN_SCORE = 6.5;
-// The same-sport half of "equally good" (see isStackQualityWorthy) - a
-// same-sport cluster-mate also has to score at least this well outright,
-// not merely close to the anchor, so a stack never fills up with a
-// mediocre leftover just because it happened to be the anchor's own kind
-// of match.
-const STACK_MIN_SCORE = 6;
-// The second half of "equally good" (same-sport case only) - a same-sport
-// cluster-mate also has to come within this many points of the anchor's
-// own score, so a great pick's stack doesn't fill up with merely-decent
-// leftovers just because STACK_MIN_SCORE alone let them through.
-const STACK_MAX_SCORE_GAP = 1.5;
-// Caps how many alternatives one stack can hold - a "swipe to see what
-// else was on" gesture stops being quick past a handful of cards. MLB
-// alone can field several genuinely good, genuinely simultaneous games at
-// once, so this stays generous enough that a real slate of good options
-// isn't cut down arbitrarily.
-const STACK_MAX_ALTERNATIVES = 3;
-
-// The quality gates below exist to stop a busy day's stack from filling up
-// with mediocre leftovers - but on a day where the WHOLE schedule is only a
-// couple of fixtures, withholding one for merely missing a quality bar
-// leaves the viewer with less to pick from than the day actually had, which
-// defeats the point of a "quality" gate in the first place (there was
-// nothing to protect a sparse day's stack from). Confirmed live: a day with
-// just one MLB and one MLS fixture, genuinely overlapping, where the lower-
-// scored one fell under DIVERSITY_MIN_SCORE and was dropped entirely -
-// leaving only one match recommended on a day that only had two to begin
-// with. A day at or under this many TOTAL fixtures skips the quality gate
-// entirely for anything that already cleared MEANINGFUL_OVERLAP_MINUTES:
-// with this little to choose from all day, every genuine overlap is worth
-// seeing, not just the "good enough" ones.
-const SPARSE_DAY_MAX_MATCHES = 4;
-
-// The quality gate for "worth stacking" - MEANINGFUL_OVERLAP_MINUTES
-// already decided a candidate genuinely shares the anchor's own viewing
-// slot; this decides whether it's actually worth offering as a swipe
-// option there. Two, and only two, things justify it: the fixture is
-// genuinely "equally good" (a close score AND the SAME sport as the anchor
-// - two comparable options for the same kind of viewing), or it's "a good
-// game from a different sport" (not required to be close to the anchor's
-// own score, since the point there is a different kind of match entirely,
-// not a closer call on the same one). `sparse` (see SPARSE_DAY_MAX_MATCHES)
-// bypasses both - on a sparse day there's no leftover glut to guard against.
-function isStackQualityWorthy(candidate, anchor, { sparse = false } = {}) {
-  if (sparse) return true;
-  if (candidate.sport === anchor.sport) {
-    return candidate.score >= STACK_MIN_SCORE && candidate.score >= anchor.score - STACK_MAX_SCORE_GAP;
-  }
-  return candidate.score >= DIVERSITY_MIN_SCORE;
-}
+// The one bar a match's (nudged) effectiveScore has to clear to be
+// `recommended` - independent of anything else airing at the same time
+// (see the section comment above). Deliberately on the inclusive side: the
+// AI's 1-10 scale already reserves the very top for genuinely elite
+// fixtures, so a flat 6 still means "a real, worth-watching game", not
+// "the best of a bad day" - the failure mode worth avoiding here is an
+// empty or sparse 推薦賽事 list on an otherwise busy night, not a slightly
+// generous one.
+const RECOMMENDED_MIN_SCORE = 6;
 
 function isQuietHours(match) {
   const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
@@ -1070,77 +1006,31 @@ function overlapMinutes(a, b) {
   return overlapEnd > overlapStart ? (overlapEnd - overlapStart) / 60_000 : 0;
 }
 
-function meaningfullyOverlaps(a, b) {
-  return overlapMinutes(a, b) >= MEANINGFUL_OVERLAP_MINUTES;
-}
-
-// Groups ONE local calendar day's worth of eligible (non-quiet-hour)
-// matches into viewing slots and decides each slot's pick - called once
-// per day from resolveViewingPlan below. Mutates each match in `dayMatches`
-// in place (.recommended/.stackAlternativeIds), same as the rest of this
-// file's convention. See the top-of-section comment for why this is one
-// clustering pass rather than a scheduling DP plus separate diversity/
-// merge passes.
-//
-// `priorityOrder`'s nudge and quiet-hour exclusion already happened before
-// this runs (see resolveViewingPlan) - everything here only ever sees one
-// day's already-eligible matches, so this never needs its own day-key or
-// quiet-hour re-check.
+// Marks each of ONE local calendar day's worth of eligible (non-quiet-hour)
+// matches as `recommended` or not - called once per day from
+// resolveViewingPlan below. Mutates each match in `dayMatches` in place
+// (.recommended), same as the rest of this file's convention. See the
+// top-of-section comment for why this is a flat per-match threshold rather
+// than a per-slot pick: overlap is no longer a reason to exclude a
+// genuinely good match, only something worth telling the viewer about (see
+// buildMatchCard's own overlap note).
 function pickDayRecommendations(dayMatches) {
-  dayMatches.forEach(match => { match.recommended = false; });
-  const sparse = dayMatches.length <= SPARSE_DAY_MAX_MATCHES;
-
-  // Anchor-claiming, highest-effectiveScore-first: an unclaimed match
-  // becomes a cluster's anchor, and only matches that MEANINGFULLY overlap
-  // that SPECIFIC anchor (never each other transitively - see top-of-
-  // section comment on why chained/connected-component grouping silently
-  // swallowed whole evenings in an earlier version of this file) join its
-  // cluster and get claimed. A match that meaningfully overlaps two
-  // different anchors joins whichever is processed first (the higher-
-  // scored one) - it never bridges them into one cluster. A match with no
-  // meaningful overlap with anything else simply becomes its own
-  // single-member cluster, which is exactly how a sport with nothing else
-  // airing at the same time ends up recommended without needing a separate
-  // diversity mechanism at all.
-  const claimed = new Set();
-  const clusters = [];
-  dayMatches
-    .slice()
-    .sort((a, b) => b.effectiveScore - a.effectiveScore)
-    .forEach(anchor => {
-      if (claimed.has(anchor.id)) return;
-      claimed.add(anchor.id);
-      const members = dayMatches.filter(m => !claimed.has(m.id) && meaningfullyOverlaps(anchor, m));
-      members.forEach(m => claimed.add(m.id));
-      clusters.push({ anchor, members });
-    });
-
-  // Each cluster's anchor is the pick for that slot; any cluster-mate that
-  // clears isStackQualityWorthy becomes a swipeable alternative, capped at
-  // STACK_MAX_ALTERNATIVES and ranked by score. A cluster-mate that doesn't
-  // clear it just loses its slot entirely, same as before - it still shows
-  // up in "所有賽事" with the usual "time overlaps what's recommended"
-  // note (see buildMatchCard), it just isn't offered as a swipe option.
-  clusters.forEach(({ anchor, members }) => {
-    anchor.recommended = true;
-    const worthy = members
-      .filter(m => isStackQualityWorthy(m, anchor, { sparse }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, STACK_MAX_ALTERNATIVES);
-    if (worthy.length) anchor.stackAlternativeIds = worthy.map(m => m.id);
+  dayMatches.forEach(match => {
+    match.recommended = match.effectiveScore >= RECOMMENDED_MIN_SCORE;
   });
 }
 
 // `priorityOrder` (see "Sport priority settings" above) nudges
 // effectiveScore away from the AI's own score - the displayed reason/.score
-// always stay the true, un-nudged values; only the scheduling DP's notion
-// of "which match wins this slot" sees the adjusted number, so a viewer's
-// preference can tip a close call without pretending a mediocre match is
-// actually great. A sport ranked 1st gets the biggest positive nudge, the
-// sport ranked in the exact middle gets none, and the last-ranked sport
-// gets the biggest negative one - symmetric around the middle rank so "no
-// preference at all" (the default order) really does mean zero nudge for
-// everyone, not just for whichever sport happens to be first in the array.
+// always stay the true, un-nudged values; only RECOMMENDED_MIN_SCORE's own
+// threshold check sees the adjusted number, so a viewer's preference can
+// shift which side of that line a close-to-the-bar match falls on, without
+// pretending a mediocre match is actually great. A sport ranked 1st gets
+// the biggest positive nudge, the sport ranked in the exact middle gets
+// none, and the last-ranked sport gets the biggest negative one -
+// symmetric around the middle rank so "no preference at all" (the default
+// order) really does mean zero nudge for everyone, not just for whichever
+// sport happens to be first in the array.
 function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
   const centerRank = (priorityOrder.length - 1) / 2;
   const withIntervals = matches.map(match => {
@@ -1150,9 +1040,10 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
     const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
     // Overrides the build-time composite with whichever field the chosen
     // style actually ranks by (see recommendStyleScore) - every downstream
-    // consumer of `.score`/`.effectiveScore` (isStackQualityWorthy,
-    // pickDayRecommendations' cluster-anchor ranking, etc.) then just works
-    // off this one number without needing to know styles exist at all.
+    // consumer of `.score`/`.effectiveScore` (pickDayRecommendations'
+    // threshold check, the overlap note's own display, etc.) then just
+    // works off this one number without needing to know styles exist at
+    // all.
     const styleScore = recommendStyleScore(match, recommendStyle);
     return {
       ...match,
@@ -1164,12 +1055,11 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   });
 
   // Computed across every fetched match regardless of day or quiet hours -
-  // used purely for display (the "time overlaps what's recommended" note on
-  // a non-recommended card) and as the candidate pool pickDayRecommendations
-  // draws its stack alternatives from. A finished match is excluded on both
-  // sides of this: it's never itself worth flagging as "overlaps something
-  // else" (it's over, there's nothing left to conflict with), and it's not
-  // a real alternative for anything still upcoming either.
+  // used purely for display (buildMatchCard's own overlap note, on ANY
+  // card whose start overlaps an earlier match, recommended or not - see
+  // that function). A finished match is excluded: it's never itself worth
+  // flagging as "overlaps something else" once it's over, and it's not a
+  // meaningful reference point for anything still upcoming either.
   withIntervals.forEach(match => {
     match.overlappingIds = match.isFinished
       ? []
@@ -1181,8 +1071,8 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // "What's worth watching" is decided one local calendar day at a time
   // (see top-of-section comment) - bucket every eligible (non-quiet-hour,
   // not-already-finished) match by the local day it starts on, then run the
-  // whole DP/diversity/stacking pipeline independently per day. A match
-  // excluded here (quiet hours, or already over) simply keeps its default
+  // per-match threshold check independently per day. A match excluded here
+  // (quiet hours, or already over) simply keeps its default
   // `recommended: false` from above - a finished match has nothing left to
   // recommend, it's kept around purely so the day's schedule stays visible
   // and continuous instead of matches disappearing the moment they end.
@@ -1236,7 +1126,7 @@ function renderVenue(el, match) {
   el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
-function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null } = {}) {
+function buildMatchCard(match) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   const start = Date.parse(match.startTimeUtc);
   const end = start + match.durationMinutes * 60_000;
@@ -1331,74 +1221,49 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (isStackAlternative) {
-    recommendedTag.hidden = false;
-    recommendedTag.textContent = '同時段選擇';
-    recommendedTag.classList.add('is-alternative');
-  } else if (match.recommended) {
-    recommendedTag.hidden = false;
-  }
+  if (match.recommended) recommendedTag.hidden = false;
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
   if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
 
-  // Two cases, deliberately not layered on top of each other:
-  //   1. Rendered as a card inside another match's swipeable stack (see
-  //      renderRecommendedSection/buildMatchStack) - shown at full
-  //      strength, no muting, since being offered as a swipe-to option is
-  //      already the point; the plain "所有賽事" listing further down
-  //      still mutes this same fixture on its own, unstacked card. This
-  //      now also covers what used to be a separate "recommended, but
-  //      overlapping the previous recommended pick" case - two recommended
-  //      matches that overlap in time get merged into one stack in
-  //      resolveViewingPlan rather than shown as two adjacent cards, so
-  //      that case no longer exists on its own.
-  //   2. Genuinely lost its slot with nothing surfacing it as an
-  //      alternative anywhere - muted, with a note pointing at what's
-  //      recommended instead.
-  //   3. The recommended pick itself, when something real overlaps it that
-  //      never made the stack (didn't clear isStackQualityWorthy) - an
-  //      informational note, not a warning, purely so the actual overlap
-  //      window is never silently invisible from the pick's own card.
-  // Every case that names another match also says HOW LONG the two actually
-  // overlap (via computeOverlapRange), not just that they do - "重疊" alone
-  // doesn't say whether it's 5 minutes or the whole game, and a full time
-  // range ("9:08–11:03 重疊") reads as noise here since the card already
-  // shows its own start/end above - a plain duration answers the actual
-  // question ("how long do these overlap") in far fewer characters.
-  const overlapClause = other => {
-    const range = computeOverlapRange(match, other);
-    if (!range) return '時間重疊';
-    const mins = Math.round((range.end - range.start) / 60_000);
-    if (mins < 60) return `重疊 ${mins} 分鐘`;
-    const hours = Math.floor(mins / 60);
-    const rem = mins % 60;
-    return `重疊 ${hours} 小時${rem ? ` ${rem} 分` : ''}`;
-  };
+  // A plain fact, independent of recommendation state entirely (see
+  // resolveViewingPlan's own top comment on why overlap no longer decides
+  // who gets recommended): if this match's start overlaps an EARLIER match
+  // (one that started before it - "a previous game", not just any match
+  // that happens to share time with it), say so and say how long, via
+  // computeOverlapRange - a plain duration ("重疊 45 分鐘"), not a repeated
+  // time range, since the card already shows its own start/end above.
+  // Sorted CLOSEST-start-first, not just "any earlier match" - "與 X 重疊"
+  // should name the game most likely airing right before this one started,
+  // not whichever happened to be earliest in the day's own list order.
+  // Among those, still prefers a recommended one when one exists (the more
+  // useful "you could also be watching X" case) over an arbitrary one.
   const conflictNote = node.querySelector('.conflict-note');
-  if (isStackAlternative) {
+  const earlierOverlaps = state.matches
+    .filter(m => (match.overlappingIds || []).includes(m.id) && Date.parse(m.startTimeUtc) < Date.parse(match.startTimeUtc))
+    .sort((a, b) => Date.parse(b.startTimeUtc) - Date.parse(a.startTimeUtc));
+  const earlierOverlap = earlierOverlaps.find(m => m.recommended) || earlierOverlaps[0];
+  if (earlierOverlap) {
+    const range = computeOverlapRange(match, earlierOverlap);
+    const mins = range ? Math.round((range.end - range.start) / 60_000) : null;
+    const clause =
+      mins === null
+        ? '時間重疊'
+        : mins < 60
+          ? `重疊 ${mins} 分鐘`
+          : `重疊 ${Math.floor(mins / 60)} 小時${mins % 60 ? ` ${mins % 60} 分` : ''}`;
     conflictNote.hidden = false;
-    conflictNote.classList.add('is-allowed-overlap');
-    conflictNote.textContent = stackAnchor ? `同時段的另一個選擇，${overlapClause(stackAnchor)}` : '同時段的另一個選擇';
-  } else if (!match.recommended && (match.overlappingIds || []).length) {
-    const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
-    if (others.length) {
-      conflictNote.hidden = false;
-      const who = others.length > 1 ? `${others[0].name} 等 ${others.length} 場` : others[0].name;
-      conflictNote.textContent = `與「${who}」${overlapClause(others[0])}，該時段推薦另一場`;
-    }
-    node.classList.add('is-muted');
-  } else if (match.recommended && !isStackAlternative && (match.overlappingIds || []).length) {
-    const stackedIds = new Set(match.stackAlternativeIds || []);
-    const extra = state.matches.filter(m => match.overlappingIds.includes(m.id) && !stackedIds.has(m.id));
-    if (extra.length) {
-      conflictNote.hidden = false;
-      conflictNote.classList.add('is-info');
-      conflictNote.textContent = `同時段還有 ${extra.length} 場賽事，${overlapClause(extra[0])}，精彩程度較低`;
-    }
+    conflictNote.textContent = `與「${earlierOverlap.name}」${clause}`;
+    // Only dims the card when it's the weaker of the two AND the earlier
+    // one is itself recommended - "you could be watching a better game
+    // right now instead" is worth de-emphasizing for; two matches that are
+    // BOTH recommended and simply overlap are both worth full attention,
+    // so neither gets muted just for that.
+    if (!match.recommended && earlierOverlap.recommended) node.classList.add('is-muted');
+    else conflictNote.classList.add('is-info');
   }
-  if (match.recommended || isStackAlternative) node.classList.add('is-recommended');
+  if (match.recommended) node.classList.add('is-recommended');
 
   const now = Date.now();
   // isFinished is authoritative (ESPN's own status - see build-data.mjs's
@@ -1539,50 +1404,6 @@ function renderFilters() {
   );
 }
 
-// A recommended match plus its swipeable alternatives (see
-// resolveViewingPlan's stackAlternativeIds pass) - a native CSS
-// scroll-snap carousel (see .match-stack in styles.css), not custom touch
-// handling, so swiping works the same way it does anywhere else on this
-// page. Dots track scroll position via a plain scroll listener - good
-// enough at 2-4 cards, no need for an IntersectionObserver.
-function buildMatchStack(primary, alternatives, isPinned) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'match-stack';
-
-  const hint = document.createElement('p');
-  hint.className = 'match-stack-hint';
-  hint.textContent = `⟷ 這個時段還有 ${alternatives.length} 個選擇，左右滑動比較`;
-
-  const scroller = document.createElement('div');
-  scroller.className = 'match-stack-scroller';
-  const cards = [primary, ...alternatives];
-  cards.forEach((match, index) => {
-    const card = buildMatchCard(match, { isStackAlternative: index > 0, stackAnchor: primary });
-    if (index === 0 && isPinned) card.classList.add('is-pinned');
-    scroller.appendChild(card);
-  });
-
-  const dots = document.createElement('div');
-  dots.className = 'match-stack-dots';
-  const dotEls = cards.map((_, index) => {
-    const dot = document.createElement('span');
-    dot.className = 'match-stack-dot' + (index === 0 ? ' is-active' : '');
-    dots.appendChild(dot);
-    return dot;
-  });
-  scroller.addEventListener(
-    'scroll',
-    () => {
-      const activeIndex = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
-      dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
-    },
-    { passive: true }
-  );
-
-  wrapper.append(hint, scroller, dots);
-  return wrapper;
-}
-
 function renderRecommendedSection() {
   const dayMatches = applySportFilter(matchesForSelectedDay().filter(m => m.recommended));
   dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
@@ -1594,24 +1415,11 @@ function renderRecommendedSection() {
     return;
   }
   recommendedEmptyEl.hidden = true;
-  // stackAlternativeIds can point at a fixture on a different (adjacent)
-  // local day if the recommended match's slot straddles midnight for this
-  // viewer - looked up from the full state.matches, not just today's
-  // bucket, so that edge case doesn't just silently drop the alternative.
-  const byId = new Map(state.matches.map(m => [m.id, m]));
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const alternatives = (match.stackAlternativeIds || [])
-      .map(id => byId.get(id))
-      .filter(alt => alt && (state.activeSport === 'all' || alt.sport === state.activeSport));
-
-    if (!alternatives.length) {
-      const card = buildMatchCard(match);
-      if (index === 0) card.classList.add('is-pinned');
-      fragment.appendChild(card);
-      return;
-    }
-    fragment.appendChild(buildMatchStack(match, alternatives, index === 0));
+    const card = buildMatchCard(match);
+    if (index === 0) card.classList.add('is-pinned');
+    fragment.appendChild(card);
   });
   recommendedListEl.replaceChildren(fragment);
 }
@@ -1906,8 +1714,8 @@ refreshDataBtn.addEventListener('click', () => checkForUpdate());
 // section) - downloads the CURRENT recommendation plan as JSON, entirely
 // client-side. state.matches (post-resolveViewingPlan), not
 // state.rawMatches, is deliberately what's exported: the whole point is to
-// inspect the actual .recommended/.stackAlternativeIds/.score decision this
-// build made, not just the raw fetched fixtures behind it.
+// inspect the actual .recommended/.score decision this build made, not
+// just the raw fetched fixtures behind it.
 function exportRecommendationData() {
   const payload = {
     exportedAt: new Date().toISOString(),

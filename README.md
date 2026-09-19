@@ -54,47 +54,41 @@ Scoring and picking are split across two different places, deliberately:
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
-   groups **one local calendar day at a time** into **viewing slots** and
-   picks each slot's best fixture. This has to run client-side, not at
-   build time, because its real inputs are relative to *your* clock, and
-   one static build serves every viewer in every timezone at once:
+   decides **one local calendar day at a time** which fixtures are worth
+   recommending. This has to run client-side, not at build time, because
+   its real inputs are relative to *your* clock, and one static build
+   serves every viewer in every timezone at once:
    - A fixture whose **local** start time falls between midnight and 5am
-     is never eligible to be picked, however good its score — this site
-     won't tell you a 4am kickoff is unmissable. It still shows up further
-     down in "all matches", just never as a recommended pick.
-   - Two fixtures belong to the same viewing slot only if they genuinely,
-     substantially overlap in real time — `MEANINGFUL_OVERLAP_MINUTES`, a
-     large, unambiguous chunk of shared broadcast window (see
-     `pickDayRecommendations`'s own top comment for why this replaced an
-     earlier, much more elaborate design: a formal scheduling algorithm
-     plus a separate "make sure a crowded-out sport still gets a turn"
-     pass plus a third pass to clean up what the second one could break —
-     three interacting passes that kept finding new ways to misbehave,
-     each patch fixing one bug by opening a different one. One rule -
-     "does the actual overlap justify treating these as the same slot" -
-     turned out to be the only question that mattered, and answering it
-     directly needed none of that machinery). Within a slot, the
-     highest-scoring fixture is the pick; any slot-mate that's genuinely
-     "equally good" (close score, same sport) or "a good game from a
-     different sport" becomes a swipeable alternative (see "Page layout"
-     below) - a slot-mate that clears neither just loses its pick status
-     entirely, shown only in "所有賽事" with a note pointing at what's
-     recommended for that slot instead. A sport with nothing else airing
-     at the same time simply becomes its own one-fixture slot, recommended
-     on its own merits - there's no separate "make sure every sport gets a
-     turn" step, because there's no scheduling-driven crowding-out left to
-     correct for in the first place.
-   - Whichever pick is currently live, or (failing that) the soonest one
-     still to come, is pinned to the top of the day's list.
+     is never eligible to be recommended, however good its score — this
+     site won't tell you a 4am kickoff is unmissable. It still shows up
+     further down in "all matches", just never as a recommended pick.
+   - A fixture is recommended purely on its own merits
+     (`RECOMMENDED_MIN_SCORE`, a flat bar its own score has to clear) -
+     **not** relative to whatever else happens to be airing at the same
+     time. Earlier designs (see `pickDayRecommendations`'s own top comment
+     for the full history: a scheduling DP, then an overlap-clustering pass
+     with one pick per slot and the rest demoted to a swipeable
+     "alternative" or dropped) all shared the same real flaw: two or three
+     genuinely good fixtures airing at once meant only one of them actually
+     got recommended, purely because something else nearby scored slightly
+     higher - not because the others weren't worth watching. Overlap is
+     still surfaced - see the next bullet - it just no longer excludes a
+     good match from being recommended.
+   - Any card whose start overlaps an **earlier** match gets a small note
+     saying so and for how long ("與「X」重疊 45 分鐘") - this is a plain
+     fact about the schedule, shown regardless of whether either match is
+     recommended, so two great fixtures airing at once are both still
+     fully recommended, with a note letting you know they clash.
+   - Whichever recommended fixture is currently live, or (failing that) the
+     soonest one still to come, is pinned to the top of the day's list.
 
 ## Page layout
 
-- A horizontally-scrolling **day picker** at the top — today plus the next
-  6 days up front, with a "+N more" pill that reveals the rest of the
-  already-fetched 14-day window on tap (no extra network request — see
-  above, it's all in the one `matches.json` fetched on page load). Defaults
-  to today, but jumps ahead to the next day that still has a fixture to
-  come if today's are all already over.
+- A horizontally-scrolling **day picker** at the top — every day in the
+  already-fetched 14-day window, all up front (no extra network request,
+  no "load more" click - it's all in the one `matches.json` fetched on page
+  load). Defaults to today, but jumps ahead to the next day that still has
+  a fixture to come if today's are all already over.
 - A row of **sport filter chips** (全部/英超/MLB/...) below the day picker,
   built only from sports actually present in the enabled set (see "Enabled
   sports settings" below) - narrows both sections below to one sport.
@@ -127,31 +121,21 @@ Scoring and picking are split across two different places, deliberately:
   relative countdown next to it, instead of three separate stacked labels -
   the countdown switches from hours to whole days once a fixture is more
   than 24 hours out ("2 天 5 小時後", not "53 小時後"), both computed from
-  the sport's average broadcast length, same as the scheduling logic above.
+  the sport's average broadcast length.
 - No competitiveness/watchability meters on the card - just the one-sentence
-  AI reason. The numbers still drive the scheduling and tie-breaking behind
-  the scenes; the page itself only ever shows the recommendation, not the
-  data behind it.
-- A recommended fixture with a genuinely stack-worthy slot-mate (see
-  `isStackQualityWorthy` in `resolveViewingPlan`) renders as a
-  **horizontally swipeable card stack** (native CSS scroll-snap, the same
-  kind of touch swipe the day picker already uses) instead of either
-  silently picking one or showing several at once - only one card is ever
-  on screen by default, the others are a deliberate swipe away with dots
-  marking how many there are. A version of this that showed every
-  alternative expanded at once was tried first and dropped as too
-  cluttered. Whether two fixtures can stack together at all is decided
-  once, by cluster membership itself (`MEANINGFUL_OVERLAP_MINUTES` - see
-  `pickDayRecommendations`'s own comment for why this replaced an earlier,
-  much more elaborate multi-pass design): a large, unambiguous chunk of
-  ACTUAL shared broadcast window, not merely close start times - two
-  fixtures whose durations technically graze by five minutes don't
-  qualify, and two fixtures that start 45+ minutes apart but are both
-  still genuinely on together for the next two hours do. Whether a
-  slot-mate is worth SHOWING as an alternative is then a separate,
-  quality-only question (`isStackQualityWorthy`): genuinely "equally good"
-  (a close score, same sport as the pick), or a good game from a
-  *different* sport.
+  AI reason. The number still drives whether a fixture clears
+  `RECOMMENDED_MIN_SCORE` behind the scenes; the page itself only ever
+  shows the recommendation, not the data behind it.
+- Two or more fixtures overlapping in time are **each shown as their own
+  full recommended card** if they each clear the bar on their own merits -
+  there's no single "pick" per time slot and nothing to swipe through (an
+  earlier version tried exactly that - one pick, the rest demoted to a
+  swipeable alternative or dropped entirely - and it meant a night with
+  several genuinely good, genuinely simultaneous fixtures surfaced only
+  one of them). A card whose start overlaps an earlier match instead gets
+  a small note naming that match and how long they overlap
+  (`computeOverlapRange` in `buildMatchCard`), so the clash is visible
+  without either fixture losing its recommendation over it.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -172,41 +156,23 @@ Scoring and picking are split across two different places, deliberately:
   international rights holder - a genuinely different, unrelated fact from
   who carries it in Taiwan).
 
-## Sport priority (⚙ in the header)
+## Sport priority (⚙, floating bottom-right)
 
-MLB alone can field ~15 games a night, almost all landing in the same few
-overlapping evening windows - so even when every one of them is a
-perfectly good match, only one can win a given slot, and a less-crowded
-sport's ordinary fixture can end up looking like it's "always" the pick
-for that slot purely because it had less competition, not because this
-site favors it. There's no universally correct answer for which sport
-*should* win a close call, so instead of guessing, a small settings panel
-(the ⚙ button in the header) lets each viewer rank the five sports
-best-to-least - the direct version of "if these two are equally good,
-which do you want?", which a per-sport "less/normal/more" dial always left
-ambiguous relative to every other sport at the same level. The order is
-stored in `localStorage` (per-browser, nothing sent anywhere) and only ever
-nudges `resolveViewingPlan`'s own scoring when picks are close - the AI's
-underlying scores never change, and re-ranking re-runs the whole plan and
-re-renders immediately, without closing the panel or reloading.
-
-**A lower-ranked sport doesn't disappear just because a busier one shares
-its evening.** Ranking MLB above MLS doesn't mean "never show MLS". An
-earlier design ran a formal scheduling algorithm over the WHOLE day first
-(so MLB's sheer volume - ~15 games most evenings - could win nearly every
-slot on density alone, needing a separate "diversity floor" pass afterward
-to rescue a sport that got crowded out despite never actually losing a
-straight comparison) - see `pickDayRecommendations`'s own comment for why
-that turned out fragile enough to replace. The current design sidesteps
-the problem instead of patching around it: two fixtures only ever compete
-for the same pick when they genuinely, substantially overlap in real time
-(`MEANINGFUL_OVERLAP_MINUTES`), so an MLS game that isn't actually
-airing at the same time as whichever MLB game is winning ITS slot was
-never competing with it in the first place - it gets its own slot
-automatically. `priorityOrder`'s nudge (and `isStackQualityWorthy`'s
-"good game from a different sport" case, when two fixtures DO genuinely
-overlap) still decide close calls the same way as before; there's just no
-separate rescue mechanism needed for the common case anymore.
+Since a fixture is now recommended purely on its own score against a flat
+bar (`RECOMMENDED_MIN_SCORE` - see "How it works" above), there's no
+per-slot "competition" left for sport priority to referee - the whole
+reason an earlier design needed it (only one pick per overlapping slot, so
+*something* had to decide which sport won a close one) no longer applies.
+`priorityOrder` still does one real thing: it nudges a match's
+`effectiveScore` up or down slightly before that threshold check, so a
+viewer's preferred sports clear the bar a little more easily and their
+least favorite needs to be a little better to clear it too - a small,
+symmetric tilt (1st-ranked gets the biggest positive nudge, last-ranked the
+biggest negative, the exact middle rank gets none), never enough on its own
+to make a mediocre match recommended or keep a genuinely good one out. The
+order is stored in `localStorage` (per-browser, nothing sent anywhere) and
+re-ranking re-runs the whole plan and re-renders immediately, without
+closing the panel or reloading.
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 
