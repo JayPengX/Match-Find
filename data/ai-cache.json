@@ -555,41 +555,6 @@
     "source": "ai",
     "promptVersion": 9
   },
-  "mlb-401816993": {
-    "startTimeUtc": "2026-09-19T01:40:00.000Z",
-    "competitiveness": 7,
-    "watchability": 7,
-    "broadcastQuality": 6,
-    "reason": "教士全力衝刺外卡，對戰馬林魚的實力與話題性略居其餘兩場之後。",
-    "venueZh": "沛可公園球場",
-    "whereToWatchTw": "愛爾達體育台",
-    "source": "ai",
-    "promptVersion": 6,
-    "refined": true
-  },
-  "mlb-401816995": {
-    "startTimeUtc": "2026-09-19T01:40:00.000Z",
-    "competitiveness": 8,
-    "watchability": 8,
-    "broadcastQuality": 6,
-    "reason": "洋基與響尾蛇皆在季後賽邊緣，戰況膠著且對戰張力十足。",
-    "venueZh": "大通球場",
-    "whereToWatchTw": "愛爾達體育台",
-    "source": "ai",
-    "promptVersion": 6,
-    "refined": true
-  },
-  "mlb-401816996": {
-    "startTimeUtc": "2026-09-19T02:15:00.000Z",
-    "competitiveness": 5,
-    "watchability": 8,
-    "broadcastQuality": 9,
-    "reason": "世仇對決，道奇主場迎戰巨人，Apple TV獨家轉播。",
-    "venueZh": "道奇體育場",
-    "whereToWatchTw": "Apple TV",
-    "source": "ai",
-    "promptVersion": 7
-  },
   "mlb-401817001": {
     "startTimeUtc": "2026-09-19T20:05:00.000Z",
     "competitiveness": 7,
