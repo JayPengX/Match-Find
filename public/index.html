@@ -25,13 +25,7 @@
 <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header class="page-header">
-    <div class="page-header-inner">
-      <img class="brand-mark" src="./favicon.svg" alt="Match Find" width="30" height="30" />
-      <p class="clock" id="local-clock" aria-live="off"></p>
-      <button id="settings-btn" class="settings-btn" type="button" aria-label="設定">⚙</button>
-    </div>
-  </header>
+  <button id="settings-btn" class="settings-fab" type="button" aria-label="設定">⚙</button>
 
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>
   <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="設定">
@@ -148,7 +142,7 @@
       </div>
       <div class="teams" data-teams></div>
       <p class="match-venue"></p>
-      <p class="match-watch" hidden><span class="watch-badge" hidden><img class="watch-logo" alt="" hidden referrerpolicy="no-referrer" /><span class="watch-badge-text"></span></span><span class="watch-text"></span><span class="watch-owned" hidden>已訂閱</span></p>
+      <p class="match-watch" hidden><span class="watch-badge" hidden><img class="watch-logo" alt="" hidden referrerpolicy="no-referrer" /><span class="watch-badge-text"></span></span><span class="watch-text"></span></p>
       <p class="match-reason"></p>
       <p class="conflict-note" hidden></p>
     </article>

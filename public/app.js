@@ -57,13 +57,27 @@ const SPORT_LABELS_ZH = {
   F1: 'F1'
 };
 
-// One small original pictogram per sport (not a league crest - Premier
-// League and MLS share the plain soccer-ball mark, same reasoning as
-// SERVICES' own iconSvg comment: an original shape drawn inline, not a
-// reproduction of any league's actual logo) so a sport badge reads at a
-// glance instead of as a plain colored pill of text. `currentColor` picks
-// up the badge's own text color (see styles.css's .sport-badge[data-sport]
-// rules), so one icon works across every badge color without its own fill.
+// Each league/sanctioning body's own real, official mark, hotlinked from
+// ESPN's CDN - the same team-logos.espncdn.com-family hosting the team
+// crests/F1 logo elsewhere in this file already come from, not a
+// reproduction copied into this repo. Used everywhere a sport is shown -
+// the match card badge, the filter chips, and both sport-related Settings
+// lists (see buildSportIcon below, the one place all four read from).
+const LEAGUE_LOGOS = {
+  'Premier League': 'https://a.espncdn.com/i/leaguelogos/soccer/500/23.png',
+  MLS: 'https://a.espncdn.com/i/leaguelogos/soccer/500/19.png',
+  MLB: 'https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png',
+  NBA: 'https://a.espncdn.com/i/teamlogos/leagues/500/nba.png',
+  F1: 'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png'
+};
+
+// The fallback for LEAGUE_LOGOS above - one small original pictogram per
+// sport, drawn inline rather than hotlinked, used only when a league logo
+// actually fails to load (see buildSportIcon's own onerror handler), same
+// defensive-fallback posture as team/service logos elsewhere in this file.
+// `currentColor` picks up the badge's own text color (see styles.css's
+// .sport-badge[data-sport] rules), so one icon works across every badge
+// color without its own fill.
 const SPORT_ICONS = {
   'Premier League':
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="currentColor" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>',
@@ -76,6 +90,39 @@ const SPORT_ICONS = {
   F1:
     '<svg viewBox="0 0 24 24" fill="none"><path d="M5.2 21V3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><rect x="5.2" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="12.4" y="4" width="3.6" height="3.6" fill="currentColor"/><rect x="8.8" y="7.6" width="3.6" height="3.6" fill="currentColor"/><rect x="16" y="7.6" width="3.6" height="3.6" fill="currentColor"/></svg>'
 };
+
+// Builds one `<span class="sport-icon">` for a given sport - the one place
+// every sport-labeled UI element (the match card badge, filter chips, and
+// both sport-related Settings lists) gets its icon from, so "show the
+// league's real logo, fall back to the drawn pictogram if it fails to
+// load" only has to be implemented once. Same onerror-swap pattern as team/
+// service logos elsewhere in this file.
+function buildSportIcon(sport) {
+  const wrap = document.createElement('span');
+  wrap.className = 'sport-icon';
+  if (LEAGUE_LOGOS[sport]) {
+    const img = document.createElement('img');
+    img.src = LEAGUE_LOGOS[sport];
+    img.alt = '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener(
+      'error',
+      () => {
+        img.remove();
+        if (SPORT_ICONS[sport]) wrap.innerHTML = SPORT_ICONS[sport];
+        else wrap.hidden = true;
+      },
+      { once: true }
+    );
+    wrap.appendChild(img);
+  } else if (SPORT_ICONS[sport]) {
+    wrap.innerHTML = SPORT_ICONS[sport];
+  } else {
+    wrap.hidden = true;
+  }
+  return wrap;
+}
 
 // ---- Broadcast service registry -------------------------------------------
 //
@@ -108,24 +155,36 @@ const SPORT_ICONS = {
 // whereToWatchTw (see the shared proxy's buildMatchRecommendPrompt) still
 // shows up as plain text on the card either way (see buildMatchCard's
 // watch-text) - this registry only controls which ones additionally get a
-// recognizable logo/color badge and can be picked as "a service I own" in
-// Settings, scoped down to the services this site's own viewer actually
-// cares about tracking.
-// `iconSvg` is a small original pictogram (a TV outline, a broadcast-signal
-// mark), not a reproduction of either service's real trademarked logo -
-// drawn inline instead of hotlinked so the badge always renders (no
-// external request that can fail) and reads clearly at 18px on a solid
-// gradient instead of a flat color square with a squashed wordmark on top.
-// `logoBg` is a two-stop gradient, not a flat fill, purely so the badge
-// itself looks like a designed icon rather than a plain colored sticker.
+// recognizable logo/color badge, scoped down to the services this site's
+// own viewer actually cares about tracking.
+// `logoBg` is a two-stop gradient, not a flat fill (an earlier version used
+// a flat fill, which read as a plain colored sticker sitting behind the
+// logo rather than a designed icon) - the logo itself stays each service's
+// own real, official mark though, hotlinked rather than reproduced into
+// this repo, same posture as the team/F1 logos already pulled from ESPN's
+// own CDN elsewhere in this file: most are Wikimedia Commons
+// (Special:FilePath, its own stable hotlink-friendly redirect to the
+// current file - confirmed live, not just assumed), 愛爾達's own is Google
+// Play's app-icon CDN (see that entry's own comment for why Commons had
+// nothing usable). buildMatchCard tries `logo` first and only falls back
+// to the plain colored-initial `badge` on a load failure (same onerror
+// pattern as team logos) or when `logo` is absent.
 const SERVICES = [
+  // The Commons file this used to point at (ELTA_logo.svg) turned out, on
+  // closer look, to be the logo of ELTA - a Lithuanian news agency that
+  // just happens to share the initialism - not Taiwan's 愛爾達體育台 at
+  // all, and no genuine Commons file for the Taiwan channel's own mark
+  // existed to replace it with. This logo instead comes from 愛爾達電視's
+  // own official Android app icon on the Google Play Store - a real,
+  // confirmed-correct source, just not one with Commons' own "always
+  // resolves to the file's current version" redirect guarantee.
   {
     id: 'elta',
     pattern: /愛爾達|ELTA/i,
     label: '愛爾達體育台',
     badge: '達',
     color: '#ff7a3d',
-    iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="17.5" r="1.4" fill="#fff" stroke="none"/><path d="M8.3 14a5.2 5.2 0 0 1 7.4 0"/><path d="M5 10.8a9.4 9.4 0 0 1 14 0"/></svg>',
+    logo: 'https://play-lh.googleusercontent.com/vE0VONaUjXyEgpUv0efGHg2_GS_Kbmx3YKyWPWzmv8oX-BlTzDReK17V9GhuJ7e7MMmFWvrVyP08vn03Q_H3',
     logoBg: 'linear-gradient(155deg, #ff9457, #e8531a)'
   },
   {
@@ -134,7 +193,7 @@ const SERVICES = [
     label: 'Apple TV',
     badge: 'TV',
     color: '#1d1d1f',
-    iconSvg: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="12" rx="2.2"/><path d="M9 20.5h6"/><path d="M12 17.5v3"/></svg>',
+    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/AppleTVLogo.svg',
     logoBg: 'linear-gradient(155deg, #3a3a3d, #0c0c0e)'
   },
   {
@@ -149,9 +208,11 @@ const SERVICES = [
 ];
 // Fixed rather than a per-viewer Settings toggle (see "Broadcast service
 // registry" above) - this site's own owner's real subscriptions, used as a
-// tie-breaking nudge in resolveViewingPlan (a match on a service you don't
-// have is still shown and can still be recommended, see
-// OWNED_SERVICE_SCORE_BONUS below) and as a small "已訂閱" mark in the UI.
+// silent tie-breaking nudge in resolveViewingPlan only (see
+// OWNED_SERVICE_SCORE_BONUS below) - a great game on a service you don't
+// have still shows up and can still be recommended, this just tips a
+// genuinely close call. No badge/mark in the UI for it anymore - it's a
+// scoring input, not something worth a viewer's attention on every card.
 const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
 
 function resolveService(whereToWatchTw) {
@@ -159,7 +220,6 @@ function resolveService(whereToWatchTw) {
   return SERVICES.find(s => s.pattern.test(whereToWatchTw)) || null;
 }
 
-const clockEl = document.getElementById('local-clock');
 const appEl = document.getElementById('app');
 const dayScrollerEl = document.getElementById('day-scroller');
 const filtersRow = document.getElementById('sport-filters');
@@ -677,6 +737,8 @@ function renderSettingsPanel() {
       const rank = document.createElement('span');
       rank.className = 'settings-sport-rank';
       rank.textContent = String(index + 1);
+      const icon = buildSportIcon(sport);
+      icon.classList.add('settings-sport-icon');
       const label = document.createElement('span');
       label.className = 'settings-sport-label';
       label.textContent = SPORT_LABELS_ZH[sport];
@@ -708,7 +770,7 @@ function renderSettingsPanel() {
       downBtn.addEventListener('click', () => move(1));
 
       moveGroup.append(upBtn, downBtn);
-      row.append(rank, label, moveGroup);
+      row.append(rank, icon, label, moveGroup);
       return row;
     })
   );
@@ -739,7 +801,10 @@ function renderEnabledSportsPanel() {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = enabled ? 'settings-chip is-active' : 'settings-chip';
-      chip.textContent = SPORT_LABELS_ZH[sport];
+      chip.appendChild(buildSportIcon(sport));
+      const label = document.createElement('span');
+      label.textContent = SPORT_LABELS_ZH[sport];
+      chip.appendChild(label);
       chip.setAttribute('aria-pressed', String(enabled));
       chip.disabled = enabled && state.enabledSports.size === 1;
       chip.addEventListener('click', () => {
@@ -788,14 +853,6 @@ function localDayFormatter() {
 function shortDayFormatter() {
   return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'numeric', day: 'numeric' });
 }
-
-function updateClock() {
-  const now = new Date();
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  clockEl.textContent = `你的當地時間：${localTimeFormatter().format(now)}（${tz}）`;
-}
-updateClock();
-setInterval(updateClock, 30_000);
 
 function relativeLabel(startMs, endMs) {
   const now = Date.now();
@@ -1210,9 +1267,7 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
 
   const badge = node.querySelector('.sport-badge');
   badge.dataset.sport = match.sport;
-  const sportIcon = node.querySelector('.sport-icon');
-  if (SPORT_ICONS[match.sport]) sportIcon.innerHTML = SPORT_ICONS[match.sport];
-  else sportIcon.hidden = true;
+  node.querySelector('.sport-icon').replaceWith(buildSportIcon(match.sport));
   node.querySelector('.sport-badge-text').textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
 
   const teamsEl = node.querySelector('[data-teams]');
@@ -1238,15 +1293,7 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
     const badgeLogo = watchEl.querySelector('.watch-logo');
     const badgeText = watchEl.querySelector('.watch-badge-text');
     const service = resolveService(match.whereToWatchTw);
-    if (service && service.iconSvg) {
-      // A drawn-inline pictogram (see SERVICES' own comment) - never fails
-      // to load, so there's no hotlink fallback path to wire up here.
-      badge.hidden = false;
-      badge.style.background = service.logoBg || service.color || '#fff';
-      badgeLogo.hidden = true;
-      badgeText.hidden = true;
-      badge.innerHTML = service.iconSvg;
-    } else if (service && service.logo) {
+    if (service && service.logo) {
       badge.hidden = false;
       badge.style.background = service.logoBg || '#fff';
       badgeLogo.src = service.logo;
@@ -1281,10 +1328,6 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
     } else {
       badge.hidden = true;
     }
-    // A quiet "you already have this" mark rather than hiding/muting
-    // anything without it - see DEFAULT_MY_SERVICE_IDS's own comment on why
-    // this stays a nudge, not a filter.
-    watchEl.querySelector('.watch-owned').hidden = !(service && state.myServiceIds.has(service.id));
   }
 
   const recommendedTag = node.querySelector('.recommended-tag');
@@ -1318,25 +1361,32 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
   //      never made the stack (didn't clear isStackQualityWorthy) - an
   //      informational note, not a warning, purely so the actual overlap
   //      window is never silently invisible from the pick's own card.
-  // Every case that names another match also names the real, overlapping
-  // TIME window (via computeOverlapRange), not just that an overlap exists -
-  // "重疊" alone doesn't say whether it's 5 minutes or the whole game.
-  const fmtTime = ms => localTimeFormatter().format(new Date(ms));
+  // Every case that names another match also says HOW LONG the two actually
+  // overlap (via computeOverlapRange), not just that they do - "重疊" alone
+  // doesn't say whether it's 5 minutes or the whole game, and a full time
+  // range ("9:08–11:03 重疊") reads as noise here since the card already
+  // shows its own start/end above - a plain duration answers the actual
+  // question ("how long do these overlap") in far fewer characters.
   const overlapClause = other => {
     const range = computeOverlapRange(match, other);
-    return range ? `${fmtTime(range.start)}–${fmtTime(range.end)} 重疊` : '時間重疊';
+    if (!range) return '時間重疊';
+    const mins = Math.round((range.end - range.start) / 60_000);
+    if (mins < 60) return `重疊 ${mins} 分鐘`;
+    const hours = Math.floor(mins / 60);
+    const rem = mins % 60;
+    return `重疊 ${hours} 小時${rem ? ` ${rem} 分` : ''}`;
   };
   const conflictNote = node.querySelector('.conflict-note');
   if (isStackAlternative) {
     conflictNote.hidden = false;
     conflictNote.classList.add('is-allowed-overlap');
-    const clause = stackAnchor ? overlapClause(stackAnchor) : '同時段';
-    conflictNote.textContent = `同一時段的另一個選擇（${clause}）——精彩程度也不差，滑動比較看看。`;
+    conflictNote.textContent = stackAnchor ? `同時段的另一個選擇，${overlapClause(stackAnchor)}` : '同時段的另一個選擇';
   } else if (!match.recommended && (match.overlappingIds || []).length) {
     const others = state.matches.filter(m => match.overlappingIds.includes(m.id) && m.recommended);
     if (others.length) {
       conflictNote.hidden = false;
-      conflictNote.textContent = `與「${others.map(m => m.name).join('、')}」${overlapClause(others[0])}——該時段推薦的是這一場。`;
+      const who = others.length > 1 ? `${others[0].name} 等 ${others.length} 場` : others[0].name;
+      conflictNote.textContent = `與「${who}」${overlapClause(others[0])}，該時段推薦另一場`;
     }
     node.classList.add('is-muted');
   } else if (match.recommended && !isStackAlternative && (match.overlappingIds || []).length) {
@@ -1345,7 +1395,7 @@ function buildMatchCard(match, { isStackAlternative = false, stackAnchor = null 
     if (extra.length) {
       conflictNote.hidden = false;
       conflictNote.classList.add('is-info');
-      conflictNote.textContent = `同時段還有「${extra.map(m => m.name).join('、')}」（${overlapClause(extra[0])}），精彩程度稍低而未列入選擇。`;
+      conflictNote.textContent = `同時段還有 ${extra.length} 場賽事，${overlapClause(extra[0])}，精彩程度較低`;
     }
   }
   if (match.recommended || isStackAlternative) node.classList.add('is-recommended');
@@ -1471,7 +1521,10 @@ function renderFilters() {
       const btn = document.createElement('button');
       btn.className = 'filter-chip';
       btn.type = 'button';
-      btn.textContent = sport === 'all' ? '全部' : SPORT_LABELS_ZH[sport] || sport;
+      if (sport !== 'all') btn.appendChild(buildSportIcon(sport));
+      const label = document.createElement('span');
+      label.textContent = sport === 'all' ? '全部' : SPORT_LABELS_ZH[sport] || sport;
+      btn.appendChild(label);
       btn.setAttribute('aria-pressed', String(sport === state.activeSport));
       btn.addEventListener('click', () => {
         state.activeSport = sport;

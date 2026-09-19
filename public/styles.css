@@ -40,6 +40,16 @@
   }
 }
 
+html {
+  /* A global type-scale lever, not a one-off tweak - every size below is
+     in rem, so bumping the root once (16px browser default -> 18px) lifts
+     the whole page's hierarchy together instead of needing every rule
+     nudged individually. This is a mobile-first single-column reading app;
+     text this small read as a cramped desktop density, not the bigger,
+     confident type an actual mobile app uses. */
+  font-size: 18px;
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -55,49 +65,29 @@ button {
   font-family: inherit;
 }
 
-/* A slim, minimal chrome strip - not a masthead with a wordmark/tagline -
-   so an installed PWA's own in-app header doesn't duplicate the identity
-   the home-screen icon/OS title bar already carries. Just the mark, the
-   clock, and the one settings entry point. */
-.page-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-}
-.page-header-inner {
-  max-width: 760px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.brand-mark {
-  flex: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-}
-.clock {
-  flex: 1;
-  margin: 0;
-  font-size: 0.72rem;
-  color: var(--text-faint);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.settings-btn {
-  flex: none;
-  width: var(--tap);
-  height: var(--tap);
+/* No header at all - an installed PWA's own home-screen icon/OS title bar
+   already carries the app's identity, so a masthead here would just be
+   empty space repeating it. The one thing a header used to hold that still
+   needs a home is Settings - a floating round button, fixed to the corner,
+   reachable from anywhere without claiming a permanent strip of screen. */
+.settings-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 15;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text-muted);
-  font-size: 1.05rem;
+  font-size: 1.4rem;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  box-shadow: var(--shadow-pinned);
+  transition: color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
-.settings-btn:hover { color: var(--accent); border-color: var(--accent); }
+.settings-fab:hover { color: var(--accent); border-color: var(--accent); }
+.settings-fab:active { transform: scale(0.94); }
 
 .settings-backdrop {
   position: fixed;
@@ -223,6 +213,9 @@ button {
   gap: 8px;
 }
 .settings-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text-muted);
@@ -234,6 +227,7 @@ button {
   min-height: var(--tap);
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
+.settings-chip .sport-icon { width: 20px; height: 20px; }
 .settings-chip.is-active {
   color: var(--accent);
   border-color: var(--accent);
@@ -336,24 +330,27 @@ button {
 main#app {
   max-width: 760px;
   margin: 0 auto;
-  padding: 20px 16px 44px;
+  /* Extra top padding replaces the header's own breathing room now that
+     there isn't one; extra bottom padding keeps the last card clear of the
+     fixed settings FAB instead of sitting underneath it. */
+  padding: 28px 16px 96px;
 }
 
 .section-label {
-  font-size: 0.8rem;
+  font-size: 1rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   color: var(--text-muted);
-  margin: 32px 0 12px;
+  margin: 34px 0 14px;
 }
 .section-label span { color: var(--text); }
 #recommended-section .section-label { margin-top: 4px; }
 
 .day-scroller {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   overflow-x: auto;
-  padding: 4px 2px 10px;
+  padding: 4px 2px 12px;
   scrollbar-width: none;
 }
 .day-scroller::-webkit-scrollbar { display: none; }
@@ -363,10 +360,10 @@ main#app {
   background: var(--bg-elevated);
   color: var(--text);
   border-radius: 999px;
-  padding: 12px 20px;
-  min-height: var(--tap);
-  font-size: 0.9rem;
-  font-weight: 600;
+  padding: 16px 26px;
+  min-height: 56px;
+  font-size: 1.08rem;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
@@ -385,17 +382,21 @@ main#app {
   margin-bottom: 4px;
 }
 .filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 9px 16px;
-  min-height: 38px;
-  font-size: 0.84rem;
+  padding: 10px 18px;
+  min-height: 46px;
+  font-size: 0.98rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
+.filter-chip .sport-icon { width: 18px; height: 18px; }
 .filter-chip[aria-pressed="true"] {
   background: var(--accent-soft);
   border-color: var(--accent);
@@ -489,12 +490,12 @@ main#app {
 }
 .match-time-range {
   font-weight: 700;
-  font-size: 1.05rem;
+  font-size: 1.25rem;
   font-variant-numeric: tabular-nums;
 }
 .match-time-relative {
   flex: none;
-  font-size: 0.76rem;
+  font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-faint);
 }
@@ -508,21 +509,35 @@ main#app {
 .sport-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.7rem;
+  gap: 6px;
+  font-size: 0.86rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  padding: 4px 10px 4px 8px;
+  letter-spacing: 0.01em;
+  padding: 5px 12px 5px 8px;
   border-radius: 999px;
   color: #0b0d12;
   background: #ccc;
 }
 .sport-icon {
   display: inline-flex;
-  width: 13px;
-  height: 13px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
 }
 .sport-icon svg { width: 100%; height: 100%; display: block; }
+.sport-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  /* A white/dark-agnostic drop shadow rather than a background chip -
+     league logos come in every color combination (a dark F1 mark, a
+     white-on-transparent Premier League shield...) and none of them are
+     designed to sit on a same-color pill the way the badge text is. */
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.25));
+}
+.settings-sport-icon { width: 26px; height: 26px; flex: none; }
 .sport-badge[data-sport="Premier League"] { background: var(--sport-epl); color: #0b0d12; }
 .sport-badge[data-sport="MLS"] { background: var(--sport-mls); color: #06231a; }
 .sport-badge[data-sport="MLB"] { background: var(--sport-mlb); color: #2a0808; }
@@ -532,22 +547,22 @@ main#app {
 .teams {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 11px 0 7px;
+  gap: 7px;
+  margin: 13px 0 8px;
 }
 .team-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
   flex-wrap: wrap;
 }
 .team-side {
   flex: none;
-  font-size: 0.64rem;
+  font-size: 0.74rem;
   font-weight: 700;
   line-height: 1;
-  padding: 3px 5px;
+  padding: 4px 6px;
   border-radius: 5px;
   color: var(--text-faint);
   background: var(--border);
@@ -557,49 +572,50 @@ main#app {
   background: var(--accent-soft);
 }
 .team-logo {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   object-fit: contain;
   flex: none;
 }
 .team-name-en {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 1.08rem;
 }
 .team-name-zh {
-  font-size: 0.8rem;
+  font-size: 0.92rem;
   color: var(--text-muted);
 }
 .team-at {
   color: var(--text-faint);
-  font-size: 0.7rem;
+  font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding-left: 33px;
+  padding-left: 37px;
 }
 
 .recommended-tag {
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   font-weight: 700;
   color: var(--good);
   background: var(--good-soft);
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 4px 12px;
 }
 .recommended-tag.is-alternative {
   color: var(--accent);
   background: var(--accent-soft);
 }
 .match-venue {
-  margin: 4px 0 0;
-  font-size: 0.8rem;
+  margin: 5px 0 0;
+  font-size: 0.92rem;
   color: var(--text-muted);
 }
 .match-watch {
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 5px 0 0;
-  font-size: 0.8rem;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 0.92rem;
   color: var(--text-muted);
 }
 /* .match-watch's own `display: flex` above has the same specificity as the
@@ -613,12 +629,12 @@ main#app {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 3px;
-  border-radius: 7px;
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  border-radius: 8px;
   color: #fff;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   font-weight: 700;
   line-height: 1;
   overflow: hidden;
@@ -626,26 +642,17 @@ main#app {
 }
 .watch-badge svg { width: 100%; height: 100%; display: block; }
 .watch-logo {
-  height: 12px;
+  height: 14px;
   width: auto;
-  max-width: 34px;
+  max-width: 40px;
   object-fit: contain;
   display: block;
 }
 .watch-logo[hidden] { display: none; }
-.watch-owned {
-  flex: none;
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: var(--good);
-  background: var(--good-soft);
-  border-radius: 999px;
-  padding: 3px 8px;
-}
 
 .match-reason {
-  margin: 11px 0 0;
-  font-size: 0.87rem;
+  margin: 12px 0 0;
+  font-size: 1rem;
   color: var(--text-muted);
 }
 .match-reason.is-heuristic::after {
@@ -655,8 +662,9 @@ main#app {
 }
 
 .conflict-note {
-  margin: 9px 0 0;
-  font-size: 0.76rem;
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+  font-weight: 600;
   color: var(--warn);
 }
 .conflict-note.is-allowed-overlap {
@@ -676,15 +684,15 @@ main#app {
 #recommended-empty, #all-empty {
   padding: 18px 4px;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 
 .page-footer {
   max-width: 760px;
   margin: 0 auto;
-  padding: 20px 16px 48px;
+  padding: 20px 16px 96px;
   color: var(--text-faint);
-  font-size: 0.76rem;
+  font-size: 0.86rem;
 }
 .page-footer p { margin: 4px 0; }
 #ai-status-note {

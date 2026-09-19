@@ -15,8 +15,11 @@ a plain-language reason, not the raw competitiveness/watchability numbers
 behind it (see "Page layout" below).
 
 No sign-up, no app — it's a GitHub Pages site rebuilt every 15 minutes,
-installable as a PWA (its own minimal chrome has no title bar to duplicate
-what the home-screen icon already carries).
+installable as a PWA. There's no in-page header at all (an earlier version
+had a slim one; dropped entirely - an installed PWA's home-screen icon/OS
+title bar already carries the app's identity, so a masthead here was just
+empty space repeating it) - Settings lives behind a floating button fixed
+to the corner instead.
 
 ## How it works
 
@@ -115,7 +118,8 @@ Scoring and picking are split across two different places, deliberately:
   bilingual English/Traditional-Chinese name; the venue and (when known)
   Taiwan broadcast channel are shown the same bilingual/Chinese way, with a
   small color-coded badge per service (see "Broadcast service registry"
-  below) and a "已訂閱" mark when it's one you actually subscribe to. MLB in
+  below - no separate "已訂閱" mark on the card itself; which services count
+  as yours only ever affects scoring, silently, see that section). MLB in
   particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
   once - the prompt (see the shared proxy's `/match-recommend`) is told to always name
   愛爾達體育台 when both apply, rather than answering inconsistently.
@@ -214,16 +218,17 @@ still shows up as plain text on the card either way (see `watch-text` in
 `buildMatchCard`) - it just doesn't get a logo/color badge, since this
 registry only exists to badge the handful of services actually worth
 tracking, not to catalog every service Gemini might ever answer with.
-愛爾達 and Apple TV render as an original, drawn-inline pictogram (a
-broadcast-signal mark, a TV outline) on a two-stop gradient badge - not a
-hotlinked reproduction of either service's real logo, both so the badge
-never depends on an external request succeeding and so it reads as a
-designed icon rather than a flat color square with a squeezed-in wordmark
-on top. Netflix still uses its real mark via Wikimedia Commons'
-`Special:FilePath` hotlink redirect (confirmed live, not assumed), same
-posture as the team/F1 logos pulled from ESPN's CDN elsewhere in this file;
-if that hotlink ever fails to load, it falls back to a plain colored-initial
-badge (same `onerror` pattern as team logos). Which services count as
+All three render each service's own real, official mark, hotlinked rather
+than reproduced into this repo, same posture as the team/F1 logos pulled
+from ESPN's CDN elsewhere in this file: Netflix and Apple TV via Wikimedia
+Commons' `Special:FilePath` hotlink redirect (confirmed live, not assumed),
+愛爾達 via 愛爾達電視's own official Android app icon on the Google Play
+Store (see that entry's own comment for why Commons had nothing usable).
+`logoBg` behind each mark is a two-stop gradient, not a flat fill, purely
+so the badge reads as a designed icon rather than a plain colored sticker
+sitting behind the logo. If a hotlink ever fails to load, it falls back to
+a plain colored-initial badge (same `onerror` pattern as team logos) rather
+than an empty box. Which services count as
 "yours" (`DEFAULT_MY_SERVICE_IDS`) is fixed to this site's own owner's real
 subscriptions, not a per-viewer Settings toggle - see that constant's own
 comment. Adding a new tracked service later
@@ -234,10 +239,13 @@ about it, same pattern as `SPORT_LABELS_ZH` for sports.
 subscribes to (愛爾達, Apple TV, Netflix, as of writing) - fixed, not a
 per-viewer Settings toggle (an earlier version let each viewer pick their
 own, which added a whole settings section for a nudge that's only ever
-meaningful for this site's own owner). Matched fixtures get a small
-"已訂閱" mark, and a modest score nudge (`OWNED_SERVICE_SCORE_BONUS`) in
-`resolveViewingPlan`, same tie-breaking spirit as sport priority: a great
-game on a service you don't have still shows up and can still be
+meaningful for this site's own owner). It only ever feeds a silent score
+nudge (`OWNED_SERVICE_SCORE_BONUS`) in `resolveViewingPlan` - no visible
+mark on the card either (an earlier version showed a small "已訂閱" tag;
+dropped as one more thing competing for attention on every card for
+information only this site's own owner ever acted on) - same tie-breaking
+spirit as sport priority: a great game on a service you don't have still
+shows up and can still be
 recommended, this only tips a genuinely close call toward the one you can
 actually watch live right now.
 
