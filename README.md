@@ -42,25 +42,25 @@ Scoring and picking are split across two different places, deliberately:
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
-   picks the set of fixtures across the whole fetched window that
-   maximizes total score while staying watchable back-to-back — a
-   weighted-interval-scheduling-style pass over each sport's *average*
-   broadcast length (ESPN never gives an actual end time). This has to run
-   client-side, not at build time, because its two real inputs are both
-   relative to *your* clock, and one static build serves every viewer in
-   every timezone at once:
-   - A fixture whose **local** start time falls between midnight and 7am
+   picks, **one local calendar day at a time**, the set of that day's
+   fixtures that maximizes total score while staying watchable back-to-back
+   — an exact weighted-interval-scheduling solution over each sport's
+   *average* broadcast length (ESPN never gives an actual end time). This
+   has to run client-side, not at build time, because its two real inputs
+   are both relative to *your* clock, and one static build serves every
+   viewer in every timezone at once:
+   - A fixture whose **local** start time falls between midnight and 5am
      is never eligible to be picked, however good its score — this site
-     won't tell you a 3am kickoff is unmissable. It still shows up further
+     won't tell you a 4am kickoff is unmissable. It still shows up further
      down in "all matches", just never as a recommended pick.
-   - A small tolerance absorbs the fact that a duration is only ever a
-     per-sport average, not this match's real length.
-   - A much larger tolerance kicks in whenever either match involved has a
-     high score — this is the deliberate "allow overlap in certain
-     scenarios" behavior: a must-watch fixture is allowed to eat into the
-     next slot a bit rather than being dropped, or bumping its neighbor,
-     over a minor overlap. The UI calls this out explicitly ("Overlaps by
-     about N min with X — kept in the lineup anyway for its quality").
+   - A single small, fixed tolerance (`OVERLAP_TOLERANCE_MINUTES`) absorbs
+     the fact that a duration is only ever a per-sport average, not this
+     match's real length — deliberately fixed rather than score-dependent,
+     since letting two fixtures' own scores widen how much overlap counted
+     as "compatible" used to let a chain of picks slip past the scheduler's
+     own correctness guarantee (see that constant's comment in `app.js` for
+     the full story) and produce a worse, occasionally outright wrong,
+     lineup.
    - Whichever pick is currently live, or (failing that) the soonest one
      still to come, is pinned to the top of the day's list.
 
@@ -146,9 +146,9 @@ volume (~15 games most evenings, all competing with EACH OTHER too) means
 it can end up winning nearly every slot on density alone, leaving a
 perfectly good MLS game with nothing to do with its evening even though it
 never actually lost a straight comparison - it just never got one. After
-the normal DP-based plan is built, `resolveViewingPlan` checks each day for
-any sport that ended up with zero picks despite having at least one
-fixture that clears a real "this is worth watching" bar
+the normal DP-based plan is built for a day, `pickDayRecommendations` checks
+that day for any sport that ended up with zero picks despite having at least
+one fixture that clears a real "this is worth watching" bar
 (`DIVERSITY_MIN_SCORE`), and gives that sport's best such fixture a slot
 anyway. This never overrides a genuine priority preference or a real
 head-to-head loss - it only rescues a sport that got shut out entirely, at
