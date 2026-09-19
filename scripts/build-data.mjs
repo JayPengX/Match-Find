@@ -209,7 +209,28 @@ function competitorContext(competitor) {
 }
 
 async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
-  const dates = Array.from({ length: daysAhead }, (_, i) => yyyymmddUtc(new Date(now.getTime() + i * 86_400_000)));
+  // Queries `now`'s own UTC date AND the day before it - not just `now`
+  // onward. This script runs on a schedule/on push, at whatever UTC
+  // instant that happens to be, and ESPN's own `dates=YYYYMMDD` scoreboard
+  // query groups a game under the calendar day IT started on by ESPN's own
+  // reckoning (for MLB in particular, that tracks the US Eastern "game
+  // date", not the UTC one) - the two only diverge for part of the day,
+  // but this script's own `now` can easily land inside that gap: at, say,
+  // 03:00 UTC the U.S. is still on the PREVIOUS Eastern calendar date
+  // (23:00 ET), so a West Coast night game running long (extra innings,
+  // a rain delay) is still genuinely live RIGHT NOW but was filed under a
+  // UTC date this loop would otherwise never even ask ESPN about - it
+  // wouldn't be missing because it's not "pre"/"in" (see the state filter
+  // below), it would be missing because this script never requested that
+  // day's scoreboard at all. Confirmed as a real, live miss: a viewer
+  // reported watching an MLB game this site's recommendations showed
+  // nothing for. The state filter and the startMs bounds check just below
+  // already correctly exclude anything from that extra day that ISN'T
+  // still 'pre' or 'in' and within window, so asking for one more day up
+  // front costs one extra request per league and risks nothing.
+  const dates = Array.from({ length: daysAhead + 1 }, (_, i) =>
+    yyyymmddUtc(new Date(now.getTime() + (i - 1) * 86_400_000))
+  );
   const results = await Promise.allSettled(
     dates.map(date => fetchJson(espnScoreboardUrl(league.sportKey, league.leagueKey, date)))
   );
@@ -310,6 +331,13 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
       });
     }
   }
+  // TEMPORARY diagnostic - verifying the "query yesterday's date too" fix
+  // above actually surfaces a currently-live game, straight from real
+  // build output. Removed in the immediate follow-up commit once confirmed.
+  console.log(
+    `[debug] ${league.label}: kept ${matches.length}, live now:`,
+    JSON.stringify(matches.filter(m => Date.parse(m.startTimeUtc) <= now.getTime()).map(m => ({ id: m.id, start: m.startTimeUtc, name: m.name })))
+  );
   return matches;
 }
 
@@ -338,7 +366,12 @@ const F1_SESSION_TYPES = [
 ];
 
 async function fetchF1Matches(now, windowEndMs, daysAhead) {
-  const rangeParam = `${yyyymmddUtc(now)}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
+  // Starts one day before `now`, same reasoning and same fix as
+  // fetchTeamLeagueMatches's own `dates` array above - a session ESPN
+  // files under the previous UTC date that's still live right now
+  // shouldn't be invisible to this query just because it started
+  // yesterday by ESPN's own reckoning.
+  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
   let data;
   try {
     data = await fetchJson(espnScoreboardUrl('racing', 'f1', rangeParam));
