@@ -702,6 +702,28 @@ async function main() {
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
 
+  // TEMPORARY diagnostic - the client buckets each match onto the VIEWER's
+  // own local calendar day (public/app.js's localDateKey), which for a
+  // Taiwan-based report means UTC+8. Reproducing that exact bucketing here
+  // against this run's real fetched fixtures, to check per-sport/per-day
+  // counts against what's actually expected, straight from real build
+  // output. Removed in the immediate follow-up once confirmed.
+  {
+    const taipeiDateKey = iso => {
+      const d = new Date(Date.parse(iso) + 8 * 3600_000);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    };
+    const counts = {};
+    for (const m of matches) {
+      if (m.timeTbd) continue;
+      const key = `${m.sport}|${taipeiDateKey(m.startTimeUtc)}`;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    const sorted = Object.fromEntries(Object.entries(counts).sort());
+    console.log('[debug] now (UTC):', now.toISOString(), 'now (Taipei date):', taipeiDateKey(now.toISOString()));
+    console.log('[debug] per-sport per-Taipei-day counts:', JSON.stringify(sorted));
+  }
+
   let cache = pruneCache(await loadCache(), now);
   const meta = await loadMeta();
 
