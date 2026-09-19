@@ -308,11 +308,17 @@ been done:
   requires changing the shared proxy's (`jaypengx-collab/shared-proxy`)
   Gemini prompt/response schema, a different repo, and is a materially
   larger change than a scheduling fix. **Done - see Round 3.**
-- **A full score-architecture rename** (`match.score` → `eventScore`
-  everywhere, removing the old names) - `public/app.js`'s rendering code
-  reads `match.score`/`.effectiveScore` in many places; a full rename is
-  real, separately reviewable work, not something to fold into a
-  scheduling-correctness pass.
+- **A full score-architecture rename** - surveyed properly in Round 3 (see
+  its own section 5 below); the original "`public/app.js`'s rendering code
+  reads `match.score`/`.effectiveScore` in many places" turned out to be
+  wrong (app.js barely reads either field directly at all - the numbers
+  drive the plan inside recommendation.mjs, the card itself only ever
+  shows the AI's reason, see README's "Page layout"), but the REAL scope
+  is bigger than that guess: `score`/`effectiveScore` are the wire format
+  `scripts/build-data.mjs` writes to `matches.json` and every historical
+  export already committed to disk, not just in-memory field names -
+  **partially done, see Round 3 section 5 for exactly what changed and
+  why a wire-format-breaking rename specifically did not.**
 - **A planner "oracle" in the evaluator** (independently computing the
   mathematically optimal schedule from raw candidates and reporting
   actual/oracle as a ratio). **Done - see Round 3.**
@@ -422,3 +428,54 @@ without a real reason would just be a guess dressed up as a fix. Only the
 code comment explaining WHY this pass exists was rewritten, so a future
 reader doesn't reason about it against an architecture that no longer
 exists.
+
+### 5. Score-architecture rename: surveyed, done where it's safe
+
+Round 2 already added `eventScore`/`viewerScore` as additive aliases
+(`computeRecommendationScore`/`resolveViewingPlan` in
+`public/lib/recommendation.mjs`) and deferred a "full rename" as
+out-of-scope, guessing the remaining work was mostly `public/app.js` call
+sites. That guess was checked properly this round, and was wrong on both
+ends:
+
+- **Smaller than expected in `public/app.js`**: a full grep found exactly
+  ONE live read of either field in that whole file
+  (`buildMatchStack`'s own member-ordering sort) - not "many places". The
+  README's own "Page layout" section explains why: this site deliberately
+  never shows a competitiveness/watchability number on a card at all, only
+  the AI's one-sentence reason, so app.js mostly just passes match objects
+  through to render, it doesn't itself compute with their scores. That one
+  call site now reads `viewerScore`.
+- **Bigger than expected everywhere else**: `score` isn't just an
+  in-memory field name, it's the WIRE FORMAT - `scripts/build-data.mjs`
+  computes and writes it straight into `public/data/matches.json`
+  (`match.score = Math.round(...)`), which every historical export
+  (`match-find-export-*.json` downloads, this repo's own committed
+  `matches.json`) already carries under that literal key. A genuine "full
+  rename, remove the old name" would mean changing what `build-data.mjs`
+  actually writes (a breaking change to a data format real files on disk
+  already use), updating every read of it across `build-data.mjs` itself
+  (the contested-cluster sort/filter logic), `recommendation.mjs`
+  (`recommendStyleScore`/`computeEffectiveScore`), and
+  `evaluate-recommendations.mjs`, AND every one of this repo's ~110 tests
+  that construct a match fixture with `score`/`effectiveScore` as a
+  literal property name (most of them) or assert against those names
+  directly.
+
+Given the actual scope - a breaking wire-format change plus a large,
+purely mechanical edit across the test suite - for **zero behavior
+change** (every alias is already the exact same number as the field it
+aliases) and a clarity goal the additive aliases already satisfy, this
+round made the one real, safe app.js improvement (using `viewerScore` in
+the one place that reads it) and `computeDayPlan`'s own `scoreField`
+option now DEFAULTS to `'viewerScore'` instead of `'effectiveScore'`
+(falling back to `effectiveScore` when a match has no `viewerScore` at
+all, e.g. a hand-built test fixture or an older cached object - see that
+function's own comment) - so the scheduler's own default behavior is
+described in the audit's own terms without breaking anything that reads
+the older name. The wire-format rename itself stays not done: the
+audit's own ask was for explicit names to exist and be usable, which they
+already are; actually deleting `score`/`effectiveScore` from the data
+format would cost real risk (a live production JSON schema change) for no
+additional clarity beyond what `eventScore`/`viewerScore` already provide
+today.

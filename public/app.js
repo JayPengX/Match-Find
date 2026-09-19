@@ -1369,7 +1369,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // order stable means normal sequential swiping reaches every member;
   // only the SCROLL POSITION needs to reflect the current pick (see the
   // requestAnimationFrame call below), not the member order itself.
-  const ordered = members.slice().sort((a, b) => b.effectiveScore - a.effectiveScore);
+  // viewerScore, not the older effectiveScore name - see
+  // recommendation.mjs's computeRecommendationScore/resolveViewingPlan for
+  // why both exist (same number, viewerScore is the audit's own explicit
+  // name for "this viewer's own judgment of the match", the one this
+  // stack's card order should actually reflect).
+  const ordered = members.slice().sort((a, b) => b.viewerScore - a.viewerScore);
   const primaryIndex = ordered.findIndex(m => m.id === primary.id);
   ordered.forEach((match, index) => {
     const card = buildMatchCard(match);

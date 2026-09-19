@@ -533,7 +533,7 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 // globally best plan"). Conflict clusters (groupIntoSlots) still exist, but
 // only as a presentation label computed AFTER scheduling, from whichever
 // picks the DP actually made.
-export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'effectiveScore' } = {}) {
+export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore' } = {}) {
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
@@ -542,6 +542,14 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
   if (!candidates.length) return [];
 
+  // Falls back to the older effectiveScore name (never to a bare 0) when
+  // scoreField's own field isn't set - a match that never went through
+  // resolveViewingPlan (most of this module's own tests build one by
+  // hand) has effectiveScore but not the audit's newer viewerScore alias
+  // (see resolveViewingPlan/computeRecommendationScore); both are always
+  // the exact same number whenever a match DOES have both, so this never
+  // changes which match wins a scheduling decision, only which of two
+  // identically-valued field names the DP happens to read.
   const getScore = match => (Number.isFinite(match[scoreField]) ? match[scoreField] : match.effectiveScore);
 
   // Presentational conflict clusters (see groupIntoSlots' own comment) -

@@ -325,6 +325,22 @@ describe('computeDayPlan', () => {
     assert.equal(plan.length, 2);
     assert.ok(a.recommended && b.recommended);
   });
+
+  test('defaults to weighing picks by viewerScore (the audit\'s own name) when a match has one', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9, viewerScore: 3 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 3, viewerScore: 9 });
+    // Same conflict window - effectiveScore alone would pick 'a', but the
+    // default scoreField is now 'viewerScore', so 'b' should win instead.
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.equal(plan[0].id, 'b');
+  });
+
+  test('falls back to effectiveScore when a match has no viewerScore at all (e.g. a hand-built fixture)', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 3 });
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.equal(plan[0].id, 'a');
+  });
 });
 
 describe('resolveViewingPlan', () => {
