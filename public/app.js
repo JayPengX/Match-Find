@@ -216,9 +216,6 @@ const tbdSection = document.getElementById('tbd-section');
 const tbdListEl = document.getElementById('tbd-list');
 const cardTemplate = document.getElementById('match-card-template');
 const teamRowTemplate = document.getElementById('team-row-template');
-const updateBanner = document.getElementById('update-banner');
-const updateReloadBtn = document.getElementById('update-reload-btn');
-updateReloadBtn.addEventListener('click', () => location.reload());
 
 // The manual "fetch again" affordance from the footer (see "Gemini usage
 // status" below) - only the repo owner can actually run this (GitHub asks
@@ -568,10 +565,7 @@ function maybeShowSyncPrompt() {
     // Can't remember a dismissal without storage - default to not nagging.
     prompted = true;
   }
-  if (!prompted) {
-    syncPromptBanner.classList.toggle('is-raised', !updateBanner.hidden);
-    syncPromptBanner.hidden = false;
-  }
+  if (!prompted) syncPromptBanner.hidden = false;
 }
 function dismissSyncPrompt() {
   syncPromptBanner.hidden = true;
@@ -1675,22 +1669,35 @@ function applyEnabledSportsAndRender() {
 //     rebuild of the same one): this tab is still running the OLD
 //     JS/CSS/HTML no matter how fresh the data underneath it is, so
 //     applying new data can't actually pick up whatever changed in the
-//     code. Surface a small, dismissable-by-ignoring banner instead of
-//     silently reloading out from under someone mid-scroll or mid-tap.
+//     code. Force a real reload rather than applying the new data and
+//     leaving the stale code running, or merely flagging it for someone
+//     to notice and click - a fix that's live on the server but still
+//     invisible to whoever's looking at the page isn't actually shipped
+//     yet from their point of view. A plain location.reload() alone isn't
+//     enough here: GitHub Pages serves app.js/styles.css themselves with
+//     Cache-Control: max-age=600 (not configurable - no equivalent of a
+//     custom _headers file), so the browser can still hand back a cached
+//     copy of THOSE specific files without even asking the server, for up
+//     to 10 minutes, regardless of how the reload was triggered. A
+//     different query string on the page URL itself forces a genuinely
+//     fresh index.html fetch, which - now that deploy.yml stamps that
+//     file's own script/stylesheet tags with this build's commit sha at
+//     deploy time - pulls in fresh JS/CSS too, since the browser has never
+//     cached a URL with this exact query string before.
 async function pollForUpdates() {
   try {
     const response = await fetch('./data/matches.json', { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
     if (data.generatedAt === state.generatedAt) return; // nothing new
-    state.generatedAt = data.generatedAt;
-
-    applyMatchData(data);
 
     if (state.buildId && data.buildId && data.buildId !== state.buildId) {
-      updateBanner.hidden = false;
-      if (!syncPromptBanner.hidden) syncPromptBanner.classList.add('is-raised');
+      location.replace(`${location.pathname}?v=${encodeURIComponent(data.buildId)}`);
+      return;
     }
+
+    state.generatedAt = data.generatedAt;
+    applyMatchData(data);
   } catch (error) {
     console.error('update check failed', error);
   }

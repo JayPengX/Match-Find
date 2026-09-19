@@ -314,9 +314,6 @@ button {
 #sync-prompt-banner {
   bottom: 18px;
 }
-#sync-prompt-banner.is-raised {
-  bottom: 78px;
-}
 .sync-prompt-dismiss {
   background: transparent !important;
   color: var(--text-faint) !important;
@@ -729,9 +726,10 @@ main#app {
 /* Same bug class as .match-watch above: this element's own `display: flex`
    has equal specificity to the UA stylesheet's `[hidden] { display: none }`
    and was winning by cascade order, so the banner rendered on every visit
-   regardless of the `hidden` attribute JS actually sets - see
-   public/app.js's pollForUpdates, which only ever removes `hidden` on a
-   real buildId change. */
+   regardless of the `hidden` attribute JS actually sets. This class is now
+   only used by #sync-prompt-banner (see app.js's maybeShowSyncPrompt) - a
+   deployed-new-code detection used to show a banner here too, but that
+   case now forces a real reload instead (see pollForUpdates). */
 .update-banner[hidden] { display: none; }
 .update-banner button {
   border: none;
