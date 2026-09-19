@@ -609,6 +609,13 @@ main#app {
   border-radius: 999px;
   padding: 3px 10px;
 }
+/* "偏好" (a viewer's own swipe choice) - accent blue, not the same green as
+   "推薦" (the system's own pick), so the two are never visually confusable -
+   see buildMatchCard's own comment on why they're different claims. */
+.recommended-tag.is-preferred {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 .match-venue {
   margin: 4px 0 0;
   font-size: 0.82rem;

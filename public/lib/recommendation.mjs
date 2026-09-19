@@ -320,7 +320,8 @@ export function weightedIntervalSchedule(items) {
 //
 // Builds ONE local calendar day's back-to-back viewing plan from its
 // already sport-filtered, non-quiet-hour-excluded candidate matches. Mutates
-// every match in `dayMatches` in place (.recommended/.alternativeIds), same
+// every match in `dayMatches` in place (.recommended/.alternativeIds/
+// .isPreferred), same
 // convention as the rest of this codebase. Returns the plan as a plain
 // array of matches, sorted by start time.
 //
@@ -332,6 +333,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null) {
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
+    match.isPreferred = false;
   });
   const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
   if (!candidates.length) return [];
@@ -359,8 +361,12 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null) {
   picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor)));
 
   picks.sort((a, b) => a.interval.start - b.interval.start);
-  picks.forEach(({ members, choice }) => {
+  picks.forEach(({ members, choice, isPinned }) => {
     choice.recommended = true;
+    // Distinguishes "the system picked this" (推薦) from "you swiped to
+    // this" (偏好, see app.js's buildMatchCard) - a viewer-made choice
+    // isn't the same claim as the algorithm's own judgment.
+    choice.isPreferred = isPinned;
     if (members.length > 1) choice.alternativeIds = members.filter(m => m.id !== choice.id).map(m => m.id);
   });
   return picks.map(p => p.choice);
@@ -383,7 +389,8 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
       scoreBreakdown: breakdown,
       confidence: computeConfidence(match),
       recommended: false,
-      alternativeIds: null
+      alternativeIds: null,
+      isPreferred: false
     };
   });
 

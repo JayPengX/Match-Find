@@ -1067,8 +1067,19 @@ function buildMatchCard(match) {
     }
   }
 
+  // "推薦" is the SYSTEM's own judgment (computeDayPlan's scheduling
+  // decision) - a card that's only in the plan because the viewer swiped
+  // to it (see pinSlotChoice) isn't that, it's the viewer's own choice, so
+  // it gets a visually distinct "偏好" tag instead. Using "推薦" for both
+  // would misattribute a viewer's pick as the algorithm's recommendation.
   const recommendedTag = node.querySelector('.recommended-tag');
-  if (match.recommended) recommendedTag.hidden = false;
+  if (match.isPreferred) {
+    recommendedTag.hidden = false;
+    recommendedTag.textContent = '偏好';
+    recommendedTag.classList.add('is-preferred');
+  } else if (match.recommended) {
+    recommendedTag.hidden = false;
+  }
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
@@ -1270,14 +1281,23 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   const scroller = document.createElement('div');
   scroller.className = 'match-stack-scroller';
-  // The plan's current choice (the pinned one, if any, else whichever
-  // scored highest) always opens first, then the rest by score - so the
-  // stack always visually agrees with what the rest of the page already
-  // decided this slot's pick is.
-  const ordered = [primary, ...members.filter(m => m.id !== primary.id).sort((a, b) => b.effectiveScore - a.effectiveScore)];
+  // A FIXED order (by score, highest first) - independent of which member
+  // is currently pinned/primary. An earlier version put the current pick
+  // first and sorted the rest around it, which reshuffled the whole stack
+  // on every pin; since a pin re-renders (see the settle handler below),
+  // that reset the scroller back to position 0 every time. On a 3+-member
+  // stack, a plain "swipe forward" from that reset position could only
+  // ever reach whichever card the reshuffle happened to place second -
+  // reaching a third member required an unnaturally large single swipe,
+  // which read as "you can only pick between two of them." Keeping the
+  // order stable means normal sequential swiping reaches every member;
+  // only the SCROLL POSITION needs to reflect the current pick (see the
+  // requestAnimationFrame call below), not the member order itself.
+  const ordered = members.slice().sort((a, b) => b.effectiveScore - a.effectiveScore);
+  const primaryIndex = ordered.findIndex(m => m.id === primary.id);
   ordered.forEach((match, index) => {
     const card = buildMatchCard(match);
-    if (index === 0 && isTopOfDay) card.classList.add('is-pinned');
+    if (index === primaryIndex && isTopOfDay) card.classList.add('is-pinned');
     scroller.appendChild(card);
   });
 
@@ -1285,9 +1305,18 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   dots.className = 'match-stack-dots';
   const dotEls = ordered.map((_, index) => {
     const dot = document.createElement('span');
-    dot.className = 'match-stack-dot' + (index === 0 ? ' is-active' : '');
+    dot.className = 'match-stack-dot' + (index === primaryIndex ? ' is-active' : '');
     dots.appendChild(dot);
     return dot;
+  });
+  // Runs after the browser has actually laid out the scroller (it isn't
+  // attached to the live document yet at the point buildMatchStack itself
+  // runs, so clientWidth would read 0 here) - opens the stack already
+  // scrolled to whichever member the plan currently has chosen, rather
+  // than always starting at the fixed order's own first (highest-scored)
+  // card regardless of what's actually pinned.
+  requestAnimationFrame(() => {
+    scroller.scrollLeft = primaryIndex * scroller.clientWidth;
   });
   // One listener does both jobs: the dots update on every scroll tick
   // (cheap, purely visual), while the actual pin+rebuild only fires once
