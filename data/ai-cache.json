@@ -275,12 +275,13 @@
   "mls-761830": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
-    "reason": "紐約城FC作客亞特蘭大聯，實力接近。",
+    "watchability": 5,
+    "reason": "常規賽中段對決，重要性與關注度皆不如MLB的季後賽卡位戰。",
     "venueZh": "梅賽德斯-賓士體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761831": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
@@ -294,13 +295,14 @@
   },
   "mls-761832": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
-    "reason": "積分接近的中游對決，芝加哥對決夏洛特。",
+    "reason": "雙方戰績相近、競爭激烈，但整體話題性仍屬一般。",
     "venueZh": "美國銀行體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761834": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
@@ -316,22 +318,24 @@
   "mls-761833": {
     "startTimeUtc": "2026-09-26T23:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
-    "reason": "聖路易城作客紐約紅牛，客場考驗重重。",
+    "watchability": 5,
+    "reason": "實力相當的常規賽對陣，在同時段缺乏足夠的亮點。",
     "venueZh": "紅牛競技場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761839": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
     "competitiveness": 6,
-    "watchability": 6,
-    "reason": "聖地牙哥FC作客奧斯汀，力拼積分。",
+    "watchability": 5,
+    "reason": "兩隊戰績互有勝負，競爭度中規中矩。",
     "venueZh": "Q2體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761835": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
@@ -346,13 +350,14 @@
   },
   "mls-761836": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
-    "reason": "堪薩斯城作客挑戰休士頓發電機。",
+    "reason": "休士頓迪納摩主場戰績強勢，對戰聖地牙哥展現出較高的觀賞價值。",
     "venueZh": "殼牌能源體育場",
     "whereToWatchTw": "Apple TV",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mls-761838": {
     "startTimeUtc": "2026-09-27T00:30:00.000Z",
@@ -654,13 +659,14 @@
   },
   "mlb-401817005": {
     "startTimeUtc": "2026-09-19T23:05:00.000Z",
-    "competitiveness": 6,
-    "watchability": 6,
-    "reason": "藍鳥作客遊騎兵，美聯季後賽邊緣之爭。",
+    "competitiveness": 9,
+    "watchability": 9,
+    "reason": "藍鳥與遊騎兵勝率咬緊且皆在季後賽邊緣，競爭激烈度與關注度明顯高於同時段其他兩場。",
     "venueZh": "全球人壽球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817003": {
     "startTimeUtc": "2026-09-19T23:10:00.000Z",
@@ -685,13 +691,14 @@
   },
   "mlb-401817006": {
     "startTimeUtc": "2026-09-19T23:15:00.000Z",
-    "competitiveness": 6,
+    "competitiveness": 7,
     "watchability": 6,
-    "reason": "紅雀主場迎戰國民，雙方力求表現。",
+    "reason": "國民與紅雀戰績相近但已無緣季後賽，精彩度與話題性略遜於美聯的關鍵卡位戰。",
     "venueZh": "布 Busch 體育場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817007": {
     "startTimeUtc": "2026-09-20T00:10:00.000Z",
@@ -727,13 +734,14 @@
   },
   "mlb-401817011": {
     "startTimeUtc": "2026-09-20T01:10:00.000Z",
-    "competitiveness": 4,
+    "competitiveness": 6,
     "watchability": 8,
-    "reason": "道奇與巨人世仇對決，話題性十足。",
+    "reason": "世仇對決雖具高人氣與觀賞性，但道奇實力懸殊且勝負差距較大，競爭度不及藍鳥之戰。",
     "venueZh": "道奇體育場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817009": {
     "startTimeUtc": "2026-09-20T01:38:00.000Z",
@@ -1597,13 +1605,14 @@
   },
   "mlb-401817087": {
     "startTimeUtc": "2026-09-26T20:10:00.000Z",
-    "competitiveness": 6,
-    "watchability": 7,
-    "reason": "勇士出賽。",
+    "competitiveness": 7,
+    "watchability": 8,
+    "reason": "勇士隊戰績優異且正值季後賽衝刺期，關注度明顯高於其他同時段的MLS賽事。",
     "venueZh": "龍膽球場",
     "whereToWatchTw": "愛爾達體育台",
     "source": "ai",
-    "promptVersion": 5
+    "promptVersion": 5,
+    "refined": true
   },
   "mlb-401817097": {
     "startTimeUtc": "2026-09-26T20:10:00.000Z",
