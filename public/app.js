@@ -1005,6 +1005,22 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // cluster and get claimed. A match overlapping two different anchors
   // joins whichever is processed first (the higher-scored one) - it never
   // bridges them into one.
+  //
+  // Same-LOCAL-CALENDAR-DAY only, even though overlapMinutes itself is
+  // day-agnostic (matchesForDay groups everything downstream of this by
+  // localDateKey, same as the rest of the file - see that function's own
+  // comment). A match just after local midnight can still genuinely
+  // overlap one just before it (matchesForDay's own recognized case in
+  // resolveViewingPlan's own top comment: "an 11pm match still running
+  // past midnight"), but folding it into the earlier match's stack would
+  // display it - and quietly retire its OWN independent recommended slot
+  // - under the WRONG day tab: exactly the "matches missing from today,
+  // turning up stacked into tomorrow with times that make no sense there"
+  // bug this guard exists to prevent. The DP above stays deliberately
+  // day-agnostic (a genuine cross-midnight single fixture is still one
+  // fixture, correctly placed on whichever day its own startTimeUtc falls
+  // on); only THIS pass, which can move a DIFFERENT match's visible
+  // recommended status somewhere else entirely, needs the boundary.
   const claimedStackIds = new Set();
   const claimedAsClusterMember = new Set();
   recommendedSorted
@@ -1013,8 +1029,12 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
     .forEach(anchor => {
       if (claimedAsClusterMember.has(anchor.id)) return;
       claimedAsClusterMember.add(anchor.id);
+      const anchorDayKey = localDateKey(new Date(anchor.interval.start));
       const rest = recommendedSorted.filter(
-        m => !claimedAsClusterMember.has(m.id) && overlapMinutes(anchor, m) > 0
+        m =>
+          !claimedAsClusterMember.has(m.id) &&
+          overlapMinutes(anchor, m) > 0 &&
+          localDateKey(new Date(m.interval.start)) === anchorDayKey
       );
       if (!rest.length) return;
       rest.forEach(match => claimedAsClusterMember.add(match.id));
@@ -1058,9 +1078,16 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // recommended match (whichever it overlaps that's processed first, in
   // chronological order) so it never appears in two different stacks at
   // once, and the merged-in cluster members above are claimed already so
-  // they can't also get pulled into a neighboring stack.
+  // they can't also get pulled into a neighboring stack. Also excludes
+  // quiet-hour fixtures (isQuietHours) - rec.overlappingIds was built from
+  // EVERY match regardless of quiet hours (only the DP's own `eligible`
+  // list filters those out), so without this check a 4am fixture could
+  // still ride a legitimately-recommended 7am match's own high score
+  // straight into its swipeable stack - exactly the one thing quiet hours
+  // exist to keep off this page at all.
   recommendedSorted.forEach(rec => {
     const alreadyClaimed = rec.stackAlternativeIds || [];
+    const recDayKey = localDateKey(new Date(rec.interval.start));
     const extraIds = rec.overlappingIds
       .filter(id => {
         if (claimedStackIds.has(id) || alreadyClaimed.includes(id)) return false;
@@ -1068,8 +1095,10 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
         return (
           other &&
           !other.recommended &&
+          !isQuietHours(other) &&
           other.score >= STACK_MIN_SCORE &&
-          other.score >= rec.score - STACK_MAX_SCORE_GAP
+          other.score >= rec.score - STACK_MAX_SCORE_GAP &&
+          localDateKey(new Date(other.interval.start)) === recDayKey
         );
       })
       .sort((a, b) => {
