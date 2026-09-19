@@ -24,6 +24,22 @@
 // AI's reasoning stay bilingual (see buildTeamRow/renderVenue) since an
 // English team/venue name is often the more recognizable half for a fixture
 // nobody has a settled Chinese name for yet.
+//
+// The pure scoring/viewing-plan math (recommendStyleScore, overlap/slot/
+// weighted-interval-scheduling helpers, computeDayPlan, resolveViewingPlan,
+// confidence, the broadcast-service registry) lives in ./lib/recommendation.mjs
+// instead of here - extracted so it can be unit-tested directly (see
+// tests/recommendation.test.mjs) and reused by scripts/build-data.mjs (for
+// confidence) without a DOM. This file keeps everything DOM/localStorage/
+// render-related, and calls into that module for the rest.
+import {
+  SERVICES,
+  resolveService,
+  computeDayPlan,
+  resolveViewingPlan,
+  slotKeyFromMembers,
+  computeOverlapRange
+} from './lib/recommendation.mjs';
 
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
@@ -186,56 +202,16 @@ function buildSportIcon(sport) {
 // nothing usable). buildMatchCard tries `logo` first and only falls back
 // to the plain colored-initial `badge` on a load failure (same onerror
 // pattern as team logos) or when `logo` is absent.
-const SERVICES = [
-  // The Commons file this used to point at (ELTA_logo.svg) turned out, on
-  // closer look, to be the logo of ELTA - a Lithuanian news agency that
-  // just happens to share the initialism - not Taiwan's 愛爾達體育台 at
-  // all, and no genuine Commons file for the Taiwan channel's own mark
-  // existed to replace it with. This logo instead comes from 愛爾達電視's
-  // own official Android app icon on the Google Play Store - a real,
-  // confirmed-correct source, just not one with Commons' own "always
-  // resolves to the file's current version" redirect guarantee.
-  {
-    id: 'elta',
-    pattern: /愛爾達|ELTA/i,
-    label: '愛爾達體育台',
-    badge: '達',
-    color: '#ff7a3d',
-    logo: 'https://play-lh.googleusercontent.com/vE0VONaUjXyEgpUv0efGHg2_GS_Kbmx3YKyWPWzmv8oX-BlTzDReK17V9GhuJ7e7MMmFWvrVyP08vn03Q_H3',
-    logoBg: 'linear-gradient(155deg, #ff9457, #e8531a)'
-  },
-  {
-    id: 'appletv',
-    pattern: /Apple\s*TV/i,
-    label: 'Apple TV',
-    badge: 'TV',
-    color: '#1d1d1f',
-    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/AppleTVLogo.svg',
-    logoBg: 'linear-gradient(155deg, #3a3a3d, #0c0c0e)'
-  },
-  {
-    id: 'netflix',
-    pattern: /Netflix/i,
-    label: 'Netflix',
-    badge: 'N',
-    color: '#e50914',
-    logo: 'https://commons.wikimedia.org/wiki/Special:FilePath/Netflix_icon.svg',
-    logoBg: '#ffffff'
-  }
-];
 // Fixed rather than a per-viewer Settings toggle (see "Broadcast service
 // registry" above) - this site's own owner's real subscriptions, used as a
 // silent tie-breaking nudge in resolveViewingPlan only (see
-// OWNED_SERVICE_SCORE_BONUS below) - a great game on a service you don't
-// have still shows up and can still be recommended, this just tips a
-// genuinely close call. No badge/mark in the UI for it anymore - it's a
-// scoring input, not something worth a viewer's attention on every card.
+// OWNED_SERVICE_SCORE_BONUS in ./lib/recommendation.mjs) - a great game on a
+// service you don't have still shows up and can still be recommended, this
+// just tips a genuinely close call. No badge/mark in the UI for it anymore -
+// it's a scoring input, not something worth a viewer's attention on every
+// card. SERVICES/resolveService themselves now live in ./lib/recommendation.mjs
+// (imported above) - this file only still owns which of them are "mine".
 const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
-
-function resolveService(whereToWatchTw) {
-  if (!whereToWatchTw) return null;
-  return SERVICES.find(s => s.pattern.test(whereToWatchTw)) || null;
-}
 
 const appEl = document.getElementById('app');
 const dayScrollerEl = document.getElementById('day-scroller');
@@ -302,7 +278,8 @@ const exportDataBtn = document.getElementById('export-data-btn');
 // there's no one correct answer for which sport SHOULD win a close call -
 // so instead of guessing, this lets each viewer rank the sports in the
 // order they'd rather see win a close call, applied only as a tie-breaking
-// nudge (see PRIORITY_SCORE_DELTA below), never a hard include/exclude.
+// nudge (see PRIORITY_SCORE_DELTA in ./lib/recommendation.mjs), never a
+// hard include/exclude.
 // An explicit rank (1st, 2nd, 3rd, ...), rather than a per-sport "less/
 // normal/more" dial, is the more direct way to ask the actual question:
 // "if these two are roughly equally good, which do you want?" - a dial
@@ -313,7 +290,7 @@ const exportDataBtn = document.getElementById('export-data-btn');
 // "Worth watching" isn't one fixed question - different viewers weigh it
 // differently, and none of them is more "correct" than the others. Two
 // selectable styles, not three - broadcast/viewing-experience quality
-// (see BROADCAST_QUALITY_WEIGHT below) turned out to work better as a
+// (see BROADCAST_QUALITY_WEIGHT in ./lib/recommendation.mjs) turned out to work better as a
 // metric folded into BOTH styles than as a third thing to choose between:
 // nobody actually wants to rank purely by production value on its own, it
 // should just quietly tip a close call the way priority/service nudges
@@ -357,44 +334,14 @@ function saveRecommendStyle(style) {
 }
 state.recommendStyle = loadRecommendStyle();
 
-// How much broadcastQuality (see build-data.mjs/the shared proxy's
-// worker.js) tips the chosen style's own primary score, on the same 1-10
-// scale both sides are already on. Kept a genuine, noticeably-felt nudge
-// (worth swinging a real close call - a beautifully-produced blowout CAN
-// beat a merely-decent, plainly-shot game) without ever letting it dominate
-// - competitiveness/watchability still make up 85% of the blend, matching
-// "we still prioritize competitiveness and entertainment" over broadcast
-// quality becoming a deciding factor on its own.
-const BROADCAST_QUALITY_WEIGHT = 0.15;
-
-// The chosen style's own primary score, nudged by broadcastQuality when
-// it's actually available - falls back to the build-time composite
-// `match.score` for 'competitive' (or any unrecognized style), and skips
-// the broadcastQuality blend entirely rather than producing NaN when a
-// match has no real basis for it (a heuristic-scored/finished match with
-// no real AI judgment behind it at all).
-function recommendStyleScore(match, style) {
-  const primary =
-    style === 'entertainment' && Number.isFinite(match.watchability) ? match.watchability : match.score;
-  if (!Number.isFinite(match.broadcastQuality)) return primary;
-  return primary * (1 - BROADCAST_QUALITY_WEIGHT) + match.broadcastQuality * BROADCAST_QUALITY_WEIGHT;
-}
+// recommendStyleScore/BROADCAST_QUALITY_WEIGHT now live in
+// ./lib/recommendation.mjs (used internally by resolveViewingPlan there) -
+// see that file for the broadcastQuality-blend reasoning.
 
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
-// Every rank step adds/subtracts one of these - small next to the 1-10
-// score scale (being ranked a couple of spots higher does NOT let a
-// mediocre match beat a genuinely great one), but large enough to reliably
-// swing a close call between two roughly-comparable fixtures, which is the
-// only case this is meant to affect.
-const PRIORITY_SCORE_DELTA = 1;
-// A small nudge (see resolveViewingPlan) toward a fixture shown on a
-// service in state.myServiceIds - "optimize for the services you actually
-// pay for" without turning this into a hard filter: a great game on a
-// service you don't have still shows up and can still be recommended
-// (you might catch a replay, a friend's account, whatever), this just
-// tips a genuinely close call toward the one you can actually watch live
-// right now.
-const OWNED_SERVICE_SCORE_BONUS = 0.5;
+// PRIORITY_SCORE_DELTA/OWNED_SERVICE_SCORE_BONUS now live in
+// ./lib/recommendation.mjs alongside resolveViewingPlan, which is the only
+// place they're actually used.
 
 const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABELS_ZH);
 
@@ -971,195 +918,16 @@ function dayLabelFor(date, { short = false } = {}) {
 // effectiveDurationMinutes) - a fixture unlikely to stay watchable to the
 // end frees up the schedule sooner than its full nominal length would
 // suggest, letting the plan fit a next pick in earlier.
-const QUIET_HOUR_START = 0;
-const QUIET_HOUR_END = 5;
-
-function isQuietHours(match) {
-  const hour = new Date(match.startTimeUtc).getHours(); // local hour, deliberately not getUTCHours
-  return QUIET_HOUR_START <= QUIET_HOUR_END
-    ? hour >= QUIET_HOUR_START && hour < QUIET_HOUR_END
-    : hour >= QUIET_HOUR_START || hour < QUIET_HOUR_END;
-}
-
-function matchInterval(match) {
-  const start = Date.parse(match.startTimeUtc);
-  return { start, end: start + match.durationMinutes * 60_000 };
-}
-
-// This file's one and only overlap check - computed straight from a plain
-// match's own startTimeUtc/durationMinutes (its REAL broadcast window, not
-// the endurance-shortened one effectiveInterval below uses for scheduling)
-// so every caller - the day-planner's own slot grouping, buildMatchCard's
-// overlap note - agrees on what "these two overlap, and by how much"
-// actually means.
-function computeOverlapRange(a, b) {
-  const ai = matchInterval(a);
-  const bi = matchInterval(b);
-  const start = Math.max(ai.start, bi.start);
-  const end = Math.min(ai.end, bi.end);
-  return end > start ? { start, end } : null;
-}
-
-function overlapMinutes(a, b) {
-  const range = computeOverlapRange(a, b);
-  return range ? (range.end - range.start) / 60_000 : 0;
-}
-
-// The bar for "these two matches genuinely can't be sequenced, you have to
-// pick one" (see the section comment's own "slot" definition) - a FRACTION
-// of the SHORTER match's own duration, not a flat minute count: 45 shared
-// minutes is nearly all of a 55-minute F1 sprint but barely a quarter of a
-// 190-minute MLB game, so a fixed number can't mean "basically total
-// overlap" for both at once the way a duration-relative fraction does.
-const NEAR_TOTAL_OVERLAP_FRACTION = 0.75;
-function isNearTotalOverlap(a, b) {
-  const overlapMins = overlapMinutes(a, b);
-  if (overlapMins <= 0) return false;
-  const shorter = Math.min(a.durationMinutes, b.durationMinutes);
-  return shorter > 0 && overlapMins / shorter >= NEAR_TOTAL_OVERLAP_FRACTION;
-}
-
-// How much of a match's OWN nominal length actually gets reserved in the
-// day's schedule - see enduranceScore's own comment (shared-proxy's
-// worker.js buildMatchRecommendPrompt) for what it measures. A match
-// projected to definitely stay tense to the end (enduranceScore 10) keeps
-// its full nominal length; one projected to likely turn into an early
-// blowout (enduranceScore 1) frees up the schedule at
-// ENDURANCE_DURATION_FLOOR of it instead - never less than that floor,
-// since even a lopsided match is still ostensibly airing for its whole
-// listed length and the plan shouldn't assume a viewer bails absurdly
-// early. `?? 5` (neutral/middling) covers a heuristic-scored match or one
-// still on an older cache entry from before this field existed.
-const ENDURANCE_DURATION_FLOOR = 0.4;
-function effectiveDurationMinutes(match) {
-  const endurance = Number.isFinite(match.enduranceScore) ? match.enduranceScore : 5;
-  const factor = ENDURANCE_DURATION_FLOOR + (1 - ENDURANCE_DURATION_FLOOR) * (endurance / 10);
-  return match.durationMinutes * factor;
-}
-function effectiveInterval(match) {
-  const start = Date.parse(match.startTimeUtc);
-  return { start, end: start + effectiveDurationMinutes(match) * 60_000 };
-}
-
-// Groups a day's candidate matches into "slots" - anchor-claiming,
-// highest-effectiveScore-first: an unclaimed match becomes a slot's
-// anchor, and only matches that are near-totally overlapping THAT SPECIFIC
-// anchor (never each other transitively) join it and get claimed. This is
-// the one piece of an earlier, more elaborate multi-pass design (see git
-// history) that was never the source of a bug there, so it survives
-// unchanged - the bugs were all in what happened AFTER grouping (a
-// separate density-driven pass, then a pass to clean up what THAT could
-// break); this version replaces all of that with a single, real scheduling
-// DP over the resulting slots (see computeDayPlan) instead of another
-// patch. A match with nothing near-totally overlapping it simply becomes
-// its own one-member slot.
-function groupIntoSlots(dayMatches) {
-  const claimed = new Set();
-  const slots = [];
-  dayMatches
-    .slice()
-    .sort((a, b) => b.effectiveScore - a.effectiveScore)
-    .forEach(anchor => {
-      if (claimed.has(anchor.id)) return;
-      claimed.add(anchor.id);
-      const members = dayMatches.filter(m => !claimed.has(m.id) && isNearTotalOverlap(anchor, m));
-      members.forEach(m => claimed.add(m.id));
-      slots.push({ members: [anchor, ...members] });
-    });
-  return slots;
-}
-
-// A slot's own stable identity across renders/rebuilds - independent of
-// object identity (state.matches is rebuilt from scratch on every data
-// refresh) and independent of WHICH member is currently chosen (pinning a
-// different member must still resolve back to the same slot next time).
-// Grouping itself (groupIntoSlots) is deterministic for a given match set,
-// so this is safe to compute fresh every time rather than needing to be
-// stored anywhere.
-function slotKeyFromMembers(members) {
-  return members.map(m => m.id).sort().join('|');
-}
-
-function bestMember(members) {
-  return members.slice().sort((a, b) => b.effectiveScore - a.effectiveScore)[0];
-}
-
-// Classic weighted interval scheduling: the maximum-total-choice.effectiveScore
-// subset of `items` (each {interval, choice}) whose intervals don't
-// overlap. O(n^2) in the inner "find the latest compatible previous item"
-// scan - fine at the scale one day's fixture list ever reaches (even MLB's
-// own ~15-a-night doesn't come close to where that would matter).
-function weightedIntervalSchedule(items) {
-  const sorted = items.slice().sort((a, b) => a.interval.end - b.interval.end);
-  const dp = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const cur = sorted[i];
-    let prevBest = { score: 0, picks: [] };
-    for (let j = i - 1; j >= 0; j--) {
-      if (sorted[j].interval.end <= cur.interval.start) {
-        prevBest = dp[j];
-        break;
-      }
-    }
-    const withCur = { score: prevBest.score + cur.choice.effectiveScore, picks: [...prevBest.picks, cur] };
-    const without = i > 0 ? dp[i - 1] : { score: 0, picks: [] };
-    dp[i] = withCur.score >= without.score ? withCur : without;
-  }
-  return sorted.length ? dp[sorted.length - 1].picks : [];
-}
-
-// Builds ONE local calendar day's back-to-back viewing plan from its
-// already sport-filtered, non-quiet-hour-excluded candidate matches - see
-// the section comment above for the model. Mutates every match in
-// `dayMatches` in place (.recommended/.alternativeIds), same convention as
-// the rest of this file. `alternativeIds` deliberately stores just the
-// OTHER slot members' ids, same pattern as `.overlappingIds` elsewhere in
-// this file, not full object references - a chosen match's own slot
-// necessarily contains that same match, so storing full objects back onto
-// it would self-reference and break JSON.stringify (the export tool hit
-// exactly this before it was caught). Returns the plan as a plain array of
-// matches, sorted by start time.
-function computeDayPlan(dayKey, dayMatches) {
-  dayMatches.forEach(match => {
-    match.recommended = false;
-    match.alternativeIds = null;
-  });
-  const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
-  if (!candidates.length) return [];
-
-  const slots = groupIntoSlots(candidates);
-  const pinnedForDay = state.pinnedChoices.get(dayKey);
-  const resolved = slots.map(slot => {
-    const pinnedId = pinnedForDay && pinnedForDay.get(slotKeyFromMembers(slot.members));
-    const pinnedMember = pinnedId ? slot.members.find(m => m.id === pinnedId) : null;
-    const choice = pinnedMember || bestMember(slot.members);
-    return { members: slot.members, choice, interval: effectiveInterval(choice), isPinned: !!pinnedMember };
-  });
-
-  // Pinned slots split the day into independent gaps - the free (unpinned)
-  // slots in each gap get their own scheduling run, bounded so nothing
-  // scheduled there can creep into a pinned pick's own fixed window. This
-  // is the actual "rebuild before AND after the one I just picked"
-  // behavior: every other slot, on both sides, is being freshly reasoned
-  // about relative to the pin, not just appended after it.
-  const forced = resolved.filter(r => r.isPinned).sort((a, b) => a.interval.start - b.interval.start);
-  const free = resolved.filter(r => !r.isPinned);
-  const picks = [];
-  let cursor = -Infinity;
-  forced.forEach(f => {
-    picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start)));
-    picks.push(f);
-    cursor = f.interval.end;
-  });
-  picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor)));
-
-  picks.sort((a, b) => a.interval.start - b.interval.start);
-  picks.forEach(({ members, choice }) => {
-    choice.recommended = true;
-    if (members.length > 1) choice.alternativeIds = members.filter(m => m.id !== choice.id).map(m => m.id);
-  });
-  return picks.map(p => p.choice);
-}
+// isQuietHours/matchInterval/computeOverlapRange/overlapMinutes/
+// isNearTotalOverlap/effectiveDurationMinutes/effectiveInterval/
+// groupIntoSlots/slotKeyFromMembers/bestMember/weightedIntervalSchedule/
+// computeDayPlan/resolveViewingPlan all now live in ./lib/recommendation.mjs
+// (imported at the top of this file) - see that module for the "one
+// continuous back-to-back plan, not independent picks" model this section
+// used to document inline, and docs/recommendation-engine-audit.md for how
+// effectiveScore's adjustments are now exposed for debugging
+// (computeRecommendationScore/scoreBreakdown). computeOverlapRange is still
+// used directly below, in buildMatchCard's own overlap note.
 
 // The actual "I will watch this" commitment (see buildMatchStack) - records
 // the pin and triggers a full re-render, which recomputes computeDayPlan
@@ -1168,62 +936,6 @@ function pinSlotChoice(dayKey, members, matchId) {
   if (!state.pinnedChoices.has(dayKey)) state.pinnedChoices.set(dayKey, new Map());
   state.pinnedChoices.get(dayKey).set(slotKeyFromMembers(members), matchId);
   renderSections();
-}
-
-// `priorityOrder` (see "Sport priority settings" above) nudges
-// effectiveScore away from the AI's own score - the displayed reason/.score
-// always stay the true, un-nudged values; only effectiveScore (the day
-// plan's own DP weight, and groupIntoSlots' own anchor ordering) sees the
-// adjusted number, so a viewer's preference can tip a close scheduling
-// call without pretending a mediocre match is actually great. A sport
-// ranked 1st gets the biggest positive nudge, the sport ranked in the
-// exact middle gets none, and the last-ranked sport gets the biggest
-// negative one - symmetric around the middle rank so "no preference at
-// all" (the default order) really does mean zero nudge for everyone, not
-// just for whichever sport happens to be first in the array.
-function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
-  const centerRank = (priorityOrder.length - 1) / 2;
-  const withScores = matches.map(match => {
-    const rank = priorityOrder.indexOf(match.sport);
-    const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
-    const service = resolveService(match.whereToWatchTw);
-    const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
-    // Overrides the build-time composite with whichever field the chosen
-    // style actually ranks by (see recommendStyleScore) - every downstream
-    // consumer of `.score`/`.effectiveScore` (computeDayPlan's scheduling
-    // weight, the overlap note's own display, etc.) then just works off
-    // this one number without needing to know styles exist at all.
-    const styleScore = recommendStyleScore(match, recommendStyle);
-    return {
-      ...match,
-      score: styleScore,
-      effectiveScore: styleScore + priorityNudge + serviceNudge,
-      recommended: false,
-      alternativeIds: null
-    };
-  });
-
-  // Computed across every fetched match regardless of day or quiet hours -
-  // used purely for display (buildMatchCard's own overlap note, on ANY
-  // card whose start overlaps an earlier match, recommended or not). A
-  // finished match is excluded: it's never itself worth flagging as
-  // "overlaps something else" once it's over, and it's not a meaningful
-  // reference point for anything still upcoming either.
-  withScores.forEach(match => {
-    match.overlappingIds = match.isFinished
-      ? []
-      : withScores
-          .filter(other => other.id !== match.id && !other.isFinished && overlapMinutes(match, other) > 0)
-          .map(other => other.id);
-  });
-
-  // `.recommended`/`.alternativeIds` are deliberately NOT decided here anymore
-  // - that's computeDayPlan's job, run per selected day (and per active
-  // sport filter, and per pin) at render time, since which matches count
-  // as "today's plan" now depends on interactive state this function has
-  // no visibility into. This function's job is purely the viewer-relative
-  // score adjustment and overlap bookkeeping every day's plan draws from.
-  return withScores;
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -1607,7 +1319,7 @@ function renderRecommendedSection() {
   // (day, sport filter, pins) - see computeDayPlan's own comment. Picking
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
-  const dayPlan = computeDayPlan(dayKey, applySportFilter(matchesForDay(dayKey)));
+  const dayPlan = computeDayPlan(dayKey, applySportFilter(matchesForDay(dayKey)), state.pinnedChoices.get(dayKey));
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {
@@ -1937,7 +1649,7 @@ refreshDataBtn.addEventListener('click', () => checkForUpdate());
 // showing on screen), respecting whatever's already pinned, so every
 // day's matches carry a real decision by the time this serializes them.
 function exportRecommendationData() {
-  state.days.forEach(day => computeDayPlan(day.key, matchesForDay(day.key)));
+  state.days.forEach(day => computeDayPlan(day.key, matchesForDay(day.key), state.pinnedChoices.get(day.key)));
   const payload = {
     exportedAt: new Date().toISOString(),
     dataGeneratedAt: state.generatedAt || null,

@@ -1,0 +1,10 @@
+{
+  "name": "match-find",
+  "private": true,
+  "type": "module",
+  "description": "Static \"what's worth watching\" site - see README.md. No runtime dependencies; scripts/build-data.mjs and public/app.js run as plain ESM against Node's/the browser's own built-ins.",
+  "scripts": {
+    "build": "node scripts/build-data.mjs",
+    "test": "node --test"
+  }
+}

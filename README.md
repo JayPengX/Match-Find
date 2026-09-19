@@ -335,6 +335,16 @@ requests-*per-minute* cap even though the total count for one run is
 small. A few extra seconds of build time is free; re-triggering the same
 avoidable rate limit on every eligible run forever is not.
 
+**Confidence**: every scored match also gets a `confidence` (0–1, or
+`null` for a finished match that was never scored at all) reflecting how
+much its score should be trusted - a base-pass-only AI score, one that
+also survived the comparative refine pass above, and the local heuristic
+fallback are three genuinely different levels of evidence, not
+interchangeable. See `computeConfidence` in `public/lib/recommendation.mjs`
+and `docs/recommendation-engine-audit.md` for exactly what it's grounded
+in (and what it deliberately isn't - there's no per-feature freshness
+timestamp in this pipeline to decay against yet).
+
 ## Deployment
 
 This repo deploys itself: `.github/workflows/deploy.yml` runs
@@ -395,6 +405,33 @@ npx serve public                   # or any static file server
 Set `PROXY_URL` in your shell first if you want AI-scored results locally
 instead of the heuristic fallback. Delete `data/ai-cache.json` (or an entry
 in it) if you want a match re-scored.
+
+## Tests
+
+`public/lib/recommendation.mjs` holds every pure scoring/viewing-plan
+function (recommendation style blending, overlap/slot grouping, weighted
+interval scheduling, `computeDayPlan`, `resolveViewingPlan`, confidence) -
+extracted out of `public/app.js` specifically so it's testable without a
+DOM and reusable from `scripts/build-data.mjs`. `npm test` (`node --test`,
+no dependencies to install) runs `tests/*.test.mjs` against it, plus
+`scripts/build-data.mjs`'s own pure ESPN-shape helpers and
+`scripts/evaluate-recommendations.mjs` below. Also runs as its own step in
+`.github/workflows/deploy.yml`, before the build step, on every push/
+schedule/dispatch. See `docs/recommendation-engine-audit.md` for the fuller
+writeup of what's covered and why.
+
+## Evaluating a historical export
+
+`node scripts/evaluate-recommendations.mjs <export.json> [more.json ...]`
+reads one or more `public/data/matches.json`-shaped files (including
+whatever the Settings panel's own "匯出資料" button downloads) and reports
+recommended count/rate, sport concentration, score/confidence
+distributions, and how often the same two teams (or F1 session) get
+recommended across multiple distinct dates in the export - reported as a
+descriptive rate, not flagged as a bug, since a real multi-game series is
+supposed to do exactly that in a day-by-day plan (see `computeDayPlan`
+above). Accepts multiple files so it can be pointed at a week's worth of
+separately-saved exports at once instead of judging one day in isolation.
 
 ## Icons and link previews
 
