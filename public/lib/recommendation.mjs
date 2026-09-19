@@ -538,6 +538,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     match.recommended = false;
     match.alternativeIds = null;
     match.isPreferred = false;
+    match.slotKey = null;
   });
   const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
   if (!candidates.length) return [];
@@ -621,9 +622,29 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   // scheduler didn't also independently pick. A match is never both
   // recommended and listed as someone else's alternative (docs/
   // recommendation-engine-audit.md's Invariant 1).
+  //
+  // slotKey is the FULL cluster's own stable key (every member, whether or
+  // not it ended up recommended) - deliberately NOT derived from whatever
+  // subset a particular card's stack happens to display. A cluster of 3+
+  // near-total-overlapping matches where the scheduler independently
+  // recommends more than one of them (e.g. two matches that only each
+  // conflict with a third, not with each other - see Test 3's A/B/C in
+  // recommendation.test.mjs) renders as TWO separate swipeable stacks, one
+  // per recommended pick, each showing only the leftover match as its own
+  // alternative. Both stacks are really the same underlying conflict
+  // cluster, though, and app.js's pinSlotChoice has to record a pin under
+  // the key computeDayPlan will actually look up on the next render
+  // (pinnedForDay.get(slotKeyFromMembers(cluster.members)) above, always
+  // the full cluster) - keying off only the 2 matches visible in whichever
+  // stack the viewer happened to swipe would silently never match that
+  // lookup, so the pin would appear to take (the swipe animates, the dot
+  // updates) but get thrown away on the very next render, reverting right
+  // back. Exposing the real key here, once, is what makes every stack for
+  // the same cluster agree on where a pin against it lives.
   picks.forEach(({ choice }) => {
     const cluster = clusterByMatchId.get(choice.id);
     if (!cluster || cluster.members.length < 2) return;
+    choice.slotKey = slotKeyFromMembers(cluster.members);
     const alternatives = cluster.members.filter(m => m.id !== choice.id && !m.recommended);
     if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
   });

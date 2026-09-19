@@ -48,7 +48,8 @@ import {
   EVIDENCE_FRESH_MAX_AGE_HOURS,
   computeSportConcentration,
   SPORT_CONCENTRATION_PENALTY,
-  explainWhyNotRecommended
+  explainWhyNotRecommended,
+  slotKeyFromMembers
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -469,6 +470,43 @@ describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () =>
     // A is still visible to the viewer as a real alternative, never deleted
     // (Invariant: a diversity/sequencing loss can't delete the event).
     assert.ok(b.alternativeIds?.includes('a') || c.alternativeIds?.includes('a'));
+  });
+
+  test('b and c each expose the SAME slotKey - the whole 3-way cluster\'s, not just their own 2-member stack', () => {
+    // Reproduces the "some cards are unswipable" report: b and c both
+    // render as their own separate swipeable stack (each showing only 'a'
+    // as its alternative, per the test above), but a pin against either
+    // stack has to land somewhere computeDayPlan will actually look it up
+    // from on the next render - that's the full cluster's key, always
+    // slotKeyFromMembers([a, b, c]), never slotKeyFromMembers([b, a]) or
+    // slotKeyFromMembers([c, a]) (what app.js's old members-based key
+    // would have produced for each stack individually, and what silently
+    // dropped every pin against a cluster like this one before this fix).
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    computeDayPlan('2026-09-19', [a, b, c]);
+    const fullClusterKey = slotKeyFromMembers([a, b, c]);
+    assert.equal(b.slotKey, fullClusterKey);
+    assert.equal(c.slotKey, fullClusterKey);
+    assert.notEqual(fullClusterKey, slotKeyFromMembers([b, a]));
+    assert.notEqual(fullClusterKey, slotKeyFromMembers([c, a]));
+  });
+
+  test('a pin keyed by the full 3-way cluster reaches a member that only conflicts with the OTHER two individually', () => {
+    // Follows directly from the slotKey test above: once app.js keys the
+    // pin off the full cluster, swiping stack 'a' to reach 'c' correctly
+    // forces c and excludes BOTH a and b (each of which does directly
+    // near-total-overlap c, even though a and b don't overlap each other).
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const pinnedForDay = new Map([[slotKeyFromMembers([a, b, c]), 'a']]);
+    const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
+    assert.deepEqual(plan.map(m => m.id), ['a']);
+    assert.equal(a.isPreferred, true);
+    assert.equal(b.recommended, false);
+    assert.equal(c.recommended, false);
   });
 });
 

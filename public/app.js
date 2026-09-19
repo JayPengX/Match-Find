@@ -61,11 +61,16 @@ const state = {
   syncPasscode: '', // '' when not paired to a sync code - see "Cross-device settings sync"
   // Map<dayKey, Map<slotKey, matchId>> - which member of a multi-match
   // "slot" (see isNearTotalOverlap) the viewer explicitly swiped to commit
-  // to watching, per day - see computeDayPlan/pinSlotChoice. Deliberately
-  // session-only (never persisted to localStorage/synced): it's "what I'm
-  // watching today", not a durable preference, and naturally stops
-  // mattering once the day's matches are over.
-  pinnedChoices: new Map(),
+  // to watching, per day - see computeDayPlan/pinSlotChoice. Persisted to
+  // localStorage and synced like the other settings below (see
+  // "Pinned-choice persistence & sync") - a viewer who swiped past this
+  // morning's default pick expects that choice still showing as 偏好, not
+  // reverting to 推薦, next time they open the page or check another
+  // device, the same as every other preference here. Old days' entries get
+  // pruned (see prunePinnedChoices) rather than kept forever, since a day
+  // that's aged out of the fetched window can never be looked up again
+  // anyway.
+  pinnedChoices: loadPinnedChoices(),
   // Map<matchupKey, dayKey> - the most recent day, across the WHOLE fetched
   // window regardless of the current sport filter, that matchup actually
   // won its day's plan. Recomputed by renderSections (see
@@ -425,9 +430,86 @@ state.enabledSports = loadEnabledSports();
 // site's own owner's real subscriptions.
 state.myServiceIds = new Set(DEFAULT_MY_SERVICE_IDS);
 
+// ---- Pinned-choice persistence & sync --------------------------------------
+//
+// state.pinnedChoices (Map<dayKey, Map<slotKey, matchId>>) - same
+// localStorage-first, sync-if-paired pattern as the settings above, so a
+// viewer's own swiped-to pick (see pinSlotChoice) still shows as 偏好
+// instead of reverting to 推薦 the next time they open the page or check
+// another device. `localDateKey`/`new Date` aren't defined yet this early
+// in the file, but both are plain function declarations (hoisted) reading
+// only the current wall clock, so calling them from here at module-load
+// time is safe.
+//
+// Serialized as a plain {dayKey: {slotKey: matchId}} object (Map doesn't
+// survive JSON.stringify on its own) - deserializing drops any day that's
+// already in the past (a plain string compare against today's own key
+// works since localDateKey's format sorts lexicographically the same as
+// chronologically), the same pruning prunePinnedChoices below does on an
+// already-running page as today's date rolls forward - a pin can never be
+// looked up again once its own day is gone, so there's nothing to gain by
+// keeping it around indefinitely in localStorage or the synced payload.
+const PINNED_CHOICES_STORAGE_KEY = 'matchfind-pinned-choices';
+
+function deserializePinnedChoices(raw) {
+  const map = new Map();
+  if (!raw || typeof raw !== 'object') return map;
+  const todayKey = localDateKey(new Date());
+  Object.entries(raw).forEach(([dayKey, bySlot]) => {
+    if (dayKey < todayKey || !bySlot || typeof bySlot !== 'object') return;
+    const slotMap = new Map(Object.entries(bySlot).filter(([, matchId]) => typeof matchId === 'string'));
+    if (slotMap.size) map.set(dayKey, slotMap);
+  });
+  return map;
+}
+function serializePinnedChoices(map) {
+  const obj = {};
+  map.forEach((slotMap, dayKey) => {
+    obj[dayKey] = Object.fromEntries(slotMap);
+  });
+  return obj;
+}
+function loadPinnedChoices() {
+  try {
+    return deserializePinnedChoices(JSON.parse(localStorage.getItem(PINNED_CHOICES_STORAGE_KEY)));
+  } catch {
+    return new Map();
+  }
+}
+function savePinnedChoices() {
+  try {
+    localStorage.setItem(PINNED_CHOICES_STORAGE_KEY, JSON.stringify(serializePinnedChoices(state.pinnedChoices)));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+// Called on every applyEnabledSportsAndRender (a fresh data load/poll, or a
+// sport toggle) - state.days moves forward with the fetched window, and a
+// pin for a day that's fallen off the back of it, or simply passed, can
+// never be looked up by computeDayPlan again either way.
+function prunePinnedChoices() {
+  const todayKey = localDateKey(new Date());
+  let changed = false;
+  for (const dayKey of state.pinnedChoices.keys()) {
+    if (dayKey < todayKey) {
+      state.pinnedChoices.delete(dayKey);
+      changed = true;
+    }
+  }
+  if (changed) savePinnedChoices();
+}
+// Same "save locally, push if paired" shape as persistSettingsAndSync -
+// kept separate since a pin is recorded far more often (every swipe) than
+// the Settings panel's own toggles, and bundles into the exact same synced
+// payload either way (see buildSyncPayloadObject).
+function persistPinnedChoicesAndSync() {
+  savePinnedChoices();
+  if (state.syncPasscode) syncPush();
+}
+
 // ---- Cross-device settings sync --------------------------------------------
 //
-// Syncs exactly two things - priorityOrder, enabledSports -
+// Syncs three things - priorityOrder, enabledSports, pinnedChoices -
 // across a viewer's own devices via a single passcode, through the shared
 // Cloudflare Worker (see the jaypengx-collab/shared-proxy repo's
 // /match-find-sync route, the same singleCredential design as its own
@@ -469,7 +551,8 @@ function buildSyncPayloadObject() {
   return {
     recommendStyle: state.recommendStyle,
     priorityOrder: state.priorityOrder,
-    enabledSports: [...state.enabledSports]
+    enabledSports: [...state.enabledSports],
+    pinnedChoices: serializePinnedChoices(state.pinnedChoices)
   };
 }
 
@@ -491,9 +574,13 @@ function applySyncPayloadObject(payload) {
     const known = payload.enabledSports.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
     if (known.length) state.enabledSports = new Set(known);
   }
+  if (payload?.pinnedChoices && typeof payload.pinnedChoices === 'object') {
+    state.pinnedChoices = deserializePinnedChoices(payload.pinnedChoices);
+  }
   saveRecommendStyle(state.recommendStyle);
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
+  savePinnedChoices();
 }
 
 async function syncFetch(method, { passcode = state.syncPasscode, body } = {}) {
@@ -973,9 +1060,17 @@ function dayLabelFor(date, { short = false } = {}) {
 // The actual "I will watch this" commitment (see buildMatchStack) - records
 // the pin and triggers a full re-render, which recomputes computeDayPlan
 // for the current day and reflows every other slot around it.
-function pinSlotChoice(dayKey, members, matchId) {
+//
+// `slotKey` must be the CONFLICT CLUSTER's own key (computeDayPlan's
+// choice.slotKey - every member of the cluster, not just whichever subset
+// happens to be visible in the stack the viewer swiped), or this pin
+// silently never matches computeDayPlan's own lookup on the next render
+// and gets thrown away - see recommendation.mjs's own comment on
+// choice.slotKey for the exact 3+-match scenario this bit the user on.
+function pinSlotChoice(dayKey, slotKey, matchId) {
   if (!state.pinnedChoices.has(dayKey)) state.pinnedChoices.set(dayKey, new Map());
-  state.pinnedChoices.get(dayKey).set(slotKeyFromMembers(members), matchId);
+  state.pinnedChoices.get(dayKey).set(slotKey, matchId);
+  persistPinnedChoicesAndSync();
   renderSections();
 }
 
@@ -1350,6 +1445,29 @@ function renderFilters() {
   );
 }
 
+// How recently any match-stack scroller last fired a 'scroll' event -
+// checked by the periodic 60s renderSections() tick in init() so it can
+// skip a run rather than blow away a swipe the viewer is mid-gesture on.
+// That tick exists purely to refresh each card's own relative-time label
+// ("5 分鐘後" etc.) with data already in memory; renderRecommendedSection
+// fully replaces recommendedListEl's children on every call, which
+// destroys and rebuilds the scroller DOM node a viewer might currently be
+// touch-scrolling. The rebuilt stack reopens at whatever member is
+// CURRENTLY pinned (see buildMatchStack's own requestAnimationFrame,
+// primaryIndex), not wherever the viewer's finger had it mid-swipe - from
+// the viewer's side that read as the card randomly snapping backward to
+// the previous choice. A brief cooldown after the last scroll tick is
+// enough: the interval simply retries on its next 60s tick once the
+// gesture has actually settled.
+let lastStackInteractionAt = 0;
+const STACK_INTERACTION_COOLDOWN_MS = 1_000;
+function markStackInteraction() {
+  lastStackInteractionAt = Date.now();
+}
+function isStackBeingInteractedWith() {
+  return Date.now() - lastStackInteractionAt < STACK_INTERACTION_COOLDOWN_MS;
+}
+
 // A slot with more than one near-total-overlapping member (see
 // groupIntoSlots) - a horizontally swipeable card stack, native CSS
 // scroll-snap, same touch mechanism the day picker already uses. Unlike an
@@ -1360,6 +1478,17 @@ function renderFilters() {
 // connect with it instead of with whichever match was the plan's own
 // default pick.
 function buildMatchStack(dayKey, members, primary, isTopOfDay) {
+  // The CLUSTER's own key (every near-total-overlapping member, set by
+  // computeDayPlan on the recommended pick - see that field's own comment
+  // in recommendation.mjs), not slotKeyFromMembers(members) - `members`
+  // here can be just this one stack's own [primary, ...alternatives]
+  // subset, which for a 3+-member cluster where more than one member got
+  // independently recommended is NOT the same set computeDayPlan itself
+  // groups under. Falling back to the members-based key only for a
+  // hand-built primary that never went through computeDayPlan (shouldn't
+  // happen from renderRecommendedSection, but keeps this function honest
+  // as a pure function of its arguments either way).
+  const slotKey = primary.slotKey || slotKeyFromMembers(members);
   const wrapper = document.createElement('div');
   wrapper.className = 'match-stack';
 
@@ -1420,12 +1549,17 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   scroller.addEventListener(
     'scroll',
     () => {
+      // Marks "a stack is actively mid-swipe right now" (see
+      // markStackInteraction's own comment) on every tick, not just once at
+      // gesture start - the periodic 60s re-render this guards against can
+      // land at any point during a swipe that takes longer than one tick.
+      markStackInteraction();
       const activeIndex = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
       dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
       clearTimeout(settleTimer);
       settleTimer = setTimeout(() => {
         const chosen = ordered[activeIndex];
-        if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, members, chosen.id);
+        if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
       }, 180);
     },
     { passive: true }
@@ -1665,6 +1799,11 @@ function applyMatchData(data) {
 // sport in Settings, so "what's actually on screen" only ever has one path
 // from "which sports are enabled" to the DOM.
 function applyEnabledSportsAndRender() {
+  // A day that's already past can never be pinned against again either way
+  // - see prunePinnedChoices' own comment - so this is as good a place as
+  // any recurring one (initial load, every data poll, every sport toggle)
+  // to keep localStorage/the synced payload from growing forever.
+  prunePinnedChoices();
   const rawMatches = state.allRawMatches.filter(m => state.enabledSports.has(m.sport));
   state.rawMatches = rawMatches;
   state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds, state.recommendStyle);
@@ -1837,7 +1976,13 @@ async function init() {
     if (state.syncPasscode) syncPull();
     else maybeShowSyncPrompt();
 
-    setInterval(() => renderSections(), 60_000);
+    setInterval(() => {
+      // Skip this tick entirely rather than deferring it - see
+      // isStackBeingInteractedWith's own comment. The next 60s tick will
+      // pick the relative-time refresh back up once the swipe has settled.
+      if (isStackBeingInteractedWith()) return;
+      renderSections();
+    }, 60_000);
     setInterval(() => checkForUpdate({ silent: true }), DATA_POLL_INTERVAL_MS);
     // Periodic + on-focus sync pulls (see SYNC_POLL_INTERVAL_MS's own
     // comment) - both no-ops while unpaired, and both safe to fire
