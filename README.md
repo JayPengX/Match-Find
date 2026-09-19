@@ -94,14 +94,24 @@ Scoring and picking are split across two different places, deliberately:
   AI reason. The numbers still drive the scheduling and tie-breaking behind
   the scenes; the page itself only ever shows the recommendation, not the
   data behind it.
-- A recommended fixture with genuinely decent overlapping alternatives (see
-  `STACK_MIN_SCORE` in `resolveViewingPlan`) renders as a **horizontally
-  swipeable card stack** (native CSS scroll-snap, the same kind of touch
-  swipe the day picker already uses) instead of either silently picking one
-  or showing several at once - only one card is ever on screen by default,
-  the others are a deliberate swipe away with dots marking how many there
-  are. A version of this that showed every alternative expanded at once was
-  tried first and dropped as too cluttered.
+- A recommended fixture with a genuinely stack-worthy overlapping
+  alternative (see `isStackWorthy` in `resolveViewingPlan`) renders as a
+  **horizontally swipeable card stack** (native CSS scroll-snap, the same
+  kind of touch swipe the day picker already uses) instead of either
+  silently picking one or showing several at once - only one card is ever
+  on screen by default, the others are a deliberate swipe away with dots
+  marking how many there are. A version of this that showed every
+  alternative expanded at once was tried first and dropped as too
+  cluttered. Stacking stayed too eager even after that, so `isStackWorthy`
+  narrowed it to exactly two cases: the alternative is genuinely "equally
+  good" (a close score, same sport as the anchor), or it's a good game from
+  a *different* sport - and either way its own start time has to actually
+  be close to the anchor's (`STACK_TIME_TOLERANCE_MINUTES`), not just have
+  a duration that happens to overlap it, so a ~7am pick's stack can't pull
+  in an unrelated ~8am fixture or bleed into the next slot's own stack. A
+  diversity-floor pick (see above) is never absorbed into another match's
+  stack either, so a sport rescued by the diversity floor can't lose that
+  guaranteed slot just because it overlaps a higher-scored pick.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -157,18 +167,25 @@ most once per sport per day.
 ## Broadcast service registry (logos, and "do I actually have this?")
 
 `SERVICES` in `public/app.js` maps free-form `whereToWatchTw` text (Gemini's
-own wording, not a fixed enum) to a small badge per service (愛爾達, Apple
-TV, Netflix, 緯來, ELEVEN SPORTS, Disney+, myVideo, MLB.TV). Where a
-service's real, official mark exists on Wikimedia Commons (confirmed live,
-not assumed - see each entry's `logo`/`logoBg`), that's used via Commons'
-own `Special:FilePath` hotlink redirect, same posture as the team/F1 logos
-already pulled from ESPN's CDN elsewhere in this file rather than
-reproduced into this repo; a service with no logo found there (緯來,
-myVideo, MLB.TV) falls back to a plain colored-initial badge, and any logo
-that fails to load (network hiccup, a moved file) falls back to that same
-badge automatically (same `onerror` pattern as team logos). Adding a new
-service later is one more entry in that list; nothing else in the file
-needs to know about it, same pattern as `SPORT_LABELS_ZH` for sports.
+own wording, not a fixed enum) to a small badge for exactly three services
+this site's own viewer actually tracks: 愛爾達, Apple TV, Netflix. Any
+*other* broadcaster Gemini names (緯來, DAZN, Disney+, myVideo, MLB.TV, ...)
+still shows up as plain text on the card either way (see `watch-text` in
+`buildMatchCard`) - it just doesn't get a logo/color badge or a "do I own
+this" toggle in Settings, since this registry only exists to badge the
+handful of services actually worth tracking, not to catalog every service
+Gemini might ever answer with. Where a tracked service's real, official
+mark exists on Wikimedia Commons (confirmed live, not assumed - see each
+entry's `logo`/`logoBg`), that's used via Commons' own `Special:FilePath`
+hotlink redirect, same posture as the team/F1 logos already pulled from
+ESPN's CDN elsewhere in this file rather than reproduced into this repo; a
+service with no logo found there (愛爾達 - no genuine Commons file for the
+Taiwan channel's own mark was found, see that entry's own comment) falls
+back to a plain colored-initial badge, and any logo that fails to load
+(network hiccup, a moved file) falls back to that same badge automatically
+(same `onerror` pattern as team logos). Adding a new tracked service later
+is one more entry in that list; nothing else in the file needs to know
+about it, same pattern as `SPORT_LABELS_ZH` for sports.
 
 `MY_SERVICE_IDS` names which of those the site's owner actually subscribes
 to right now (愛爾達, Apple TV, Netflix, as of writing) - matched fixtures
