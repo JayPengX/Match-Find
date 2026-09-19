@@ -982,41 +982,59 @@ function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(
   // user's favorite sport a "recommended" slot that happens to overlap a
   // genuinely great one). Left alone, both used to render as separate
   // top-level recommended cards - exactly the "still shown in separate
-  // stacks" bug a swipeable stack was supposed to fix. Instead, group any
-  // recommended matches that mutually overlap into one cluster (chained,
-  // so a 3-way overlap where only the middle one touches both ends still
-  // lands in a single cluster), keep only the best-scoring member of each
-  // cluster (by effectiveScore, i.e. respecting the user's own priority
-  // order - the same thing the DP itself uses to prefer one match over
-  // another) as a top-level recommended card, and demote the rest.
+  // stacks" bug a swipeable stack was supposed to fix.
   //
-  // A demoted match only joins the primary's stack if it's still
-  // genuinely "equally good" by the SAME raw-score bar the plain
-  // alternative-attachment pass below uses (STACK_MIN_SCORE and
-  // STACK_MAX_SCORE_GAP) - effectiveScore decided who WINS the slot, but
-  // it shouldn't decide who's worth swiping to, since that's exactly the
-  // priority nudge turning a mediocre match into a false "equally good"
-  // by riding the user's own favorite-sport preference. A demoted match
-  // that doesn't clear the bar just loses its recommended status
-  // entirely, same as any other match that lost its slot - it still shows
-  // up in "所有賽事" with the usual "time overlaps what's recommended"
-  // note, it just isn't offered as a swipe option.
-  const clusters = [];
-  recommendedSorted.forEach(match => {
-    const cluster = clusters.find(c => c.some(m => overlapMinutes(m, match) > 0));
-    if (cluster) cluster.push(match);
-    else clusters.push([match]);
-  });
+  // Grouping has to be ANCHORED, not transitive/chained: a first version
+  // of this grouped any recommended matches connected by a CHAIN of
+  // pairwise overlaps into one cluster (A overlaps B, B overlaps C => one
+  // cluster even if A and C don't overlap at all) - which is exactly
+  // "connected components", and on a real night's data it silently
+  // collapsed almost the WHOLE evening into one cluster: MLB alone can
+  // field ~15 staggered, ~3+ hour games, so game 1 overlaps game 2, game 2
+  // overlaps game 3, and so on for hours, with zero requirement that game
+  // 1 and game 10 share a single minute of airtime. Whatever else that
+  // chain happened to touch (an EPL or MLS pick, usually ranked higher by
+  // priorityOrder and so most likely to end up "primary") absorbed 3-4
+  // otherwise-unrelated MLB slots into its own stack and wiped out their
+  // independent recommended status - "only Premier League shows today,
+  // MLB/MLS disappeared" was this bug, not a hypothetical.
+  //
+  // The fix: process recommended matches highest-effectiveScore-first: an
+  // unclaimed match becomes an anchor, and ONLY matches that overlap that
+  // SPECIFIC anchor directly (never each other transitively) join its
+  // cluster and get claimed. A match overlapping two different anchors
+  // joins whichever is processed first (the higher-scored one) - it never
+  // bridges them into one.
   const claimedStackIds = new Set();
-  clusters
-    .filter(cluster => cluster.length > 1)
-    .forEach(cluster => {
-      const [primary, ...rest] = cluster.slice().sort((a, b) => b.effectiveScore - a.effectiveScore);
-      const worthy = rest.filter(m => m.score >= STACK_MIN_SCORE && m.score >= primary.score - STACK_MAX_SCORE_GAP);
+  const claimedAsClusterMember = new Set();
+  recommendedSorted
+    .slice()
+    .sort((a, b) => b.effectiveScore - a.effectiveScore)
+    .forEach(anchor => {
+      if (claimedAsClusterMember.has(anchor.id)) return;
+      claimedAsClusterMember.add(anchor.id);
+      const rest = recommendedSorted.filter(
+        m => !claimedAsClusterMember.has(m.id) && overlapMinutes(anchor, m) > 0
+      );
+      if (!rest.length) return;
+      rest.forEach(match => claimedAsClusterMember.add(match.id));
+      // A demoted match only joins the anchor's stack if it's still
+      // genuinely "equally good" by the SAME raw-score bar the plain
+      // alternative-attachment pass below uses (STACK_MIN_SCORE and
+      // STACK_MAX_SCORE_GAP) - effectiveScore decided who anchors the
+      // slot, but it shouldn't decide who's worth swiping to, since
+      // that's exactly the priority nudge turning a mediocre match into a
+      // false "equally good" by riding the user's own favorite-sport
+      // preference. A demoted match that doesn't clear the bar just loses
+      // its recommended status entirely, same as any other match that
+      // lost its slot - it still shows up in "所有賽事" with the usual
+      // "time overlaps what's recommended" note, it just isn't offered as
+      // a swipe option.
+      const worthy = rest.filter(m => m.score >= STACK_MIN_SCORE && m.score >= anchor.score - STACK_MAX_SCORE_GAP);
       rest.forEach(match => { match.recommended = false; });
       worthy.forEach(match => claimedStackIds.add(match.id));
       if (worthy.length) {
-        primary.stackAlternativeIds = worthy
+        anchor.stackAlternativeIds = worthy
           .map(m => m.id)
           .sort((a, b) => {
             const scoreOf = id => withIntervals.find(m => m.id === id).score;
