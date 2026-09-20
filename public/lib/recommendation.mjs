@@ -838,9 +838,23 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   const forcedIds = new Set();
   const excludedIds = new Set();
   clusters.forEach(cluster => {
-    const pinnedId = pinnedForDay && pinnedForDay.get(slotKeyFromMembers(cluster.members));
-    if (!pinnedId) return;
-    const pinnedMatch = cluster.members.find(m => m.id === pinnedId);
+    // `pinnedForDay` is a Set<matchId> (see public/lib/preferences.mjs) - a
+    // pin is looked up by the PINNED MATCH'S OWN id, never by a hash of the
+    // cluster it happened to belong to at pin time. This used to be keyed
+    // by slotKeyFromMembers(cluster.members) instead - which silently
+    // orphaned a real pin the moment the cluster's own shape changed from
+    // under it (a live duration correction nudging a near-total-overlap
+    // boundary, a routine 15-minute data refresh reshuffling which
+    // fixtures exist, or simply the viewer having pinned this match while
+    // a sport filter was narrowing which candidates counted toward the
+    // cluster in the first place) - live-reported as "swiping to a
+    // preference doesn't stick, reloading wipes it back to 推薦": the pin
+    // was still sitting in localStorage the whole time, just under a key
+    // that no longer matched anything computeDayPlan could ever look up
+    // again. A match's own id is stable regardless of which cluster shape
+    // currently contains it - even a cluster that split into several
+    // smaller ones (or one that grew) still finds its pin correctly here.
+    const pinnedMatch = pinnedForDay && cluster.members.find(m => pinnedForDay.has(m.id));
     if (!pinnedMatch) return;
     forcedIds.add(pinnedMatch.id);
     cluster.members.forEach(m => {
@@ -971,8 +985,16 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
 // safe to call from a live swipe handler without disturbing whatever's
 // currently rendered.
 export function naturalSlotChoice(dayKey, dayMatches, slotKey, pinnedForDay = null, options = {}) {
-  const withoutThisSlot = new Map(pinnedForDay ? pinnedForDay.entries() : []);
-  withoutThisSlot.delete(slotKey);
+  // `slotKey` is exactly `slotKeyFromMembers(cluster.members)` - every
+  // member's own id, sorted and joined - so splitting it back apart is a
+  // safe, exact way to get "every match this specific slot is asking
+  // about" without needing a separate members array passed in. Excluding
+  // any PIN that belongs to one of THESE ids (not a slotKey lookup - see
+  // computeDayPlan's own comment on pinnedForDay now being a Set<matchId>)
+  // is what "pretend this slot has no pin" actually means once pins are
+  // keyed by match id rather than by cluster shape.
+  const clusterMemberIds = new Set(slotKey.split('|'));
+  const withoutThisSlot = new Set(pinnedForDay ? [...pinnedForDay].filter(id => !clusterMemberIds.has(id)) : []);
   const clone = dayMatches.map(m => ({ ...m }));
   const picks = computeDayPlan(dayKey, clone, withoutThisSlot, options);
   const picked = picks.find(m => m.slotKey === slotKey);
@@ -1093,12 +1115,27 @@ function sportConcentrationPenalty(sport, recentPicks) {
 // corrupt the one it's derived from); planningScore is only what the
 // scheduler's DP weighs picks by (see computeDayPlan's `scoreField`
 // option).
+// The combined repeat+concentration penalty is capped at
+// ALTERNATIVE_MAX_SCORE_GAP - the exact same "close enough to be a real
+// call" line this file already draws for the swipeable-alternative gate
+// (see that constant's own comment). Variety is a tie-breaker between
+// otherwise-comparable options, never a reason to bury a fixture that's
+// CLEARLY the best thing on - issue reported directly: "prioritize the
+// best game first, THEN variety" - a match that's ahead by more than this
+// codebase's own settled definition of "not really a close call" should
+// never lose its slot purely to stacked diversity nudges. Uncapped, the
+// two penalties together could reach 2.5 (repeat, 1-day gap) + 1.5
+// (concentration) = 4.0, well past that same 2.5 line - letting variety
+// override a genuinely decisive lead, not just tip a real toss-up, which
+// is backwards from the stated design intent both here and in
+// ALTERNATIVE_MAX_SCORE_GAP's own comment.
 export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks = []) {
   dayMatches.forEach(match => {
     const lastDayKey = lastRecommendedDayKey.get(matchupKey(match));
     const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
     const repeatPenalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
     const sportPenalty = sportConcentrationPenalty(match.sport, recentPicks);
+    const varietyPenalty = Math.min(ALTERNATIVE_MAX_SCORE_GAP, repeatPenalty + sportPenalty);
     // Recomputed fresh every call (never accumulated) from match's own
     // CURRENT competitor scores - see liveExcitementBonus's own comment.
     const liveBonus = liveExcitementBonus(match);
@@ -1106,7 +1143,7 @@ export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDa
     match.sportConcentrationPenalty = sportPenalty;
     match.liveExcitementBonus = liveBonus;
     match.planningScore =
-      (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - repeatPenalty - sportPenalty + liveBonus;
+      (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - varietyPenalty + liveBonus;
   });
 }
 
@@ -1223,14 +1260,21 @@ export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinned
   const actualValue = actualPicks.reduce((sum, m) => sum + getScore(m), 0);
 
   // Force this exact candidate in via the same pinning mechanism a real
-  // viewer swipe uses (see pinSlotChoice in app.js), then let the
-  // scheduler find the best plan that actually includes it.
+  // viewer swipe uses (see pinSlotChoice in app.js) - pinnedForDay is a
+  // Set<matchId> (see computeDayPlan's own comment on why pins are keyed by
+  // the match's own id, not by a hash of whichever cluster it belonged to).
+  // Any OTHER member of candidateId's own cluster already sitting in
+  // pinnedForDay has to be dropped first, not just left alongside it - a
+  // cluster only ever has room for ONE forced pick (see computeDayPlan's
+  // own forcedIds), and cluster.members.find would otherwise arbitrarily
+  // resolve to whichever of the two happens to come first, silently
+  // ignoring the one candidate this function was actually asked to force.
   const forced = dayMatches.map(m => ({ ...m }));
   const forcedCandidates = forced.filter(m => !isQuietHours(m));
   const cluster = groupIntoSlots(forcedCandidates).find(c => c.members.some(m => m.id === candidateId));
-  const forcedKey = cluster ? slotKeyFromMembers(cluster.members) : candidateId;
-  const forcedPinnedForDay = new Map(pinnedForDay ? pinnedForDay.entries() : []);
-  forcedPinnedForDay.set(forcedKey, candidateId);
+  const clusterMemberIds = new Set(cluster ? cluster.members.map(m => m.id) : [candidateId]);
+  const forcedPinnedForDay = new Set(pinnedForDay ? [...pinnedForDay].filter(id => !clusterMemberIds.has(id)) : []);
+  forcedPinnedForDay.add(candidateId);
   const forcedPicks = computeDayPlan(dayKey, forced, forcedPinnedForDay, { scoreField });
   const forcedValue = forcedPicks.reduce((sum, m) => sum + getScore(m), 0);
 

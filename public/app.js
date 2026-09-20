@@ -55,6 +55,7 @@ import {
   resolveViewingPlan,
   slotKeyFromMembers,
   computeOverlapRange,
+  isNearTotalOverlap,
   computeWindowPlan,
   applyRecentRepeatPenalties,
   naturalSlotChoice,
@@ -77,16 +78,24 @@ const state = {
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
   myServiceIds: [], // subscribed services - see "Broadcast service registry" below
-  // Map<dayKey, Map<slotKey, matchId>> - which member of a multi-match
-  // "slot" (see isNearTotalOverlap) the viewer explicitly swiped to commit
-  // to watching, per day - see computeDayPlan/pinSlotChoice, and
-  // ./lib/preferences.mjs for the actual set-or-clear decision and
-  // serialization shape. Local-only (see this file's own top comment) -
-  // persisted to localStorage so a viewer who swiped past this morning's
-  // default pick still sees that choice as 偏好, not reverted back to
-  // 推薦, next time they open the page. Old days' entries get pruned (see
-  // prunePinnedChoices) rather than kept forever, since a day that's aged
-  // out of the fetched window can never be looked up again anyway.
+  // Map<dayKey, Set<matchId>> - the flat set of matches the viewer
+  // explicitly swiped to commit to watching, per day - see
+  // computeDayPlan/pinSlotChoice, and ./lib/preferences.mjs for the actual
+  // set-or-clear decision and serialization shape. Keyed by the PINNED
+  // MATCH'S OWN id, not by a hash of whichever multi-match "slot" (see
+  // isNearTotalOverlap) it happened to belong to at pin time - a slot's own
+  // shape can change (a live duration correction, a routine data refresh, a
+  // sport filter narrowing which candidates exist) in a way a match's own
+  // id never does, and keying storage by the former used to silently
+  // orphan a real pin the moment its slot's shape shifted, which read as
+  // "reloading the page wipes my preference back to 推薦" - see
+  // preferences.mjs's own comment on applySlotSwipe. Local-only (see this
+  // file's own top comment) - persisted to localStorage so a viewer who
+  // swiped past this morning's default pick still sees that choice as
+  // 偏好, not reverted back to 推薦, next time they open the page. Old
+  // days' entries get pruned (see prunePinnedChoices) rather than kept
+  // forever, since a day that's aged out of the fetched window can never be
+  // looked up again anyway.
   pinnedChoices: loadPinnedChoices(),
   // Map<dayKey, Map<matchupKey, dayKey>> - computeWindowPlan's
   // historyByDayKey: for each day, the most recent EARLIER day (across the
@@ -420,9 +429,8 @@ state.myServiceIds = new Set(DEFAULT_MY_SERVICE_IDS);
 
 // ---- Pinned-choice persistence (local-only "Prefer") -----------------------
 //
-// state.pinnedChoices (Map<dayKey, Map<slotKey, matchId>>) - which member
-// of a multi-match slot (see isNearTotalOverlap) the viewer explicitly
-// swiped to commit to watching, per day. Local-only, like every other
+// state.pinnedChoices (Map<dayKey, Set<matchId>>) - which matches the
+// viewer explicitly swiped to commit to watching, per day. Local-only, like every other
 // preference in this file (see this file's own top comment) - the
 // serialization shape, staleness pruning, and the actual "is this a real
 // override or does it just match the algorithm's own default" decision
@@ -812,7 +820,20 @@ function buildMatchCard(match) {
   // on an already-correctly-scrolled stack instead of tearing it down.
   node.dataset.matchId = match.id;
   const start = Date.parse(match.startTimeUtc);
-  const end = start + match.durationMinutes * 60_000;
+  // For a FINISHED match, match.durationMinutes is already the real
+  // observed elapsed time (see build-data.mjs's finishedDurationMinutes) -
+  // no forward uncertainty left to hedge. For one that hasn't finished yet,
+  // the displayed end time uses estimatedDurationMinutes (recommendation.mjs)
+  // - the SAME real-clock-overrun-padded estimate schedulingDurationMinutes
+  // already uses internally to decide when the NEXT match can safely start
+  // - not the bare pre-game durationMinutes. Showing the viewer the bare
+  // figure told them a low-reliability, no-clock sport (MLB - extra
+  // innings, rain delays, see SPORT_TIMING's own comment) would end sooner
+  // than this app's own scheduler already assumes it realistically might -
+  // live-reported as "MLB almost always runs past its shown end time",
+  // which this app's own internal padding had already anticipated but
+  // never actually showed on the card itself.
+  const end = start + (match.isFinished ? match.durationMinutes : estimatedDurationMinutes(match)) * 60_000;
 
   if (match.timeTbd) {
     // startTimeUtc is only a placeholder for a TBD fixture (see
@@ -917,8 +938,17 @@ function buildMatchCard(match) {
     recommendedTag.hidden = false;
   }
 
+  // The generic factor-label reason line ("依雙方戰績、近期戰況...計算。" -
+  // see build-data.mjs's buildObjectiveReasonZh) was reported as useless:
+  // it never says anything a viewer couldn't already tell from the card
+  // itself (which factors happen to feed a deterministic formula, not
+  // anything about the actual matchup), and reads as boilerplate repeated
+  // near-identically across most cards of the same sport. The underlying
+  // `match.reason`/`match.objectiveFactors` fields are kept (still useful
+  // for scripts/evaluate-recommendations.mjs and debugging matches.json
+  // directly) - this just stops surfacing that boilerplate line in the UI.
   const reasonEl = node.querySelector('.match-reason');
-  reasonEl.textContent = match.reason || '';
+  reasonEl.hidden = true;
 
   // A plain fact, independent of recommendation state entirely (see
   // resolveViewingPlan's own top comment on why overlap no longer decides
@@ -932,9 +962,23 @@ function buildMatchCard(match) {
   // not whichever happened to be earliest in the day's own list order.
   // Among those, still prefers a recommended one when one exists (the more
   // useful "you could also be watching X" case) over an arbitrary one.
+  // Excludes any match that's a NEAR-TOTAL overlap of this one (see
+  // isNearTotalOverlap) - those are this match's own swipe-stack alternates
+  // (see buildMatchStack/computeDayPlan's alternativeIds), not a genuine
+  // "you could be watching a different, earlier game instead" conflict.
+  // Reported directly: this note was comparing a card against its OWN
+  // stack-mate ("of course they overlap, that's the whole reason they're
+  // in the same stack together") instead of only against a real, separate
+  // neighboring match - noise, not information, on every multi-member
+  // stack's own alternates.
   const conflictNote = node.querySelector('.conflict-note');
   const earlierOverlaps = state.matches
-    .filter(m => (match.overlappingIds || []).includes(m.id) && Date.parse(m.startTimeUtc) < Date.parse(match.startTimeUtc))
+    .filter(
+      m =>
+        (match.overlappingIds || []).includes(m.id) &&
+        Date.parse(m.startTimeUtc) < Date.parse(match.startTimeUtc) &&
+        !isNearTotalOverlap(match, m)
+    )
     .sort((a, b) => Date.parse(b.startTimeUtc) - Date.parse(a.startTimeUtc));
   const earlierOverlap = earlierOverlaps.find(m => m.recommended) || earlierOverlaps[0];
   if (earlierOverlap) {
@@ -1116,110 +1160,36 @@ function renderFilters() {
   );
 }
 
-// How recently any match-stack scroller last fired a 'scroll' event -
-// checked by the periodic 60s renderSections() tick in init() so it can
-// skip a run rather than blow away a swipe the viewer is mid-gesture on.
-// That tick exists purely to refresh each card's own relative-time label
-// ("5 分鐘後" etc.) with data already in memory; renderRecommendedSection
-// fully replaces recommendedListEl's children on every call, which
-// destroys and rebuilds the scroller DOM node a viewer might currently be
-// touch-scrolling. The rebuilt stack reopens at whatever member is
-// CURRENTLY pinned (see buildMatchStack's own requestAnimationFrame,
-// primaryIndex), not wherever the viewer's finger had it mid-swipe - from
-// the viewer's side that read as the card randomly snapping backward to
-// the previous choice. A brief cooldown after the last scroll tick is
-// enough: the interval simply retries on its next 60s tick once the
-// gesture has actually settled.
-let lastStackInteractionAt = 0;
-const STACK_INTERACTION_COOLDOWN_MS = 1_000;
-function markStackInteraction() {
-  lastStackInteractionAt = Date.now();
-}
-function isStackBeingInteractedWith() {
-  return Date.now() - lastStackInteractionAt < STACK_INTERACTION_COOLDOWN_MS;
-}
-
-// The stack DOM node the viewer just swiped, kept alive across the very next
-// render triggered by that same swipe's own pin (see buildMatchStack's
-// settle() and renderRecommendedSection's reuse check below) - one-shot,
-// cleared the instant a render pass either consumes or fails to match it.
-// This is the actual fix for "swiping next flashes the previous card": a
-// pin used to call renderSections(), which tore down and rebuilt EVERY
-// stack from scratch, including the one the viewer's finger had just
-// settled on - a freshly built stack always starts at scrollLeft 0 (its
-// first, highest-scored card) and only gets corrected to the real pinned
-// position on the next animation frame, so for one paint the viewer saw
-// the WRONG (often the previous/default) card before it snapped to the one
-// they'd actually chosen - worse the slower/gentler the swipe, since a
-// fixed 180ms settle timeout (see the old settleTimer below) could fire
-// while native momentum scrolling was still carrying the gesture further,
-// pinning a transient mid-flight position and then fighting the still-
-// ongoing native scroll with its own corrective jump. Reusing the exact
-// same DOM node (not a clone - scrollLeft is a live property of the actual
-// element) means there is nothing left to correct: the viewer's own
-// gesture already put it exactly where it belongs.
-let interactedStack = null;
-
-function slotMemberOrderKey(members) {
-  return members
-    .slice()
-    .sort((a, b) => b.viewerScore - a.viewerScore)
-    .map(m => m.id)
-    .join('|');
-}
-
-// Updates only what a pin can change on an already-built, already-correctly
-// -scrolled stack (recommended-tag text/class, is-recommended, and which
-// card counts as "pinned to the top of the day") without touching layout,
-// scroll position, or any card this pin didn't actually change the
-// recommendation state of.
-function patchStackSelectionTags(stackNode, members, isTopOfDay, primaryId) {
-  // Keeps buildMatchStack's own settle() (which reads
-  // stackNode.dataset.primaryId, not a closed-over variable - see that
-  // field's own comment) correct across a reuse-render even when the
-  // reuse itself didn't originate from THIS stack's own swipe - e.g. a
-  // different slot's pin triggering a shared renderSections() pass that
-  // patches this one along the way.
-  stackNode.dataset.primaryId = primaryId;
-  members.forEach(match => {
-    const card = stackNode.querySelector(`[data-match-id="${CSS.escape(match.id)}"]`);
-    if (!card) return;
-    const tag = card.querySelector('.recommended-tag');
-    if (match.isPreferred) {
-      tag.hidden = false;
-      tag.textContent = '偏好';
-      tag.classList.add('is-preferred');
-    } else if (match.recommended) {
-      tag.hidden = false;
-      tag.textContent = '推薦';
-      tag.classList.remove('is-preferred');
-    } else {
-      tag.hidden = true;
-      tag.classList.remove('is-preferred');
-    }
-    card.classList.toggle('is-recommended', !!match.recommended);
-    card.classList.toggle('is-pinned', isTopOfDay && match.id === primaryId);
-  });
-}
-
 // A slot with more than one near-total-overlapping member (see
-// groupIntoSlots) - a horizontally swipeable card stack. Driven entirely
-// by explicit pointer events and a CSS transform, NOT native scroll-snap -
-// see this function's own git history for the whole prior design (scrollLeft
-// + scroll-snap + a requestAnimationFrame poll waiting for native momentum
-// to settle) and the string of real, reported regressions that design kept
-// producing: real touch momentum/snap timing varies enough across devices
-// (and native scroll-snap "always stop at every card" behavior enough
-// between browsers) that no fixed poll/threshold tuned against one device
-// stayed correct on every other one - stuck cards, flicking back, cards
-// landing on the wrong index. A transform-based position is just a plain
-// CSS property this code sets directly and reads back exactly what it set -
-// there is no separate physics engine (native momentum/snap) whose output
-// has to be inferred after the fact by polling. Settling on a different
-// card PINS that match as this slot's fixed choice and rebuilds the whole
-// day's plan around it (see pinSlotChoice/computeDayPlan) - matches before
-// and after it reflow to connect with it instead of with whichever match
-// was the plan's own default pick.
+// groupIntoSlots) - a tap-to-switch card stack: exactly one member is shown
+// at a time, plus prev/next arrows and directly-tappable dots to switch to
+// another. Tapping a control PINS that match immediately (see
+// pinSlotChoice/computeDayPlan) - matches before and after it reflow to
+// connect with it instead of with whichever match was the plan's own
+// default pick.
+//
+// Deliberately NOT a drag/swipe gesture - see this function's own git
+// history for the two designs this replaced (native scroll-snap polling for
+// momentum to settle, then a hand-rolled Touch-Events drag with a CSS
+// transform) and the string of real, live-reported regressions BOTH kept
+// producing on real Safari: stuck cards, a stack frozen solid after a
+// single swipe, cards landing on the wrong index. Every one of those bugs
+// came from the same root cause - inferring "the gesture is done, it is now
+// safe to commit and reparent this DOM node" from some signal (a poll, a
+// frame count, a transitionend event) that real WebKit didn't reliably
+// deliver when this codebase needed it to. A tap has no such problem: a
+// `click` handler fires exactly once, synchronously, with nothing further
+// to wait for - there is no gesture-in-progress state this node can get
+// stuck in, because there is no gesture, only a discrete press. This also
+// means every render can simply show whichever member is currently primary,
+// with no separate DOM-node-reuse mechanism needed to avoid a visible
+// flash (see this file's own git history for the old interactedStack/
+// patchStackSelectionTags machinery that existed only to work around that)
+// - and no scroll position or open touch sequence than can ever survive
+// (or fail to survive) a render pass, so this is also the direct fix for
+// "one swipe reused an old stale visual state forever" (a `.is-muted` class
+// that patchStackSelectionTags never got around to clearing being the
+// concrete case reported).
 function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // The CLUSTER's own key (every near-total-overlapping member, set by
   // computeDayPlan on the recommended pick - see that field's own comment
@@ -1238,256 +1208,60 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   const hint = document.createElement('p');
   hint.className = 'match-stack-hint';
-  hint.textContent = '⟷ 這個時段只能擇一收看，滑動選擇要看哪一場';
+  hint.textContent = '⟷ 這個時段只能擇一收看，點選切換要看哪一場';
+
+  // A FIXED order (by score, highest first), independent of which member is
+  // currently primary - so the dots/arrows always land in the same visual
+  // order across renders, rather than reshuffling around whichever member
+  // just got pinned. viewerScore, not the older effectiveScore name - see
+  // recommendation.mjs's computeRecommendationScore/resolveViewingPlan.
+  const ordered = members.slice().sort((a, b) => b.viewerScore - a.viewerScore);
+  const currentIndex = Math.max(0, ordered.findIndex(m => m.id === primary.id));
 
   const viewport = document.createElement('div');
   viewport.className = 'match-stack-viewport';
-  const track = document.createElement('div');
-  track.className = 'match-stack-track';
-  // A FIXED order (by score, highest first) - independent of which member
-  // is currently pinned/primary. An earlier version put the current pick
-  // first and sorted the rest around it, which reshuffled the whole stack
-  // on every pin; since a pin re-renders, that reset the track back to
-  // position 0 every time. On a 3+-member stack, a plain "swipe forward"
-  // from that reset position could only ever reach whichever card the
-  // reshuffle happened to place second - reaching a third member required
-  // an unnaturally large single swipe, which read as "you can only pick
-  // between two of them." Keeping the order stable means normal sequential
-  // swiping reaches every member; only the POSITION needs to reflect the
-  // current pick, not the member order itself.
-  // viewerScore, not the older effectiveScore name - see
-  // recommendation.mjs's computeRecommendationScore/resolveViewingPlan for
-  // why both exist (same number, viewerScore is the audit's own explicit
-  // name for "this viewer's own judgment of the match", the one this
-  // stack's card order should actually reflect).
-  const ordered = members.slice().sort((a, b) => b.viewerScore - a.viewerScore);
-  // Stamped so a LATER render (see renderRecommendedSection's reuse check)
-  // can confirm this exact node still represents the same members in the
-  // same order before reusing it - if membership or order genuinely
-  // changed, this key won't match and the caller correctly falls back to a
-  // full rebuild instead of reusing something stale.
-  wrapper.dataset.memberOrderKey = slotMemberOrderKey(ordered);
-  // Tracks "which member is currently pinned" on the LIVE node itself,
-  // read/written by commitToIndex() below instead of a closed-over
-  // `primary` variable - this same wrapper (and therefore this same
-  // closure) can be REUSED across many renders (see
-  // renderRecommendedSection's reuse branch), each of which can change
-  // which member is actually pinned via patchStackSelectionTags, but never
-  // re-runs buildMatchStack itself. `primary.id` is only ever this specific
-  // call's own snapshot - it would go stale the moment the first
-  // reuse-render patches a DIFFERENT primaryId onto this node.
-  wrapper.dataset.primaryId = primary.id;
-  let currentIndex = Math.max(0, ordered.findIndex(m => m.id === primary.id));
+  const card = buildMatchCard(ordered[currentIndex]);
+  if (isTopOfDay) card.classList.add('is-pinned');
+  viewport.appendChild(card);
 
-  ordered.forEach((match, index) => {
-    const card = buildMatchCard(match);
-    if (index === currentIndex && isTopOfDay) card.classList.add('is-pinned');
-    track.appendChild(card);
-  });
-  viewport.appendChild(track);
+  function choose(index) {
+    const clamped = Math.min(ordered.length - 1, Math.max(0, index));
+    const chosen = ordered[clamped];
+    if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
+  }
+
+  const nav = document.createElement('div');
+  nav.className = 'match-stack-nav';
+
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.className = 'match-stack-arrow';
+  prevBtn.setAttribute('aria-label', '上一場');
+  prevBtn.textContent = '‹';
+  prevBtn.disabled = currentIndex === 0;
+  prevBtn.addEventListener('click', () => choose(currentIndex - 1));
 
   const dots = document.createElement('div');
   dots.className = 'match-stack-dots';
-  const dotEls = ordered.map((_, index) => {
-    const dot = document.createElement('span');
+  ordered.forEach((match, index) => {
+    const dot = document.createElement('button');
+    dot.type = 'button';
     dot.className = 'match-stack-dot' + (index === currentIndex ? ' is-active' : '');
+    dot.setAttribute('aria-label', `切換到${match.name || index + 1}`);
+    dot.addEventListener('click', () => choose(index));
     dots.appendChild(dot);
-    return dot;
   });
 
-  // The track's own position is always "currentIndex's own page, plus
-  // however many live drag pixels are currently applied on top" - a pure
-  // function of state this code already tracks, never inferred from a
-  // separate scroll position. `%` for the page offset (correct regardless
-  // of viewport width, no clientWidth read needed to just SHOW the current
-  // card) plus a `px` drag offset (needs clientWidth, but only to decide
-  // when to COMMIT to a swipe - see onPointerUp - never to render it).
-  function render(dragPx, animate) {
-    track.style.transition = animate ? '' : 'none';
-    track.style.transform = `translateX(calc(${-currentIndex * 100}% + ${dragPx}px))`;
-  }
-  render(0, false);
+  const nextBtn = document.createElement('button');
+  nextBtn.type = 'button';
+  nextBtn.className = 'match-stack-arrow';
+  nextBtn.setAttribute('aria-label', '下一場');
+  nextBtn.textContent = '›';
+  nextBtn.disabled = currentIndex === ordered.length - 1;
+  nextBtn.addEventListener('click', () => choose(currentIndex + 1));
 
-  // A swipe commits (pins the card and rebuilds the day's plan around it -
-  // see pinSlotChoice) the instant the pointer lifts past the decision
-  // threshold below - no polling, no waiting for anything to "settle",
-  // since there's no native momentum left running that could still move
-  // the position after this function returns.
-  function commitToIndex(index) {
-    currentIndex = Math.min(ordered.length - 1, Math.max(0, index));
-    render(0, true);
-    dotEls.forEach((dot, i) => dot.classList.toggle('is-active', i === currentIndex));
-    const chosen = ordered[currentIndex];
-    // wrapper.dataset.primaryId, NOT a closed-over variable - see that
-    // dataset field's own comment above for why (this node can be reused
-    // across many renders that each change which member is pinned).
-    if (chosen && chosen.id !== wrapper.dataset.primaryId) {
-      // Recorded BEFORE pinSlotChoice triggers its own render, so that
-      // render can find and reuse this exact node - see interactedStack's
-      // own comment.
-      interactedStack = { dayKey, slotKey, memberOrderKey: wrapper.dataset.memberOrderKey, node: wrapper };
-      wrapper.dataset.primaryId = chosen.id;
-      // Wait for the transition to ACTUALLY finish, not a guessed frame
-      // count. A prior version deferred this two requestAnimationFrame
-      // callbacks, reasoning that render(0, true) just above needed one
-      // frame to paint before pinSlotChoice's own renderSections() could
-      // safely reparent this node without interrupting the transition -
-      // live-reported as still freezing on real Safari after that fix
-      // shipped, so whatever the actual timing gap is, a fixed frame count
-      // guessed against a browser this sandbox can't run (no WebKit here)
-      // isn't it. transitionend is the browser's own "this specific
-      // transition is done" signal - reparenting after it fires can no
-      // longer interrupt anything, on any engine, by construction, not by
-      // timing luck. transitioncancel covers the one case transitionend
-      // doesn't: the viewer starting a NEW drag before this one settled,
-      // which forces `transition: none` in move() above and cancels this
-      // transition outright - still "done" as far as this commit cares.
-      // The setTimeout fallback (250ms's own CSS duration, +150ms margin)
-      // guards against either event simply not firing at all - WebKit has
-      // a real history of dropping transitionend in edge cases (e.g. the
-      // element becoming hidden mid-transition), and this is exactly the
-      // one commit that must never be left permanently stuck waiting for
-      // an event that might not come.
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(fallbackTimer);
-        pinSlotChoice(dayKey, slotKey, chosen.id);
-      };
-      track.addEventListener('transitionend', settle, { once: true });
-      track.addEventListener('transitioncancel', settle, { once: true });
-      const fallbackTimer = setTimeout(settle, 400);
-    }
-  }
-
-  // A swipe commits past either a distance threshold (dragged more than
-  // this fraction of the viewport's own width) OR a fast-flick velocity
-  // threshold (a short, decisive flick that never traveled very far) -
-  // together these are the two ways a real swipe gesture actually reads as
-  // "the viewer meant to change cards" on any touch UI.
-  const COMMIT_DISTANCE_FRACTION = 0.28;
-  const COMMIT_FLICK_VELOCITY_PX_PER_MS = 0.5;
-  // Below this, a touch is a tap/scroll-start, not a horizontal swipe yet -
-  // avoids hijacking a vertical page-scroll gesture that merely started on
-  // top of this stack.
-  const DIRECTION_LOCK_THRESHOLD_PX = 8;
-  // Dragging past either end still moves, but resisted - visible feedback
-  // that this IS the first/last card without a hard, jarring stop.
-  const OVERDRAG_RESISTANCE = 0.35;
-
-  // Touch Events (touchstart/move/end/cancel), not Pointer Events - this
-  // repo's own audience is heavily iOS Safari/PWA (see the day-picker's own
-  // scroll-snap comment on pre-18.2 Safari), and Safari's Pointer Events
-  // support is real but has stayed genuinely less mature than Chromium's
-  // for years (touch-action landed later, setPointerCapture/pointercancel
-  // timing has known quirks) - exactly the kind of gap a Chromium-only
-  // sandbox test can't catch (this environment has no WebKit browser
-  // installed at all to test against directly). Touch Events, by contrast,
-  // have had solid, consistent Safari support since iOS 2 - the safer
-  // choice for a gesture this central to the whole page, even though
-  // Pointer Events would unify touch/mouse/pen into one API. A plain mouse
-  // fallback below covers desktop testing/pointer-mouse devices, which
-  // never fire touch events at all.
-  let startX = 0;
-  let startY = 0;
-  let lastX = 0;
-  let startTime = 0;
-  let active = false;
-  // true = committed to a horizontal swipe, false = handed off to the
-  // page's own vertical scroll, null = not yet decided this gesture.
-  let horizontal = null;
-
-  function begin(x, y) {
-    active = true;
-    startX = lastX = x;
-    startY = y;
-    startTime = performance.now();
-    horizontal = null;
-    markStackInteraction();
-  }
-  // Returns true if this move was claimed as part of the horizontal
-  // gesture (caller should preventDefault to stop the page scrolling too),
-  // false otherwise (not yet decided, or handed off to vertical scroll).
-  function move(x, y) {
-    if (!active) return false;
-    const dx = x - startX;
-    const dy = y - startY;
-    if (horizontal === null) {
-      if (Math.abs(dx) < DIRECTION_LOCK_THRESHOLD_PX && Math.abs(dy) < DIRECTION_LOCK_THRESHOLD_PX) return false;
-      horizontal = Math.abs(dx) > Math.abs(dy);
-    }
-    if (!horizontal) return false; // vertical gesture - let the page scroll, touch-action already allows it
-    lastX = x;
-    markStackInteraction();
-    const atStart = currentIndex === 0 && dx > 0;
-    const atEnd = currentIndex === ordered.length - 1 && dx < 0;
-    render(atStart || atEnd ? dx * OVERDRAG_RESISTANCE : dx, false);
-    return true;
-  }
-  function end() {
-    if (!active) return;
-    active = false;
-    if (!horizontal) return;
-    const dx = lastX - startX;
-    const elapsedMs = Math.max(1, performance.now() - startTime);
-    const velocity = dx / elapsedMs;
-    const width = Math.max(1, viewport.clientWidth);
-    const pastDistance = Math.abs(dx) / width > COMMIT_DISTANCE_FRACTION;
-    const pastVelocity = Math.abs(velocity) > COMMIT_FLICK_VELOCITY_PX_PER_MS;
-    const delta = pastDistance || pastVelocity ? (dx < 0 ? 1 : -1) : 0;
-    commitToIndex(currentIndex + delta);
-  }
-  function cancel() {
-    if (!active) return;
-    active = false;
-    if (horizontal) commitToIndex(currentIndex); // snap back to wherever this card already was
-  }
-
-  track.addEventListener(
-    'touchstart',
-    event => {
-      begin(event.touches[0].clientX, event.touches[0].clientY);
-    },
-    { passive: true }
-  );
-  track.addEventListener(
-    'touchmove',
-    event => {
-      if (move(event.touches[0].clientX, event.touches[0].clientY)) event.preventDefault();
-    },
-    { passive: false }
-  );
-  track.addEventListener('touchend', end);
-  track.addEventListener('touchcancel', cancel);
-
-  // Mouse fallback - a real mouse (not a touch device dispatching
-  // compatibility mouse events too; browsers suppress those after a real
-  // touch sequence) never fires the touch listeners above at all. The
-  // move/up listeners live on `window`, not `track` (a real drag's mouse
-  // can leave the track's own bounds mid-gesture), but are only ever
-  // ATTACHED while a mouse drag on THIS stack is actually in progress -
-  // every buildMatchStack call would otherwise add its own permanent
-  // window-level listener pair that outlives the stack itself (a real
-  // memory/CPU leak across a long session with many stacks built over
-  // time, e.g. every pin/fracture rebuild - see this function's own
-  // comment on how often that happens on a real MLB night).
-  function onWindowMouseMove(event) {
-    move(event.clientX, event.clientY);
-  }
-  function onWindowMouseUp() {
-    window.removeEventListener('mousemove', onWindowMouseMove);
-    window.removeEventListener('mouseup', onWindowMouseUp);
-    end();
-  }
-  track.addEventListener('mousedown', event => {
-    if (event.button !== 0) return;
-    begin(event.clientX, event.clientY);
-    window.addEventListener('mousemove', onWindowMouseMove);
-    window.addEventListener('mouseup', onWindowMouseUp);
-  });
-
-  wrapper.append(hint, viewport, dots);
+  nav.append(prevBtn, dots, nextBtn);
+  wrapper.append(hint, viewport, nav);
   return wrapper;
 }
 
@@ -1518,12 +1292,6 @@ function renderRecommendedSection() {
   // full state.matches, not just today's bucket, so that edge case doesn't
   // just silently drop the alternative.
   const byId = new Map(state.matches.map(m => [m.id, m]));
-  // One-shot: consumed (matched or not) by this pass alone, so a stale
-  // reference never lingers into an unrelated later render (a day switch,
-  // the periodic tick, a real data poll) - see interactedStack's own
-  // comment for why this exists at all.
-  const pendingReuse = interactedStack;
-  interactedStack = null;
   // Per-day, per-slot FROZEN membership - see state.stackMembershipByDay's
   // own comment for why. computeDayPlan's alternativeIds is genuinely
   // recomputed per CHOICE (whichever member the scheduler/a pin actually
@@ -1543,6 +1311,22 @@ function renderRecommendedSection() {
   }
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
+    // A FINISHED match is kept in 推薦賽事 purely as viewing HISTORY (see
+    // computeDayPlan's own comment on why a finished fixture is a normal,
+    // still-scheduled candidate, not silently dropped once it ends) - it
+    // can still come back from computeDayPlan with alternativeIds set (its
+    // near-total-overlap rivals from earlier that day), but swiping between
+    // "what I could have watched instead" for a game that's already over
+    // isn't a real choice anymore, just noise on what's supposed to be a
+    // simple record of what was on. Always a single plain card here,
+    // regardless of alternatives - reported directly: a finished match
+    // should never be swipeable.
+    if (match.isFinished) {
+      const card = buildMatchCard(match);
+      if (index === 0) card.classList.add('is-pinned');
+      fragment.appendChild(card);
+      return;
+    }
     let alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
     if (alternatives.length) {
       let members = [match, ...alternatives];
@@ -1571,29 +1355,11 @@ function renderRecommendedSection() {
         return;
       }
       const isTopOfDay = index === 0;
-      if (
-        pendingReuse &&
-        pendingReuse.dayKey === dayKey &&
-        pendingReuse.slotKey === slotKey &&
-        pendingReuse.memberOrderKey === slotMemberOrderKey(members)
-      ) {
-        // The viewer's own gesture already positioned this exact node on
-        // exactly the right card (a plain CSS transform, set directly by
-        // buildMatchStack's own commitToIndex - see that function's own
-        // comment) - reuse it and only patch the small bit of state a pin
-        // actually changes, rather than tearing it down and rebuilding it
-        // (see interactedStack's own comment for the original "flashes back
-        // to the previous card" bug this fixes). Moving it into `fragment`
-        // and then into recommendedListEl below is still a real DOM
-        // detach+reattach of this exact node, but unlike the old
-        // scrollLeft-based design, a transform is just a plain style
-        // property - detaching and reattaching an element never resets it,
-        // so there's nothing left here to capture/restore.
-        patchStackSelectionTags(pendingReuse.node, members, isTopOfDay, match.id);
-        fragment.appendChild(pendingReuse.node);
-      } else {
-        fragment.appendChild(buildMatchStack(dayKey, members, match, isTopOfDay));
-      }
+      // Always a fresh build - a tap-to-switch stack (see buildMatchStack's
+      // own comment) has no scroll position or in-flight gesture that a
+      // rebuild could ever visibly disrupt, so there's no need for the old
+      // DOM-node-reuse mechanism a drag-based stack once required here.
+      fragment.appendChild(buildMatchStack(dayKey, members, match, isTopOfDay));
     } else {
       const card = buildMatchCard(match);
       if (index === 0) card.classList.add('is-pinned');
@@ -1869,22 +1635,14 @@ function nextRelevantTransitionMs(now = Date.now()) {
 
 // Schedules exactly the next checkForUpdate call - clears any previously
 // scheduled one first, so there is only ever one live timer no matter how
-// many times this runs (called fresh after every load/checkForUpdate, see
-// below). A viewer mid-swipe on a card stack gets a short retry instead of
-// having the whole recommended list torn down and rebuilt under their
-// finger (see isStackBeingInteractedWith's own comment).
+// many times this runs (called fresh after every load/checkForUpdate,
+// below).
 function scheduleNextUpdate() {
   if (nextUpdateTimer) clearTimeout(nextUpdateTimer);
   const now = Date.now();
   const target = nextRelevantTransitionMs(now) ?? now + MAX_NEXT_UPDATE_DELAY_MS;
   const delay = Math.min(MAX_NEXT_UPDATE_DELAY_MS, Math.max(MIN_NEXT_UPDATE_DELAY_MS, target - now));
-  nextUpdateTimer = setTimeout(() => {
-    if (isStackBeingInteractedWith()) {
-      nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), STACK_INTERACTION_COOLDOWN_MS);
-      return;
-    }
-    checkForUpdate({ silent: true });
-  }, delay);
+  nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), delay);
 }
 
 // `silent` is what makes this the same function for the three real
@@ -2115,10 +1873,7 @@ function scheduleLivePoll() {
     // A backgrounded tab still gets rescheduled (so it picks back up the
     // moment it's visible again) but skips the actual network request -
     // no point spending battery/quota polling scores nobody's looking at.
-    // A mid-swipe stack gets the same short retry the scheduled data-update
-    // path already uses (see isStackBeingInteractedWith's own comment)
-    // rather than yanking the DOM out from under an active gesture.
-    if (document.visibilityState !== 'hidden' && !isStackBeingInteractedWith() && anyMatchLiveNow()) {
+    if (document.visibilityState !== 'hidden' && anyMatchLiveNow()) {
       await pollLiveMatches();
     }
     scheduleLivePoll();

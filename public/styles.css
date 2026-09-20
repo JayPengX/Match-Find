@@ -393,46 +393,66 @@ main#app {
   font-weight: 700;
 }
 /* A slot with a genuinely mutually-exclusive alternative (see
-   groupIntoSlots/buildMatchStack) renders as a horizontally swipeable
-   stack instead of either silently picking one or showing both at once -
-   driven by explicit pointer events and a CSS transform (see
-   buildMatchStack's own comment for why this replaced an earlier native
-   CSS scroll-snap design). Only one card is ever on screen at a time - the
-   others are a deliberate swipe away, and swiping to one actually commits
-   to it. */
+   groupIntoSlots/buildMatchStack) renders as a tap-to-switch stack instead
+   of either silently picking one or showing both at once - only one card is
+   ever on screen at a time, switched via the prev/next arrows or a dot
+   below it, each an ordinary tap/click that commits immediately. This
+   replaced an earlier drag/swipe-gesture design (see buildMatchStack's own
+   comment for why: a real touch drag has an inherent "is the gesture done
+   yet" timing question that repeatedly produced live, reported freezes on
+   real Safari - a tap has no such question, so there is nothing left here
+   for a gesture-timing bug to ever get stuck in). */
 .match-stack {
   position: relative;
   margin-bottom: 12px;
 }
-.match-stack-viewport {
-  overflow: hidden;
-  /* Lets the browser's own vertical page scroll start immediately from a
-     touch that begins on this stack - buildMatchStack's pointermove only
-     calls preventDefault once it has itself decided the gesture is
-     horizontal, so a vertical scroll is never fought or delayed. */
-  touch-action: pan-y;
-}
-.match-stack-track {
-  display: flex;
-  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.match-stack-track > .match-card {
-  flex: 0 0 100%;
-  min-width: 0;
+.match-stack-viewport > .match-card {
   margin-bottom: 0;
+}
+.match-stack-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.match-stack-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.match-stack-arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 .match-stack-dots {
   display: flex;
-  justify-content: center;
-  gap: 5px;
-  margin-top: 8px;
+  align-items: center;
 }
 .match-stack-dot {
+  /* The visible dot is small (6px), but its actual tap target is padded out
+     to a comfortable thumb size - a small hit area here is exactly the kind
+     of thing that reads as "unresponsive" on a real phone even though the
+     click handler itself works fine. */
   width: 6px;
   height: 6px;
+  padding: 11px;
+  background-clip: content-box;
+  border: none;
   border-radius: 50%;
-  background: var(--border);
-  transition: background 0.15s ease, transform 0.15s ease;
+  background-color: var(--border);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+  cursor: pointer;
 }
 .match-stack-dot.is-active {
   background: var(--accent);

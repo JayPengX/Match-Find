@@ -1394,3 +1394,153 @@ default string a fetch call happens to send.
   `buildObjectiveReasonZh` template. This is a presentation-only loss, not
   a scoring one (Round 9 already established the validation pass's own
   adjustment was bounded to ±2 and quota-starved besides).
+
+## Round 12 - Eleven live-reported bugs: swipe UI rewrite, scoring/duration/window fixes, pin-persistence root cause
+
+A single, large user report bundling 11 distinct issues, several already
+diagnosed live against real, freshly-fetched matches.json data rather than
+just reasoned about abstractly. In order:
+
+**1. Swipe stack "stuck on every single stack after one swipe" on real
+Safari.** The Round-11-era fix (defer the pin commit until `transitionend`)
+was live-reported to still freeze. Rather than guess a fourth timing fix
+against a browser this sandbox has never been able to run, `buildMatchStack`
+was rewritten to remove the drag gesture entirely: it now shows exactly one
+card, with prev/next arrow buttons and directly-tappable dots that commit a
+pin immediately on click. A `click` handler has no "is the native gesture
+actually done yet" question for a fixed frame count/transitionend/timeout to
+answer wrong - there is no gesture, only a discrete, synchronous press. This
+also let two other pieces of machinery be deleted outright: the whole
+`interactedStack`/`patchStackSelectionTags` DOM-node-reuse mechanism (it
+existed only to avoid a visible flash from resetting a drag-based stack's
+scroll position on rebuild - a tap-based stack has no scroll position to
+lose) and the `isStackBeingInteractedWith` mid-gesture cooldown gating the
+periodic re-render/live-poll timers (nothing is ever "mid-gesture" anymore).
+Verified via Playwright/Chromium against live-fetched data: repeated dot and
+arrow clicks across an 8-member real MLB stack all landed on the correct
+match every time, zero console errors. Still unverified on real
+Safari/WebKit (no such browser in this sandbox) - but the fix removes the
+entire *class* of bug (gesture-completion timing) rather than retuning it a
+fourth time, which is the qualitatively different kind of fix repeated
+failures on that class called for.
+
+**4. Swiped/preferred card sometimes rendered greyed out.** Root cause
+found directly in the old code: `patchStackSelectionTags` (the DOM-reuse
+patch path above) updated the recommended-tag and `.is-recommended`/
+`.is-pinned` classes on a reused card, but never touched `.is-muted`
+(`opacity: 0.55` - see styles.css) - so a card built once while muted (it
+lost an earlier overlap comparison) stayed visually muted forever after,
+even once a swipe made it the slot's own preferred pick. Fixed as a direct
+consequence of Bug 1's rewrite: every render now calls `buildMatchCard`
+fresh (no more patch-only reuse path), so every visual class is always
+recomputed from that render's real state.
+
+**2. The generic "依雙方戰績...計算" reason line called out as useless.**
+It restated, in a vague category label, that a deterministic formula used
+team records - true but uninformative on nearly every card, since season
+win% is almost always the only signal, feeding the same phrase over and
+over. Fixed by no longer rendering `.match-reason` in the UI at all
+(`reasonEl.hidden = true` in `buildMatchCard`) - the underlying
+`match.reason`/`match.objectiveFactors` fields are kept for
+`scripts/evaluate-recommendations.mjs` and direct matches.json debugging.
+
+**5. "與...衝疊...分鐘" comparing a card against its own stack-mate.**
+`match.overlappingIds` includes every match a fixture overlaps at all,
+which for a member of a swipeable stack necessarily includes its own
+alternates (that's the whole reason they're grouped together) - so the
+overlap note could name a card's own alternate as if it were a genuinely
+separate scheduling conflict. Fixed by excluding any `isNearTotalOverlap`
+match from the overlap-note candidates in `buildMatchCard`, leaving only
+genuine, separately-scheduled neighbors.
+
+**3 & 7. Liverpool @ AFC Bournemouth (2026-09-20, 21:00 TW time) not
+recommended despite being "the best of three" at that hour - checked against
+live, freshly-fetched real data, not assumed.** Confirmed directly:
+`computeEplObjectiveScore` gave it `competitiveness=3, watchability=3,
+skill=1` - the WORST possible skill score - purely because both teams'
+early-season win% (a small, noisy sample this early in a new season) happen
+to average out low, even though Liverpool is one of the most-watched clubs
+in world football regardless of any one season's start. EPL had no
+mechanism analogous to MLB's/NBA's rivalry bonus for "this club is a major
+draw independent of the current record" - only a derby bonus (a fact about
+a specific pairing, not about star power). Fixed with a new,
+precedent-matching `EPL_BIG_CLUBS`/`isEplBigClub` (the real, widely-used
+"Big Six" term) additive watchability bonus in `scripts/sport-duration.mjs`
++ `scripts/objective-score.mjs`, stacking with the derby bonus rather than
+competing with it. Verified: Liverpool's watchability rose 3→5, score 3→4
+on a real rebuild. **Honest limitation**: this did NOT flip the actual
+recommendation in this specific instance - Crystal Palace @ Leeds United
+scored 8 in the same slot on genuine season-record closeness, and closing
+a 4-point gap with a bounded, precedented nudge would have meant either an
+oversized bonus or bending the "close competitiveness matters, not just
+brand fame" design principle this engine has held since Round 9's "Best
+Matches" unification. Whether Crystal Palace-Leeds or Liverpool-Bournemouth
+was really the better recommendation that day is a genuine judgment call
+this session can't independently settle without real match-day narrative
+context (injuries, table stakes, actual viewership data) this build has no
+API for - the fix closes a real, verified gap in the scoring model without
+overcorrecting into "the famous team always wins."
+
+**6. MLB's shown end time "almost always" exceeded.** The per-fixture MLB
+duration formula (`predictMlbDurationMinutes`, ~164min average) was never
+inaccurate as computed - the bug was that the CARD'S displayed end time
+(`buildMatchCard`) used the bare pre-game `durationMinutes` directly, while
+this codebase's own scheduler (`schedulingDurationMinutes`) already knows to
+pad a no-clock sport's estimate for real overrun risk
+(`DURATION_OVERRUN_BUFFER_BY_RELIABILITY`) before trusting it. The viewer
+was shown a number the app's own internal logic didn't actually believe.
+Fixed by having the displayed end time use `estimatedDurationMinutes`
+(recommendation.mjs, the same overrun-padded figure already used for
+lifecycle/live-window purposes) for any non-finished match, not the bare
+figure - a finished match still shows its own real, observed elapsed time.
+
+**8. Today's finished matches were still swipeable.** A finished fixture
+correctly stays in 推薦賽事 as history (Round 9's own "the whole day is one
+plan" design), but could still inherit `alternativeIds` from
+`computeDayPlan` and render as a live swipe stack - nonsensical once the
+outcome is already fixed. Fixed in `renderRecommendedSection`: any
+`match.isFinished` always renders as a single plain card, regardless of
+alternatives.
+
+**9. Variety could override a clearly-better game, not just a close one.**
+`applyRecentRepeatPenalties` could stack the matchup-repeat penalty (up to
+2.5) and the sport-concentration penalty (1.5) to 4.0 total - well past this
+same file's own settled "close enough to be a real call" line
+(`ALTERNATIVE_MAX_SCORE_GAP = 2.5`), so a match ahead by 3+ points could
+still lose to a worse alternative purely from stacked diversity nudges -
+backwards from "serve the best game, THEN prioritize variety." Fixed by
+capping the combined penalty at `ALTERNATIVE_MAX_SCORE_GAP` before it's
+subtracted into `planningScore` - variety can now only ever tip a genuine
+toss-up, never bury a decisive lead.
+
+**10. Preferred/swiped match "not saved properly" - wiped back to 推薦 on
+reload.** Root cause: pins were keyed by `slotKeyFromMembers(cluster.members)`
+- a hash of the exact set of matches computeDayPlan happened to group
+together at pin time. That grouping is NOT stable: it can shift from a live
+duration correction, a routine 15-minute data refresh, or simply the
+viewer having the sport filter narrowed to one sport when they swiped
+(which excludes cross-sport near-overlaps from the cluster entirely, then
+resets to "全部" on the very next reload). Any shift silently orphaned the
+pin under a key nothing would ever look up again - it was still sitting in
+localStorage the whole time, just unreachable. Fixed by re-keying pins to a
+flat `Set<matchId>` per day (`public/lib/preferences.mjs`), looked up by the
+PINNED MATCH'S OWN id (`cluster.members.find(m => pinnedForDay.has(m.id))`
+in `computeDayPlan`) - stable regardless of how the cluster around it
+reshapes. `explainWhyNotRecommended`'s own forced-pin comparison had the
+exact same old-shape bug (missed in the initial pass, caught by the existing
+test suite going red) and was fixed the same way.
+
+**11. "Yesterday" showing only Premier League, no MLB.** `build-data.mjs`'s
+fetch window looked back only 1 UTC calendar day from build time - enough to
+cover ESPN's own US-Eastern-vs-UTC date-grouping quirk, but NOT enough to
+cover this site's actual audience: Taiwan is far enough ahead of US game
+times that the viewer's own "yesterday" (Taiwan local calendar) can
+correspond to an ESPN/US game date a full 2 UTC-calendar-days behind build
+time, not 1 - a gap EPL's earlier UK kickoffs rarely fall into but US-evening
+MLB games routinely do. Fixed by extending the lookback to 2 days (both the
+per-day team-league query and the F1 date-range query). Verified against a
+live rebuild: Taiwan's "yesterday" bucket went from 5 EPL/0 MLB to 5 EPL/15
+MLB.
+
+All 276 tests pass (up from 270 - new coverage added for the penalty cap,
+the big-club bonus, and the pin-persistence-across-cluster-drift fix).

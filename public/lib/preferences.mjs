@@ -17,12 +17,16 @@
 // loadPinnedChoices/savePinnedChoices there), same DOM/localStorage
 // boundary recommendation.mjs's own top comment already draws.
 
-// Serialized as a plain {dayKey: {slotKey: matchId}} object (Map doesn't
-// survive JSON.stringify on its own).
+// Serialized as a plain {dayKey: [matchId, ...]} object (Map/Set don't
+// survive JSON.stringify on their own). Each day's value is the flat SET of
+// match ids the viewer has explicitly pinned that day - see this module's
+// own top comment and applySlotSwipe's comment below for why this is keyed
+// by the pinned match's own id rather than by which conflict cluster it
+// happened to belong to at pin time.
 export function serializePinnedChoices(map) {
   const obj = {};
-  map.forEach((slotMap, dayKey) => {
-    obj[dayKey] = Object.fromEntries(slotMap);
+  map.forEach((matchIds, dayKey) => {
+    obj[dayKey] = [...matchIds];
   });
   return obj;
 }
@@ -31,14 +35,18 @@ export function serializePinnedChoices(map) {
 // compare works since that format sorts lexicographically the same as
 // chronologically) - a pin for a day that's already passed can never be
 // looked up again by computeDayPlan either way, so there's nothing to gain
-// by keeping it around indefinitely in localStorage.
+// by keeping it around indefinitely in localStorage. A value saved under
+// the old {slotKey: matchId} object shape (before pins were switched to a
+// flat matchId set) simply fails the `Array.isArray` check and is dropped -
+// a one-time loss of whatever was pinned under the old, fragile scheme,
+// never a crash.
 export function deserializePinnedChoices(raw, todayKey) {
   const map = new Map();
   if (!raw || typeof raw !== 'object') return map;
-  Object.entries(raw).forEach(([dayKey, bySlot]) => {
-    if (dayKey < todayKey || !bySlot || typeof bySlot !== 'object') return;
-    const slotMap = new Map(Object.entries(bySlot).filter(([, matchId]) => typeof matchId === 'string'));
-    if (slotMap.size) map.set(dayKey, slotMap);
+  Object.entries(raw).forEach(([dayKey, ids]) => {
+    if (dayKey < todayKey || !Array.isArray(ids)) return;
+    const set = new Set(ids.filter(id => typeof id === 'string'));
+    if (set.size) map.set(dayKey, set);
   });
   return map;
 }
@@ -78,27 +86,44 @@ export function pruneStalePinnedChoices(pinnedChoices, todayKey) {
 // override", so it always rendered the swiped-to card as isPreferred
 // regardless of whether the viewer actually changed anything.
 //
+// `slotKey` is only ever used here to find which member of THIS cluster
+// (if any) is currently pinned, via slotKey.split('|') - the day's own
+// stored value is a flat Set<matchId> (see serializePinnedChoices' own
+// comment), not a Map keyed by slotKey, specifically because a slotKey is
+// only as stable as the exact cluster shape that produced it, and that
+// shape can and does change (a live duration correction, a routine data
+// refresh, a sport filter narrowing which candidates even exist) - keying
+// storage by slotKey directly silently orphaned a real pin the instant its
+// cluster's shape shifted even slightly, which read as "reloading the page
+// wipes my preference back to 推薦" even though the pin was still sitting
+// untouched in localStorage the whole time, just under a key nothing could
+// look up again. A match's own id is the one thing about a pin that's
+// actually stable across all of that.
+//
 // Pure - returns a NEW Map (or the SAME map by reference when nothing
 // actually needs to change, so a caller can cheaply skip re-persisting),
 // never mutates `pinnedChoices`.
 export function applySlotSwipe(pinnedChoices, dayKey, slotKey, matchId, naturalMatchId) {
-  const daySlots = pinnedChoices.get(dayKey);
+  const clusterMemberIds = new Set(slotKey.split('|'));
+  const daySet = pinnedChoices.get(dayKey);
+  const currentlyPinnedInCluster = daySet ? [...daySet].find(id => clusterMemberIds.has(id)) : undefined;
   const isNatural = naturalMatchId != null && matchId === naturalMatchId;
 
   if (isNatural) {
-    if (!daySlots || !daySlots.has(slotKey)) return pinnedChoices; // nothing pinned here anyway
-    const nextDaySlots = new Map(daySlots);
-    nextDaySlots.delete(slotKey);
+    if (currentlyPinnedInCluster === undefined) return pinnedChoices; // nothing pinned here anyway
+    const nextDaySet = new Set(daySet);
+    nextDaySet.delete(currentlyPinnedInCluster);
     const next = new Map(pinnedChoices);
-    if (nextDaySlots.size) next.set(dayKey, nextDaySlots);
+    if (nextDaySet.size) next.set(dayKey, nextDaySet);
     else next.delete(dayKey);
     return next;
   }
 
-  if (daySlots && daySlots.get(slotKey) === matchId) return pinnedChoices; // already pinned to this exact choice
-  const nextDaySlots = new Map(daySlots || []);
-  nextDaySlots.set(slotKey, matchId);
+  if (currentlyPinnedInCluster === matchId) return pinnedChoices; // already pinned to this exact choice
+  const nextDaySet = new Set(daySet || []);
+  if (currentlyPinnedInCluster !== undefined) nextDaySet.delete(currentlyPinnedInCluster);
+  nextDaySet.add(matchId);
   const next = new Map(pinnedChoices);
-  next.set(dayKey, nextDaySlots);
+  next.set(dayKey, nextDaySet);
   return next;
 }

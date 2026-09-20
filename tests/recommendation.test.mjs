@@ -374,7 +374,7 @@ describe('computeDayPlan', () => {
   test('a pinned choice overrides the highest-scoring member of its slot', () => {
     const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 7 });
-    const pinnedForDay = new Map([[[a.id, b.id].sort().join('|'), 'b']]);
+    const pinnedForDay = new Set(['b']);
     const plan = computeDayPlan('2026-09-19', [a, b], pinnedForDay);
     assert.equal(plan.length, 1);
     assert.equal(plan[0].id, 'b');
@@ -577,7 +577,7 @@ describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () =>
     const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
-    const pinnedForDay = new Map([[slotKeyFromMembers([a, b, c]), 'a']]);
+    const pinnedForDay = new Set(['a']);
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
     assert.deepEqual(plan.map(m => m.id), ['a']);
     assert.equal(a.isPreferred, true);
@@ -630,7 +630,7 @@ describe('alternativeIds only surfaces a genuine choice, not every conflict', ()
     // see and be able to swipe back to.
     const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 2 });
-    const pinnedForDay = new Map([[[a.id, b.id].sort().join('|'), 'b']]);
+    const pinnedForDay = new Set(['b']);
     const plan = computeDayPlan('2026-09-19', [a, b], pinnedForDay);
     assert.deepEqual(plan.map(m => m.id), ['b']);
     assert.deepEqual(b.alternativeIds, ['a']);
@@ -750,6 +750,36 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
     assert.equal(recentRepeatPenalty(4), 0);
     assert.equal(recentRepeatPenalty(0), 0);
     assert.equal(recentRepeatPenalty(null), 0);
+  });
+
+  test('stacked repeat + sport-concentration penalties are capped, so a clearly better game never loses purely to variety', () => {
+    // "Serve the best game first, THEN optimize for variety" - a match
+    // ahead by more than ALTERNATIVE_MAX_SCORE_GAP (2.5, this codebase's
+    // own settled line for "not really a close call") must never lose its
+    // slot purely because BOTH the matchup-repeat penalty (up to 2.5) and
+    // the sport-concentration penalty (1.5) landed on it at once - stacked
+    // uncapped that's 4.0, comfortably enough to have flipped a 3-point
+    // lead the wrong way before this cap existed.
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' })];
+    const a2 = mlbMatch({ id: 'a2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' });
+    // A different sport, so a2's own repeat penalty (same matchup as
+    // yesterday) and MLB's own 100%-of-recent-picks concentration penalty
+    // both apply to it at once.
+    const b = makeMatch({ id: 'b2', sport: 'NBA', startTimeUtc: '2026-09-20T20:00:00.000Z', durationMinutes: 150, enduranceScore: 10, effectiveScore: 5, name: 'Worse Alternative' });
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-20', [a2, b]]
+      ])
+    );
+    // Uncapped, a2's planningScore would have been 8 - 2.5 - 1.5 = 4.0,
+    // losing to b's 5 despite a2's own effectiveScore leading by 3 -
+    // capped at 2.5, a2's planningScore is 8 - 2.5 = 5.5, correctly still
+    // ahead of b.
+    assert.equal(a2.recentRepeatPenalty, 2.5);
+    assert.equal(a2.sportConcentrationPenalty, SPORT_CONCENTRATION_PENALTY);
+    assert.equal(a2.planningScore, 5.5);
+    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['a2']);
   });
 
   test('matchupKey is order-independent and keeps F1 session types distinct', () => {
@@ -965,13 +995,17 @@ describe('Invariant checks', () => {
     assert.equal(a2.effectiveScore, 8); // never mutated
     // Both the matchup-repeat penalty (2.5, same matchup as yesterday) AND
     // the sport-concentration penalty (1.5, day1's only pick was also
-    // Premier League - 100% share) apply here since this is a
-    // single-candidate day with nothing to diversify against; still never
-    // enough to drop the pick when nothing else is competing for the slot -
-    // and even if the stacked penalties HAD pushed this negative, the
-    // scheduler's own score floor (see weightedIntervalSchedule) means a
-    // non-conflicting candidate is never worse than recommending nothing.
-    assert.equal(a2.planningScore, 4);
+    // Premier League - 100% share) apply here, but their SUM is capped at
+    // ALTERNATIVE_MAX_SCORE_GAP (2.5, see applyRecentRepeatPenalties' own
+    // comment) - variety is a tie-breaker between comparable options, never
+    // a reason to bury a fixture with no real rival, so the two stacked
+    // penalties (2.5 + 1.5 = 4.0 uncapped) never combine to more than that
+    // same 2.5 either. Even uncapped this wouldn't have dropped the pick
+    // when nothing else is competing for the slot - the scheduler's own
+    // score floor (see weightedIntervalSchedule) means a non-conflicting
+    // candidate is never worse than recommending nothing - but the cap
+    // still matters the moment a real (if weaker) rival exists.
+    assert.equal(a2.planningScore, 5.5);
   });
 });
 
@@ -1014,7 +1048,7 @@ describe('a pinned choice only excludes matches it directly conflicts with', () 
     // three-member stack a viewer would actually see and swipe through).
     assert.deepEqual(naturalPlan.map(m => m.id), ['b']);
 
-    const pinnedForDay = new Map([[[a.id, b.id, c.id].sort().join('|'), 'c']]);
+    const pinnedForDay = new Set(['c']);
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
     // Both a and c end up recommended - b (which directly conflicts with
     // both) is the one excluded.
@@ -1074,8 +1108,7 @@ describe('§27 explainWhyNotRecommended', () => {
   test('blockedByPin: a pin is genuinely what excluded a candidate that would otherwise have won', () => {
     const pinned = footballMatch({ id: 'pinned', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 2, name: 'Pinned' });
     const wouldWin = footballMatch({ id: 'would-win', startTimeUtc: '2026-09-19T18:01:00.000Z', effectiveScore: 9, name: 'Would Win' });
-    const key = [pinned.id, wouldWin.id].sort().join('|');
-    const pinnedForDay = new Map([[key, 'pinned']]);
+    const pinnedForDay = new Set(['pinned']);
     computeDayPlan('2026-09-19', [pinned, wouldWin], pinnedForDay, { scoreField: 'effectiveScore' });
     assert.equal(pinned.recommended, true);
     assert.equal(wouldWin.recommended, false);
@@ -1274,7 +1307,7 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
     const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 7 });
     const slotKey = slotKeyFromMembers([a, b]);
     // Even with b currently pinned, the natural (unpinned) winner is still a.
-    const pinnedForDay = new Map([[slotKey, 'b']]);
+    const pinnedForDay = new Set(['b']);
     const natural = naturalSlotChoice('2026-09-19', [a, b], slotKey, pinnedForDay);
     assert.equal(natural, 'a');
   });
@@ -1286,7 +1319,7 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
     const a = makeMatch({ id: 'a', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, enduranceScore: 10, effectiveScore: 5 });
     const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 60, enduranceScore: 10, effectiveScore: 9 });
     const slotAB = slotKeyFromMembers([a, b]);
-    const natural = naturalSlotChoice('2026-09-19', [a, b], slotAB, new Map());
+    const natural = naturalSlotChoice('2026-09-19', [a, b], slotAB, new Set());
     assert.equal(natural, 'b'); // b wins on its own merits absent any pin
   });
 });

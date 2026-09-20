@@ -74,6 +74,7 @@ import {
   isMlbRivalry,
   isNbaRivalry,
   isEplDerby,
+  isEplBigClub,
   isNationalBroadcast
 } from './sport-duration.mjs';
 // The deterministic, API-data-based scoring engine - see that module's own
@@ -299,22 +300,38 @@ export function parseOddsSignal(competition) {
 }
 
 async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
-  // Queries `now`'s own UTC date AND the day before it - not just `now`
-  // onward. This script runs on a schedule/on push, at whatever UTC
+  // Queries `now`'s own UTC date AND the two days before it - not just
+  // `now` onward. This script runs on a schedule/on push, at whatever UTC
   // instant that happens to be, and ESPN's own `dates=YYYYMMDD` scoreboard
   // query groups a game under the calendar day IT started on by ESPN's own
   // reckoning (for MLB in particular, that tracks the US Eastern "game
   // date", not the UTC one) - the two only diverge for part of the day,
-  // but this script's own `now` can easily land inside that gap. Asking
-  // for one more day up front costs one extra request per league and
-  // risks nothing (the state/bounds checks below already correctly filter
-  // it).
+  // which a single extra day of lookback already covers on its own.
   //
-  // length is daysAhead + 2, not + 1: one extra day for the `now - 1`
-  // lookback above, PLUS one more so the loop's own far end actually
-  // reaches windowEndMs.
-  const dates = Array.from({ length: daysAhead + 2 }, (_, i) =>
-    yyyymmddUtc(new Date(now.getTime() + (i - 1) * 86_400_000))
+  // A SECOND lookback day exists for a completely different reason: this
+  // site's own "昨天" (Yesterday) section is in the VIEWER's local
+  // calendar day (Taiwan, UTC+8 - see public/app.js's dayLabelFor), not
+  // this build's own UTC `now`. A US evening MLB fixture (US Eastern is
+  // UTC-4/-5) lands, in Taiwan local time, on the viewer's NEXT calendar
+  // date - so the EARLIEST instant of the viewer's own "yesterday" can
+  // correspond to an ESPN/US game date a full 2 UTC-calendar-days behind
+  // this build's own `now`, not just 1. A single day of lookback (this
+  // repo's own original fix, aimed only at the ESPN-reckoning-vs-UTC gap
+  // above) was live-confirmed to still miss real, already-finished MLB
+  // fixtures that should have appeared in "昨天" while same-day EPL
+  // fixtures (whose UK kickoffs sit much closer to UTC, so this same gap
+  // rarely bites them) correctly did - "Yesterday only shows Premier
+  // League, no MLB" is exactly what that half-covered lookback produces.
+  // Two extra requests per league up front costs nothing and risks nothing
+  // (the state/bounds checks below already correctly filter anything
+  // outside the real window; only a genuinely FINISHED fixture is exempted
+  // from that bound at all - see the isFinished check below).
+  //
+  // length is daysAhead + 3, not + 1: two extra days for the lookback
+  // above, PLUS one more so the loop's own far end actually reaches
+  // windowEndMs.
+  const dates = Array.from({ length: daysAhead + 3 }, (_, i) =>
+    yyyymmddUtc(new Date(now.getTime() + (i - 2) * 86_400_000))
   );
   const results = await Promise.allSettled(
     dates.map(date => fetchJson(espnScoreboardUrl(league.sportKey, league.leagueKey, date)))
@@ -427,9 +444,10 @@ const F1_SESSION_TYPES = [
 ];
 
 async function fetchF1Matches(now, windowEndMs, daysAhead) {
-  // Starts one day before `now`, same reasoning and same fix as
-  // fetchTeamLeagueMatches's own `dates` array above.
-  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
+  // Starts two days before `now`, same reasoning and same fix as
+  // fetchTeamLeagueMatches's own `dates` array above (the Taiwan-viewer
+  // "昨天" lookback needs a full 2 UTC-calendar-days of margin, not just 1).
+  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 2 * 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
   let data;
   try {
     data = await fetchJson(espnScoreboardUrl('racing', 'f1', rangeParam));
@@ -552,6 +570,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
         awayWinPct,
         homeWinPct,
         isDerby: isEplDerby(away?.name, home?.name),
+        isBigClub: isEplBigClub(away?.name, home?.name),
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });
@@ -579,6 +598,7 @@ const FACTOR_ZH_HINTS = [
   [/postseason game/, '季後賽'],
   [/streak/, '近期連勝連敗'],
   [/known rivalry matchup|known derby fixture/, '宿敵對戰'],
+  [/known big-club fixture/, '豪門球隊'],
   [/national broadcast/, '全國轉播'],
   [/championship gap intensity/, '冠軍積分差距']
 ];

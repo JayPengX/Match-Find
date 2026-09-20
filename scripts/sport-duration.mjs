@@ -287,6 +287,35 @@ export function isEplDerby(awayTeam, homeTeam, pairs = EPL_DERBY_PAIRS) {
   );
 }
 
+// The globally recognized "Big Six" - a real, stable, widely-used term in
+// English football media (not something invented for this fix) for the six
+// EPL clubs that draw outsized global broadcast/media attention essentially
+// regardless of any one season's table position. Exists for the exact same
+// reason MLB_RIVALRY_PAIRS/NBA_RIVALRY_PAIRS exist: a pure win%/standings-
+// based objective score has no way to see this - live-verified case:
+// Liverpool @ AFC Bournemouth (2026-09-20, early in a new EPL season) scored
+// competitiveness=3/watchability=3/skill=1 purely from a small, noisy
+// early-season sample (both teams' win% still swinging wildly game to
+// game), even though a Liverpool fixture is a major global draw independent
+// of that. Deliberately a plain per-club list, not a pairs list like the
+// derby table above - unlike a derby (a fact about a SPECIFIC pairing),
+// star power is a fact about EACH club on its own, so either side alone is
+// enough to qualify (see isEplBigClub below), and it stacks additively with
+// a genuine derby (Manchester United vs Liverpool is both) rather than
+// competing with it.
+export const EPL_BIG_CLUBS = [
+  'Arsenal',
+  'Chelsea',
+  'Liverpool',
+  'Manchester City',
+  'Manchester United',
+  'Tottenham Hotspur'
+];
+
+export function isEplBigClub(awayTeam, homeTeam, bigClubs = EPL_BIG_CLUBS) {
+  return bigClubs.includes(awayTeam) || bigClubs.includes(homeTeam);
+}
+
 export function predictEplDurationMinutes({ awayTeam, homeTeam }) {
   const modifierTotal = isEplDerby(awayTeam, homeTeam) ? EPL_MODIFIERS.derbyHighFoulMatch : 0;
   const predicted = EPL_BASELINE_MINUTES + modifierTotal;

@@ -313,6 +313,25 @@ describe('computeEplObjectiveScore', () => {
     const derby = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: true });
     assert.ok(derby.watchability > plain.watchability);
   });
+
+  test('a big-club fixture raises watchability over an otherwise-identical non-big-club fixture', () => {
+    // Live-verified case: Liverpool @ AFC Bournemouth (2026-09-20) scored
+    // watchability=3 from a noisy, small-sample early-season win% gap alone
+    // - a genuinely elite, globally-followed club's own real-world draw
+    // doesn't depend on this season's record the way skill/competitiveness
+    // necessarily do (see sport-duration.mjs's EPL_BIG_CLUBS).
+    const plain = computeEplObjectiveScore({ awayWinPct: 0.2, homeWinPct: 0.6, isDerby: false, isBigClub: false });
+    const bigClub = computeEplObjectiveScore({ awayWinPct: 0.2, homeWinPct: 0.6, isDerby: false, isBigClub: true });
+    assert.ok(bigClub.watchability > plain.watchability);
+  });
+
+  test('a derby between two big clubs stacks both bonuses rather than picking one', () => {
+    const derbyOnly = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: true, isBigClub: false });
+    const derbyAndBigClub = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: true, isBigClub: true });
+    assert.ok(derbyAndBigClub.watchability >= derbyOnly.watchability);
+    assert.ok(derbyAndBigClub.factors.includes('known derby fixture'));
+    assert.ok(derbyAndBigClub.factors.includes('known big-club fixture'));
+  });
 });
 
 describe('computeF1ObjectiveScore', () => {

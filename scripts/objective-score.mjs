@@ -347,7 +347,7 @@ export function computeNbaObjectiveScore({
 // posted a line, which is rare for EPL via ESPN's API) + the derby flag
 // this repo's own sport-duration.mjs already computes for the duration
 // model is a real, deterministic starting point today.
-export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, oddsSpread, oddsOverUnder }) {
+export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBigClub, oddsSpread, oddsOverUnder }) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
     Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? awayWinPct - homeWinPct : null
@@ -365,13 +365,23 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, odds
   );
 
   // Additive, same reasoning as computeNbaObjectiveScore's own rivalry/
-  // national-broadcast bonuses - a derby should only ever ADD watchability
-  // over the same two teams' non-derby competitiveness, never pull it down
-  // by blending toward a fixed anchor value.
+  // national-broadcast bonuses - a derby/big-club fixture should only ever
+  // ADD watchability over the same two teams' plain competitiveness, never
+  // pull it down by blending toward a fixed anchor value. Both bonuses can
+  // stack (a Manchester United vs Liverpool fixture is both a derby AND a
+  // big-club matchup, and is a bigger draw than either fact alone) - see
+  // sport-duration.mjs's EPL_BIG_CLUBS for why this exists: a genuinely
+  // elite, globally-followed club's own real-world draw doesn't depend on
+  // this particular season's (often early, noisy, small-sample) win% record
+  // the way `competitiveness`/`skill` necessarily do.
   let watchability = competitiveness;
   if (isDerby) {
     watchability += 2;
     factors.push('known derby fixture');
+  }
+  if (isBigClub) {
+    watchability += 2;
+    factors.push('known big-club fixture');
   }
   watchability = clamp(Math.round(watchability), 1, 10);
 

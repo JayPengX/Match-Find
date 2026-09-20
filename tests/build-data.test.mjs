@@ -169,6 +169,10 @@ describe('describeFactorsZh', () => {
     assert.deepEqual(describeFactorsZh([]), []);
     assert.deepEqual(describeFactorsZh(undefined), []);
   });
+  test('maps the big-club factor to its own distinct label, stacking with a derby label', () => {
+    const labels = describeFactorsZh(['known derby fixture', 'known big-club fixture']);
+    assert.deepEqual(labels, ['宿敵對戰', '豪門球隊']);
+  });
 });
 
 describe('buildObjectiveReasonZh', () => {

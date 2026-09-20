@@ -20,6 +20,8 @@ import {
   EPL_MIN_DURATION_MINUTES,
   EPL_MAX_DURATION_MINUTES,
   isEplDerby,
+  EPL_BIG_CLUBS,
+  isEplBigClub,
   predictEplDurationMinutes,
   F1_MAX_ACTIVE_RACING_MINUTES,
   resolveF1CircuitKey,
@@ -150,6 +152,23 @@ describe('EPL duration prediction', () => {
     const duration = predictEplDurationMinutes({ awayTeam: 'Arsenal', homeTeam: 'Tottenham Hotspur' });
     assert.ok(duration >= EPL_MIN_DURATION_MINUTES);
     assert.ok(duration <= EPL_MAX_DURATION_MINUTES);
+  });
+});
+
+describe('isEplBigClub (the "Big Six" watchability signal)', () => {
+  test('either side alone is enough to qualify - a live-verified case (Liverpool vs a non-big-club side)', () => {
+    assert.ok(isEplBigClub('Liverpool', 'AFC Bournemouth'));
+    assert.ok(isEplBigClub('AFC Bournemouth', 'Liverpool'));
+  });
+
+  test('a fixture between two non-big-club sides does not qualify', () => {
+    assert.ok(!isEplBigClub('AFC Bournemouth', 'Ipswich Town'));
+  });
+
+  test('every one of the "Big Six" is recognized', () => {
+    for (const club of EPL_BIG_CLUBS) {
+      assert.ok(isEplBigClub(club, 'AFC Bournemouth'), `${club} should qualify as a big club`);
+    }
   });
 });
 
