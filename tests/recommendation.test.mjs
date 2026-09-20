@@ -13,7 +13,7 @@ process.env.TZ = 'UTC';
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  recommendStyleScore,
+  bestMatchScore,
   computeEffectiveScore,
   computeRecommendationScore,
   computeConfidence,
@@ -35,8 +35,10 @@ import {
   schedulingInterval,
   canWatchSequentially,
   SPORT_TIMING,
-  DURATION_UNCERTAINTY_BY_RELIABILITY,
+  DURATION_OVERRUN_BUFFER_BY_RELIABILITY,
   TRANSITION_BUFFER_MINUTES,
+  matchLifecycleState,
+  LIFECYCLE_STATES,
   matchupKey,
   daysBetweenDayKeys,
   recentRepeatPenalty,
@@ -48,6 +50,9 @@ import {
   EVIDENCE_FRESH_MAX_AGE_HOURS,
   computeSportConcentration,
   SPORT_CONCENTRATION_PENALTY,
+  naturalSlotChoice,
+  estimatedDurationMinutes,
+  STARTING_SOON_WINDOW_MINUTES,
   explainWhyNotRecommended,
   slotKeyFromMembers
 } from '../public/lib/recommendation.mjs';
@@ -76,26 +81,21 @@ function makeMatch(overrides = {}) {
   };
 }
 
-describe('recommendStyleScore', () => {
-  test('entertainment style blends watchability with broadcastQuality at the documented weight', () => {
+describe('bestMatchScore (the one unified Best Matches blend)', () => {
+  test('blends watchability with broadcastQuality at the documented weight', () => {
     const match = makeMatch({ watchability: 8, broadcastQuality: 4, score: 5 });
     const expected = 8 * (1 - BROADCAST_QUALITY_WEIGHT) + 4 * BROADCAST_QUALITY_WEIGHT;
-    assert.equal(recommendStyleScore(match, 'entertainment'), expected);
+    assert.equal(bestMatchScore(match), expected);
   });
 
-  test('competitive style uses the build-time composite score, not watchability', () => {
-    const match = makeMatch({ watchability: 9, score: 5, broadcastQuality: 5 });
-    assert.equal(recommendStyleScore(match, 'competitive'), 5);
-  });
-
-  test('an unrecognized style falls back to the composite score, same as competitive', () => {
-    const match = makeMatch({ watchability: 9, score: 5, broadcastQuality: 5 });
-    assert.equal(recommendStyleScore(match, 'nonsense'), 5);
+  test('falls back to the build-time composite score when watchability is missing', () => {
+    const match = makeMatch({ watchability: undefined, score: 5, broadcastQuality: 5 });
+    assert.equal(bestMatchScore(match), 5 * (1 - BROADCAST_QUALITY_WEIGHT) + 5 * BROADCAST_QUALITY_WEIGHT);
   });
 
   test('a missing broadcastQuality (finished/never-scored match) skips the blend entirely', () => {
     const match = makeMatch({ watchability: 8, broadcastQuality: null });
-    assert.equal(recommendStyleScore(match, 'entertainment'), 8);
+    assert.equal(bestMatchScore(match), 8);
   });
 });
 
@@ -115,7 +115,7 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(middle.adjustments.priority, 0);
     assert.equal(last.adjustments.priority, -PRIORITY_SCORE_DELTA);
 
-    const unranked = computeEffectiveScore(makeMatch({ sport: 'MLS', broadcastQuality: null, score: 5 }), {
+    const unranked = computeEffectiveScore(makeMatch({ sport: 'F1', broadcastQuality: null, score: 5 }), {
       priorityOrder: order
     });
     assert.equal(unranked.adjustments.priority, 0);
@@ -129,16 +129,15 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(notOwned.adjustments.service, 0);
   });
 
-  test('effectiveScore is exactly styleScore + priority + service, nothing hidden', () => {
+  test('effectiveScore is exactly bestMatchScore + priority + service, nothing hidden', () => {
     const match = makeMatch({ sport: 'MLB', watchability: 7, broadcastQuality: 9, whereToWatchTw: 'Apple TV' });
     const breakdown = computeEffectiveScore(match, {
       priorityOrder: ['MLB', 'NBA'],
-      myServiceIds: new Set(['appletv']),
-      recommendStyle: 'entertainment'
+      myServiceIds: new Set(['appletv'])
     });
     assert.equal(
       breakdown.effectiveScore,
-      breakdown.styleScore + breakdown.adjustments.priority + breakdown.adjustments.service
+      breakdown.bestMatchScore + breakdown.adjustments.priority + breakdown.adjustments.service
     );
   });
 
@@ -415,15 +414,21 @@ describe('schedulingInterval / canWatchSequentially (canonical duration model)',
     assert.equal(interval.end, Date.parse('2026-09-19T18:00:00.000Z') + (115 + TRANSITION_BUFFER_MINUTES) * 60_000);
   });
 
-  test('MLB (low reliability) schedulingInterval ends earlier than its full nominal length would suggest', () => {
+  test('MLB (low reliability) schedulingInterval ends LATER than its nominal length, padded for real overrun risk', () => {
     const game = mlbMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z' });
     const nominalEnd = Date.parse('2026-09-19T18:00:00.000Z') + 190 * 60_000;
-    assert.ok(schedulingInterval(game).end < nominalEnd);
+    // A no-clock sport is more likely to run LONG than short (extra
+    // innings, rain delays) - see DURATION_OVERRUN_BUFFER_BY_RELIABILITY's
+    // own comment. Padding the reserved block, never shrinking it below
+    // the value judgment that produced it, is the direct fix for the
+    // reported "40-80 minute overlap despite watching sequentially being
+    // clearly unrealistic" bug.
+    assert.ok(schedulingInterval(game).end > nominalEnd);
   });
 
   test('resolveSportTiming falls back to a medium default for an unlisted sport', () => {
     assert.equal(resolveSportTiming('Curling').durationReliability, 'medium');
-    assert.equal(DURATION_UNCERTAINTY_BY_RELIABILITY[resolveSportTiming('Curling').durationReliability], 0.1);
+    assert.equal(DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming('Curling').durationReliability], 0.1);
   });
 
   test('canWatchSequentially is symmetric - argument order never changes the answer', () => {
@@ -522,12 +527,25 @@ describe('Test 4 - one winner per genuine conflict window', () => {
   });
 });
 
-describe('Test 5 - MLB continuation (duration uncertainty)', () => {
-  test('a later match can follow an MLB game once its uncertainty-adjusted end has passed, even though the nominal 190-minute length has not', () => {
+describe('Test 5 - MLB continuation respects the real overrun-padded end, not just the nominal length', () => {
+  test('a later match canNOT follow an MLB game before its overrun-padded end, even one well past the nominal length', () => {
     const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
-    // 20:30 is well before MLB's nominal end (21:10) but after its
-    // schedulingInterval end (~20:23, see the worked example above).
-    const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T20:30:00.000Z', effectiveScore: 7 });
+    // 20:30 is well past MLB's own nominal end (21:10 is actually LATER
+    // than 20:30, so this is comfortably inside the nominal window too) -
+    // the OLD discount-based model (DURATION_UNCERTAINTY_BY_RELIABILITY)
+    // would have allowed something to start here, which is exactly the
+    // reported "40-80 minute unrealistic overlap" bug: the schedule
+    // treated a plain, unremarkable MLB game as safely over well before
+    // its own broadcast realistically ends.
+    const tooSoon = footballMatch({ id: 'too-soon', startTimeUtc: '2026-09-19T20:30:00.000Z', effectiveScore: 7 });
+    assert.ok(!canWatchSequentially(game, tooSoon));
+  });
+
+  test('a later match CAN follow an MLB game once its overrun-padded end has passed', () => {
+    const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
+    // schedulingInterval(game).end = 18:00 + 190*1.25 (overrun) + 10
+    // (transition buffer) minutes = 22:07:30.
+    const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T22:10:00.000Z', effectiveScore: 7 });
     assert.ok(canWatchSequentially(game, next));
     const plan = computeDayPlan('2026-09-19', [game, next]);
     assert.deepEqual(plan.map(m => m.id).sort(), ['mlb', 'next']);
@@ -906,5 +924,86 @@ describe('describeEvidence / isEvidenceFresh (structured evidence)', () => {
   test('isEvidenceFresh is false when there is no evidenceRetrievedAt at all', () => {
     assert.equal(isEvidenceFresh(makeMatch({ evidenceRetrievedAt: null })), false);
     assert.equal(isEvidenceFresh(makeMatch({})), false);
+  });
+});
+
+describe('matchLifecycleState (UPCOMING -> STARTING_SOON -> LIVE -> ENDING_SOON -> ENDED)', () => {
+  const START = Date.parse('2026-09-19T18:00:00.000Z');
+  function timedMatch(overrides = {}) {
+    return makeMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 190, sport: 'Premier League', ...overrides });
+  }
+
+  test('isFinished is authoritative - ENDED regardless of how much time has or has not passed', () => {
+    assert.equal(matchLifecycleState(timedMatch({ isFinished: true }), START - 60_000), LIFECYCLE_STATES.ENDED);
+    assert.equal(matchLifecycleState(timedMatch({ isFinished: true }), START + 60_000), LIFECYCLE_STATES.ENDED);
+  });
+
+  test('a TBD fixture is always UPCOMING - there is no trustworthy time to schedule STARTING_SOON/LIVE against', () => {
+    assert.equal(matchLifecycleState(timedMatch({ timeTbd: true }), START - 60_000), LIFECYCLE_STATES.UPCOMING);
+  });
+
+  test('well before start: UPCOMING', () => {
+    assert.equal(matchLifecycleState(timedMatch(), START - 60 * 60_000), LIFECYCLE_STATES.UPCOMING);
+  });
+
+  test('within STARTING_SOON_WINDOW_MINUTES of start: STARTING_SOON, never before it', () => {
+    assert.equal(matchLifecycleState(timedMatch(), START - STARTING_SOON_WINDOW_MINUTES * 60_000), LIFECYCLE_STATES.STARTING_SOON);
+    assert.equal(
+      matchLifecycleState(timedMatch(), START - (STARTING_SOON_WINDOW_MINUTES + 1) * 60_000),
+      LIFECYCLE_STATES.UPCOMING
+    );
+  });
+
+  test('between start and the estimated end (minus the ending-soon window): LIVE', () => {
+    assert.equal(matchLifecycleState(timedMatch(), START + 5_000), LIFECYCLE_STATES.LIVE);
+    assert.equal(matchLifecycleState(timedMatch(), START + 60 * 60_000), LIFECYCLE_STATES.LIVE);
+  });
+
+  test('near the estimated end: ENDING_SOON', () => {
+    const estimatedEnd = START + estimatedDurationMinutes(timedMatch()) * 60_000;
+    assert.equal(matchLifecycleState(timedMatch(), estimatedEnd - 60_000), LIFECYCLE_STATES.ENDING_SOON);
+  });
+
+  // The direct regression test for the reported bug: a match whose expected
+  // (estimated) time has passed, but that ESPN hasn't reported finished yet,
+  // must NEVER read as "about to start" again - it was already live. The
+  // OLD relativeLabel computed diffMin = start - now and returned "即將開始"
+  // (starting soon) for ANY diffMin <= 0, which was only ever reachable once
+  // `now` was already past the nominal end.
+  test('past the estimated end but still not isFinished: stays LIVE, never STARTING_SOON/UPCOMING/ENDED', () => {
+    const match = timedMatch({ sport: 'MLB', durationMinutes: 190, enduranceScore: 10 });
+    const wellPastEstimatedEnd = START + 10 * 60 * 60_000; // 10 real hours after kickoff
+    assert.equal(matchLifecycleState(match, wellPastEstimatedEnd), LIFECYCLE_STATES.LIVE);
+  });
+});
+
+describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', () => {
+  test('returns the unpinned winner of a slot when nothing else is pinned', () => {
+    const a = makeMatch({ id: 'a', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 7 });
+    const dayMatches = [a, b];
+    const natural = naturalSlotChoice('2026-09-19', dayMatches, slotKeyFromMembers([a, b]));
+    assert.equal(natural, 'a');
+  });
+
+  test('this exact slot\'s own pin is set aside, so it reflects the TRUE unpinned default, not whatever is currently pinned there', () => {
+    const a = makeMatch({ id: 'a', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 7 });
+    const slotKey = slotKeyFromMembers([a, b]);
+    // Even with b currently pinned, the natural (unpinned) winner is still a.
+    const pinnedForDay = new Map([[slotKey, 'b']]);
+    const natural = naturalSlotChoice('2026-09-19', [a, b], slotKey, pinnedForDay);
+    assert.equal(natural, 'a');
+  });
+
+  test('OTHER pins still apply while computing this slot\'s own natural default', () => {
+    // c is pinned in a way that blocks a's own slot from winning naturally
+    // once c's own fixed window is respected - see this file's Test 3/5
+    // family for the same "forced pins split the day into gaps" mechanics.
+    const a = makeMatch({ id: 'a', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, enduranceScore: 10, effectiveScore: 5 });
+    const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 60, enduranceScore: 10, effectiveScore: 9 });
+    const slotAB = slotKeyFromMembers([a, b]);
+    const natural = naturalSlotChoice('2026-09-19', [a, b], slotAB, new Map());
+    assert.equal(natural, 'b'); // b wins on its own merits absent any pin
   });
 });

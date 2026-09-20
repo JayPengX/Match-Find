@@ -81,7 +81,7 @@ explicitly.
 ### 2. Explicit score breakdown (old §6)
 
 ```js
-computeRecommendationScore(match, { priorityOrder, myServiceIds, recommendStyle })
+computeRecommendationScore(match, { priorityOrder, myServiceIds })
 // -> { baseScore, adjustments: { broadcastQuality, priority, service }, finalScore, confidence }
 ```
 
@@ -574,3 +574,224 @@ model, real sport-specific scoring adapters, a behavioral feedback loop
 (needs instrumentation this static site doesn't have), and the
 wire-format score rename - each with its own stated reason for staying
 that way, not an oversight.
+
+## Round 5 - architecture cleanup from a fresh list of reported problems
+
+A new batch of reported problems (MLS still present, cross-device sync,
+a confusing dual recommendation-style toggle, background polling causing
+card-state bugs, a lifecycle mislabel, unrealistic baseball overlaps, a
+Recommend/Prefer swipe mix-up, and near-identical Sep 23-25 recommendations)
+turned out to share a small number of real architectural causes, not ten
+unrelated bugs - consistent with this document's own recurring finding
+that most reported "bugs" trace back to a handful of representation
+mismatches rather than needing one-off patches each.
+
+### 1. Investigation first: Sep 23-25 was checked against real data, and mostly ISN'T a bug
+
+Live ESPN/Gemini network access wasn't available to investigate this
+directly, so this used the repo's own real, already-committed
+`data/ai-cache.json` (genuine Gemini-scored fixtures for 2026-09-19
+through 2026-10-03 - the exact window containing Sep 23-25) reconstructed
+through the actual `resolveViewingPlan`/`computeWindowPlan` pipeline.
+Finding: the candidate pool for those three days is genuinely,
+overwhelmingly MLB (13-16 MLB fixtures per day vs. at most one MLS game
+scoring well below MLB's top picks, and zero Premier League fixtures that
+week at all) - not a variety-filter failure. `computeSportConcentration`'s
+soft penalty (§15) was confirmed firing correctly (`sportConcentrationPenalty`
+= 1 once MLB's recent share crossed the 75% threshold) but is deliberately
+soft, exactly as designed: it can't and shouldn't override a night where
+MLB is legitimately the only real option. Recommending several MLB games
+back-to-back most nights, including a marquee ~8.5-scored game at the same
+nightly slot several nights running, is consistent with a real MLB pennant-
+race week with no meaningful cross-sport competition, not a broken plan.
+(This offline reconstruction couldn't validate the matchup-level repeat
+penalty specifically, since it lacked real team names to build a
+`matchupKey` from - see "Known limitations" below.) The genuine bugs found
+during this same investigation are the ones actually fixed below.
+
+### 2. MLS removed entirely
+
+Every MLS reference - `TEAM_LEAGUES`'s `mls` entry (`scripts/build-data.mjs`),
+`team-names.mjs`'s MLS name table, `SPORT_LABELS_ZH`/`LEAGUE_LOGOS`/
+`SPORT_ICONS` (`public/app.js`), the `SPORT_TIMING` entry
+(`recommendation.mjs`), the `--sport-mls` CSS variable/badge rule, cached
+`mls-*` entries in `data/ai-cache.json`, and the one-word mention in the
+shared proxy's `buildMatchRecommendPrompt` - is gone. No replacement
+concept: the site now covers Premier League, MLB, NBA, and F1 only.
+
+### 3. Cross-device sync removed entirely - local-only
+
+`public/app.js` no longer has ANY network call besides fetching its own
+`matches.json` - the entire `/match-find-sync` client (syncPull/syncPush/
+syncCreate/syncConnect/syncDisconnect, the sync Settings UI, the one-time
+pairing prompt banner) is gone, along with `MATCH_FIND_SYNC_APP` and its
+route registration in the shared proxy's `worker.js` (the *generic*
+`handleSyncRequest`/Firestore/JWT machinery stayed untouched - it's shared
+with Orbit's `/sync` and Orbit Vocab's `/vocab-sync`, neither of which this
+change touches). Every per-viewer preference (sport priority, enabled
+sports, and the swiped-to "Prefer" pick) is `localStorage`-only now, same
+as it always claimed to be for a viewer who never paired a sync code -
+that's simply the only mode left.
+
+### 4. One unified recommendation system - "Best Matches"
+
+The `entertainment`/`competitive` `recommendStyle` toggle (§ "Recommendation
+style setting" in the old `public/app.js`) is gone, along with its Settings
+UI. `recommendStyleScore` is now `bestMatchScore` (`recommendation.mjs`) -
+one fixed blend (watchability nudged by `broadcastQuality`, exactly what
+`entertainment` already was) with no style parameter left to pass. The
+viewer's own taste still has exactly one place to override the algorithm:
+swiping a card stack to Prefer a specific alternative (unchanged mechanism,
+see #6 below) - a per-match choice, not a blanket ranking toggle.
+
+### 5. Polling replaced with three real triggers: load, match start, match end
+
+The old client ran THREE independent timers at once: a 60s `setInterval`
+that fully tore down and rebuilt `#recommended-list`'s DOM purely to
+refresh relative-time text, a 5-minute `setInterval` re-fetching
+`matches.json`, and a 30s `setInterval` polling the (now-removed) sync
+endpoint. All three are gone. `scheduleNextUpdate` (`public/app.js`) now
+sets exactly ONE `setTimeout`, targeting the single soonest instant, across
+every currently-loaded match, that its lifecycle actually changes - it
+starts, or its estimated broadcast ends (see #7) - computed by
+`nextRelevantTransitionMs`. Firing it re-fetches `matches.json` (reacting
+to whatever ESPN/the build has changed by then) AND re-renders even when
+the data itself hasn't changed, since the transition is a pure wall-clock
+event independent of the server (a match starting doesn't need new JSON to
+be true). This is very likely the single largest shared cause behind the
+reported card-state bugs (#6): a full DOM rebuild racing against an
+in-progress swipe gesture every 60 seconds, forever, is exactly the kind of
+thing that produces "swiping forward jumps backward," stale scroll
+positions, and cards that look duplicated mid-gesture. Removing the blind
+timer removes the race entirely; the existing swipe-interaction cooldown
+(`isStackBeingInteractedWith`) still guards the three real triggers the
+same way. Trade-off, accepted deliberately per this round's own brief ("no
+polling, no intervals"): the on-screen relative countdown text no longer
+ticks smoothly between renders - it's accurate as of the last render/
+transition, not updated every minute. `tests/preferences.test.mjs` and the
+`matchLifecycleState` tests below don't cover this DOM-timing behavior
+directly (there's no DOM test harness in this repo - see "Known
+limitations"), but the removal of `setInterval` from `public/app.js`
+entirely is directly inspectable in the source.
+
+### 6. Recommend/Prefer swipe semantics fixed - and preference logic extracted
+
+Root cause of "swiping back changes Recommend into Prefer": `pinSlotChoice`
+recorded a pin for WHATEVER the viewer swiped to, with no way to tell
+"a genuine alternative" apart from "the algorithm's own default, just
+touched." Once any pin existed for a slot, every render tagged that
+member `isPreferred` (偏好) - including the algorithm's own original top
+pick, the moment a viewer swiped away and back. Fix: `naturalSlotChoice`
+(`recommendation.mjs`) computes what `computeDayPlan` would pick for a
+slot with THAT slot's own pin set aside (every other pin still respected),
+and `applySlotSwipe` (new `public/lib/preferences.mjs`) clears the pin
+instead of setting one when the swiped-to match equals that natural
+default - reverting the card to 推薦 instead of leaving it stuck at 偏好.
+This is also where the pin serialization/pruning logic that used to live
+inline in `public/app.js` moved to, pulled out as its own pure, DOM-free
+module (`serializePinnedChoices`/`deserializePinnedChoices`/
+`pruneStalePinnedChoices`/`applySlotSwipe`) - per this round's own explicit
+architecture goal of keeping "match data -> recommendation -> user
+preference -> UI/card state" as four genuinely separate layers instead of
+letting DOM code and preference logic interleave. `tests/preferences.test.mjs`
+covers the exact two round-trip scenarios asked for (Prefer -> save ->
+reload -> still Prefer; un-Prefer -> save -> reload -> still un-Preferred),
+plus the swipe-semantics fix itself and every pruning/serialization edge
+case, all as pure functions with no DOM/localStorage involved.
+
+### 7. Lifecycle states corrected, and baseball's real overrun risk fixed
+
+Two related bugs, one shared root cause: this pipeline had no single,
+named notion of a match's lifecycle - `relativeLabel`/the `is-live` CSS
+class/`pinCurrentOrNext`/`pickInitialDay` each re-derived "is this live/
+about to start/over" ad hoc, against the plain NOMINAL end time
+(`start + durationMinutes`), with no upper bound once a match had already
+started.
+
+- **The STARTING_SOON bug**: `relativeLabel`'s old logic returned "即將
+  開始" (starting soon) for ANY case where `now >= start` - which, since
+  the live window (`now < nominalEnd`) was handled by an earlier branch,
+  was ONLY EVER reachable once `now` was already past the nominal end. A
+  match that simply ran long, with ESPN not yet reporting it finished, was
+  therefore mislabeled "about to start" instead of "still live" - the
+  literal bug reported ("a match whose expected time has passed
+  incorrectly appears about to start"). Fixed by `matchLifecycleState`
+  (`recommendation.mjs`), a single UPCOMING -> STARTING_SOON -> LIVE ->
+  ENDING_SOON -> ENDED state machine every caller now reads instead of
+  re-deriving its own version: `isFinished` (ESPN's own status) is the
+  ONLY thing that ever produces ENDED, never elapsed time, so a match
+  already underway can never fall back to STARTING_SOON/UPCOMING again.
+- **The baseball overrun bug**: `DURATION_UNCERTAINTY_BY_RELIABILITY`
+  (Round 2, §9) shrank a low-reliability sport's reserved scheduling block
+  by a flat discount (30% for MLB), reasoning that "we're not sure how
+  long this runs, so don't over-block." That was backwards for a no-clock
+  sport: MLB is statistically more likely to run LONG than short (extra
+  innings, rain delays - a standard 9-inning game already averages
+  roughly 2h40m of playing time alone per MLB's own officially published
+  time-of-game figures, with real, meaningful tail risk of 30-60+ extra
+  real minutes and no matching mechanism that ever finishes a game
+  meaningfully early). The discount meant the scheduler would offer a next
+  pick only ~2h13m into a genuinely great, full-endurance MLB game (133min
+  = 190min endurance-adjusted figure minus 30%) - the exact reported "40-80
+  minute unrealistic overlap," and worse for the games most likely to
+  genuinely go long (close, high-endurance ones). Fixed by replacing the
+  discount with `DURATION_OVERRUN_BUFFER_BY_RELIABILITY`, an overrun PAD
+  applied on top of the endurance-adjusted figure (`schedulingDurationMinutes`
+  can now only ever equal or exceed `effectiveDurationMinutes`, never fall
+  below it) - MLB now reserves ~4 hours for a genuine toss-up instead of
+  ~2h13m. The endurance-based early-release for a genuine blowout is
+  unchanged and unaffected - that's a different, legitimate axis (is this
+  still worth watching) from the one that was actually broken (how long
+  does the broadcast realistically run). `estimatedDurationMinutes` (nominal
+  length + the same overrun pad, without the endurance blend) is the
+  separate, honest "how long is this probably still on the air" figure
+  `matchLifecycleState` uses for LIVE/ENDING_SOON/ENDED display - explicitly
+  never a guaranteed end time, exactly per this round's own framing.
+  `tests/recommendation.test.mjs` covers both fixes directly: a full
+  UPCOMING/STARTING_SOON/LIVE/ENDING_SOON/ENDED matrix for
+  `matchLifecycleState` (including the exact "past the estimated end but
+  not `isFinished`: stays LIVE, never STARTING_SOON" regression case), and
+  a before/after pair of `schedulingInterval` assertions proving the same
+  gap that used to be schedulable after an MLB game (`Test 5`) no longer is.
+
+### 8. Gemini asked to compare, not just judge each fixture alone
+
+The shared proxy's `buildMatchRecommendPrompt` already received a whole
+day's (or more) fixture batch in one call, but its instructions said "For
+EACH fixture ... return" with no comparison framing at all - genuine
+side-by-side comparison only ever happened in the much smaller, rarer
+`/match-recommend-refine` follow-up (a handful of contested clusters a
+day, at most `MAX_REFINE_CLUSTERS_PER_RUN`). The base prompt now
+explicitly instructs grouping fixtures by day and near-in-time overlap
+before scoring, and scoring with that comparison in mind - a clearly
+bigger story should score clearly higher than a comparatively routine
+same-day alternative, not get flattened toward it the way scoring each
+fixture in isolation tends to produce. `PROMPT_VERSION` bumped to 10 in
+`scripts/build-data.mjs` so every cached score gets re-evaluated under the
+improved prompt. Gemini's judgment is unchanged in its actual ROLE here -
+still one signal feeding `computeDayPlan`'s deterministic scheduler, never
+the sole decision-maker; the refine follow-up stays in place too, as
+defense in depth for the rare case the base pass's new comparison still
+leaves two overlapping fixtures suspiciously close.
+
+### Known limitations after Round 5
+
+- The Sep 23-25 investigation (#1) used the repo's own real, committed AI
+  score cache rather than a live fetch (outbound network access to ESPN/the
+  deployed site was not available in the environment this round's work was
+  done in) - real team names/venues weren't reconstructable from the cache
+  alone, so the cross-day matchup-repeat penalty specifically (§14,
+  `matchupKey`) could not be independently verified against real Sep 23-25
+  data this round, only re-confirmed correct by code inspection (unchanged
+  from Round 2).
+- There's no DOM/browser test harness in this repo (Node's built-in test
+  runner, used for everything under `tests/`, has no DOM) - the polling-
+  removal fix (#5) and the swipe/card-stack behavior it targets are
+  verified by source inspection and the pure-function tests around
+  `naturalSlotChoice`/`applySlotSwipe`, not by a simulated browser
+  interaction test. A real device/browser check remains the way to confirm
+  the on-screen swipe behavior end-to-end.
+- The Gemini prompt change (#8) is a live production prompt with no test
+  harness on the shared-proxy side (confirmed zero tests in that repo) -
+  its effect can only be observed in real scored output after the next
+  build, not asserted in CI.

@@ -14,24 +14,31 @@
 // The AI scoring itself (competitiveness/watchability/reason/venueZh/
 // whereToWatchTw) already happened automatically in the background, on a
 // schedule, well before this page ever loaded - see build-data.mjs.
-// Nothing here ever calls Gemini; the one thing this file DOES call over
-// the network besides matches.json itself is the settings-sync proxy (see
-// "Cross-device settings sync" below) - a viewer's own sport-priority/
-// enabled-sports/subscribed-services choices, never fixture data, and
-// never Gemini.
+// Nothing here ever calls Gemini, and nothing here ever calls any other
+// network endpoint either - the ONLY network request this page makes is
+// one `fetch('./data/matches.json')` (see "One update path" below).
+// Everything else - sport priority, enabled sports, and which swiped match
+// a viewer prefers - is local-only, in this browser's own localStorage,
+// with no server-side sync of any kind (see README's "Local-only, no
+// accounts").
 //
 // UI copy is Traditional Chinese throughout; team names, venues, and the
 // AI's reasoning stay bilingual (see buildTeamRow/renderVenue) since an
 // English team/venue name is often the more recognizable half for a fixture
 // nobody has a settled Chinese name for yet.
 //
-// The pure scoring/viewing-plan math (recommendStyleScore, overlap/slot/
-// weighted-interval-scheduling helpers, computeDayPlan, resolveViewingPlan,
-// confidence, the broadcast-service registry) lives in ./lib/recommendation.mjs
-// instead of here - extracted so it can be unit-tested directly (see
+// The pure scoring/viewing-plan math (overlap/slot/weighted-interval-
+// scheduling helpers, computeDayPlan, resolveViewingPlan, confidence, the
+// broadcast-service registry) lives in ./lib/recommendation.mjs instead of
+// here - extracted so it can be unit-tested directly (see
 // tests/recommendation.test.mjs) and reused by scripts/build-data.mjs (for
-// confidence) without a DOM. This file keeps everything DOM/localStorage/
-// render-related, and calls into that module for the rest.
+// confidence) without a DOM. The viewer's own local "Prefer" state (which
+// swiped match to stick with per slot) is its own further pure module,
+// ./lib/preferences.mjs - see that file's own top comment for why "match
+// data -> recommendation -> user preference -> UI/card state" are kept as
+// four separate layers instead of collapsing into one. This file keeps
+// everything DOM/localStorage/render-related, and calls into both modules
+// for the rest.
 import {
   SERVICES,
   resolveService,
@@ -42,8 +49,13 @@ import {
   computeWindowPlan,
   applyRecentRepeatPenalties,
   describeEvidence,
-  isEvidenceFresh
+  isEvidenceFresh,
+  naturalSlotChoice,
+  matchLifecycleState,
+  LIFECYCLE_STATES,
+  estimatedDurationMinutes
 } from './lib/recommendation.mjs';
+import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
@@ -53,23 +65,19 @@ const state = {
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
   activeSport: 'all',
-  recommendStyle: 'entertainment', // which per-match score drives "推薦賽事" - see "Recommendation style setting" below (overwritten by loadRecommendStyle() right after this object)
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
   myServiceIds: [], // subscribed services - see "Broadcast service registry" below
-  proxyUrl: '', // from matches.json - where sync calls go (see "Cross-device settings sync")
-  syncPasscode: '', // '' when not paired to a sync code - see "Cross-device settings sync"
   // Map<dayKey, Map<slotKey, matchId>> - which member of a multi-match
   // "slot" (see isNearTotalOverlap) the viewer explicitly swiped to commit
-  // to watching, per day - see computeDayPlan/pinSlotChoice. Persisted to
-  // localStorage and synced like the other settings below (see
-  // "Pinned-choice persistence & sync") - a viewer who swiped past this
-  // morning's default pick expects that choice still showing as 偏好, not
-  // reverting to 推薦, next time they open the page or check another
-  // device, the same as every other preference here. Old days' entries get
-  // pruned (see prunePinnedChoices) rather than kept forever, since a day
-  // that's aged out of the fetched window can never be looked up again
-  // anyway.
+  // to watching, per day - see computeDayPlan/pinSlotChoice, and
+  // ./lib/preferences.mjs for the actual set-or-clear decision and
+  // serialization shape. Local-only (see this file's own top comment) -
+  // persisted to localStorage so a viewer who swiped past this morning's
+  // default pick still sees that choice as 偏好, not reverted back to
+  // 推薦, next time they open the page. Old days' entries get pruned (see
+  // prunePinnedChoices) rather than kept forever, since a day that's aged
+  // out of the fetched window can never be looked up again anyway.
   pinnedChoices: loadPinnedChoices(),
   // Map<matchupKey, dayKey> - the most recent day, across the WHOLE fetched
   // window regardless of the current sport filter, that matchup actually
@@ -98,13 +106,12 @@ const state = {
 // TEAM_LEAGUES in that script) stay the stable data key and CSS hook
 // (data-sport="Premier League" etc.) - only the on-screen label goes
 // through this map, so the underlying data model never has to change
-// just because the display language does. MLB/NBA/MLS/F1 stay as their
+// just because the display language does. MLB/NBA/F1 stay as their
 // English initialisms - that's how Taiwanese sports media normally
 // writes them too, even in otherwise-Chinese text; only the Premier
 // League has a standard, universally-used Chinese short name.
 const SPORT_LABELS_ZH = {
   'Premier League': '英超',
-  MLS: 'MLS',
   MLB: 'MLB',
   NBA: 'NBA',
   F1: 'F1'
@@ -118,7 +125,6 @@ const SPORT_LABELS_ZH = {
 // lists (see buildSportIcon below, the one place all four read from).
 const LEAGUE_LOGOS = {
   'Premier League': 'https://a.espncdn.com/i/leaguelogos/soccer/500/23.png',
-  MLS: 'https://a.espncdn.com/i/leaguelogos/soccer/500/19.png',
   MLB: 'https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png',
   NBA: 'https://a.espncdn.com/i/teamlogos/leagues/500/nba.png',
   F1: 'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png'
@@ -136,8 +142,6 @@ const LEAGUE_LOGOS = {
 const SPORT_ICON_STROKE = '#1f2433';
 const SPORT_ICONS = {
   'Premier League':
-    `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="${SPORT_ICON_STROKE}" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>`,
-  MLS:
     `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.3l4.1 2.9-1.6 4.8h-5L8 10.2z" fill="${SPORT_ICON_STROKE}" stroke="none"/><path d="M12 7.3V4.2M16.1 10.2l2.9-1.8M14.5 15l1.9 2.8M9.5 15l-1.9 2.8M8 10.2l-2.9-1.8" stroke-linecap="round"/></svg>`,
   MLB:
     `<svg viewBox="0 0 24 24" fill="none" stroke="${SPORT_ICON_STROKE}" stroke-width="1.4"><circle cx="12" cy="12" r="8.4"/><path d="M6.7 6.2c2.6 2.2 2.6 9.4 0 11.6M17.3 6.2c-2.6 2.2-2.6 9.4 0 11.6" stroke-linecap="round"/></svg>`,
@@ -274,22 +278,8 @@ const settingsPanel = document.getElementById('settings-panel');
 const settingsBackdrop = document.getElementById('settings-backdrop');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const settingsResetBtn = document.getElementById('settings-reset-btn');
-const settingsRecommendStyle = document.getElementById('settings-recommend-style');
 const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
-const syncStatusText = document.getElementById('sync-status-text');
-const syncConnectedView = document.getElementById('sync-connected-view');
-const syncDisconnectedView = document.getElementById('sync-disconnected-view');
-const syncCodeText = document.getElementById('sync-code-text');
-const syncCopyBtn = document.getElementById('sync-copy-btn');
-const syncDisconnectBtn = document.getElementById('sync-disconnect-btn');
-const syncCreateBtn = document.getElementById('sync-create-btn');
-const syncCodeInput = document.getElementById('sync-code-input');
-const syncConnectBtn = document.getElementById('sync-connect-btn');
-const syncErrorText = document.getElementById('sync-error-text');
-const syncPromptBanner = document.getElementById('sync-prompt-banner');
-const syncPromptOpenBtn = document.getElementById('sync-prompt-open-btn');
-const syncPromptDismissBtn = document.getElementById('sync-prompt-dismiss-btn');
 const updateStatusText = document.getElementById('update-status-text');
 const checkUpdateBtn = document.getElementById('check-update-btn');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
@@ -315,58 +305,21 @@ const exportDataBtn = document.getElementById('export-data-btn');
 // "if these two are roughly equally good, which do you want?" - a dial
 // still leaves every sport at the same level ambiguous relative to each
 // other, where a full order never is.
-// ---- Recommendation style setting ------------------------------------------
+// ---- One unified recommendation system: "Best Matches" ---------------------
 //
-// "Worth watching" isn't one fixed question - different viewers weigh it
-// differently, and none of them is more "correct" than the others. Two
-// selectable styles, not three - broadcast/viewing-experience quality
-// (see BROADCAST_QUALITY_WEIGHT in ./lib/recommendation.mjs) turned out to work better as a
-// metric folded into BOTH styles than as a third thing to choose between:
-// nobody actually wants to rank purely by production value on its own, it
-// should just quietly tip a close call the way priority/service nudges
-// already do elsewhere in this file.
-// - entertainment (the DEFAULT): watchability - already exactly "what a
-//   general sports fan/mainstream media would find notable regardless of
-//   how close it ends up being" per that field's own definition in the
-//   shared proxy's buildMatchRecommendPrompt. Defaulted to rather than
-//   competitive because it needs no familiarity with a sport's standings
-//   or current form to make sense of - "is this a big deal" reads fine to
-//   someone new to the sport, "is this a tight game" much less so.
-// - competitive: build-data.mjs's own composite of competitiveness (how
-//   close the game is) and watchability (stakes/rivalry/star power),
-//   averaged - the original behavior, still available for anyone who
-//   wants closeness itself weighted in.
-//
-// Synced like priorityOrder/enabledSports/myServiceIds (see "Cross-device
-// settings sync" below) since it's the same kind of "my own preference,
-// same on every device" setting.
-const RECOMMEND_STYLES = [
-  { id: 'entertainment', label: '話題熱度', hint: '看重話題性、明星球員、對戰歷史——大眾媒體會關注的那種賽事（預設方式，不需要先熟悉這項運動）。' },
-  { id: 'competitive', label: '精彩程度', hint: '看重賽事本身的緊張刺激程度，適合已經熟悉這項運動、想看勢均力敵對戰的球迷。' }
-];
-const DEFAULT_RECOMMEND_STYLE = RECOMMEND_STYLES[0].id;
-const RECOMMEND_STYLE_STORAGE_KEY = 'matchfind-recommend-style';
-
-function loadRecommendStyle() {
-  try {
-    const stored = localStorage.getItem(RECOMMEND_STYLE_STORAGE_KEY);
-    return RECOMMEND_STYLES.some(s => s.id === stored) ? stored : DEFAULT_RECOMMEND_STYLE;
-  } catch {
-    return DEFAULT_RECOMMEND_STYLE;
-  }
-}
-function saveRecommendStyle(style) {
-  try {
-    localStorage.setItem(RECOMMEND_STYLE_STORAGE_KEY, style);
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
-}
-state.recommendStyle = loadRecommendStyle();
-
-// recommendStyleScore/BROADCAST_QUALITY_WEIGHT now live in
-// ./lib/recommendation.mjs (used internally by resolveViewingPlan there) -
-// see that file for the broadcastQuality-blend reasoning.
+// There used to be a viewer-selectable "recommendation style" (話題熱度 vs
+// 精彩程度) toggling which per-match score drove 推薦賽事. In practice this
+// just split feedback and testing across two subtly different rankings for
+// no real benefit - "worth watching" doesn't need two competing answers,
+// just one well-reasoned one. resolveViewingPlan (./lib/recommendation.mjs)
+// now always uses the single blend that used to be the "entertainment"
+// default (watchability, nudged by broadcastQuality - see
+// BROADCAST_QUALITY_WEIGHT there) - the one that needs no familiarity with
+// a sport's standings or current form to make sense of. The viewer's own
+// preference is expressed a different way instead: swiping a card stack to
+// commit to a specific alternative (see "Prefer" below) - that's the ONE
+// place personal taste overrides the algorithm's own judgment, and it's
+// local, explicit, and per-match rather than a blanket ranking toggle.
 
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // PRIORITY_SCORE_DELTA/OWNED_SERVICE_SCORE_BONUS now live in
@@ -402,8 +355,8 @@ state.priorityOrder = loadPriorityOrder();
 
 // ---- Enabled sports / subscribed services settings ------------------------
 //
-// Two more per-viewer settings, same localStorage-first, sync-if-paired
-// pattern as sport priority above. Unlike priority (a tie-breaking nudge),
+// Two more per-viewer settings, same local-only localStorage pattern as
+// sport priority above. Unlike priority (a tie-breaking nudge),
 // a disabled sport is a hard exclude - it never appears anywhere on the
 // page, not even in "所有賽事", since "enable/disable" is a plainer,
 // stronger statement than "prefer less".
@@ -430,48 +383,25 @@ state.enabledSports = loadEnabledSports();
 // site's own owner's real subscriptions.
 state.myServiceIds = new Set(DEFAULT_MY_SERVICE_IDS);
 
-// ---- Pinned-choice persistence & sync --------------------------------------
+// ---- Pinned-choice persistence (local-only "Prefer") -----------------------
 //
-// state.pinnedChoices (Map<dayKey, Map<slotKey, matchId>>) - same
-// localStorage-first, sync-if-paired pattern as the settings above, so a
-// viewer's own swiped-to pick (see pinSlotChoice) still shows as 偏好
-// instead of reverting to 推薦 the next time they open the page or check
-// another device. `localDateKey`/`new Date` aren't defined yet this early
-// in the file, but both are plain function declarations (hoisted) reading
-// only the current wall clock, so calling them from here at module-load
-// time is safe.
-//
-// Serialized as a plain {dayKey: {slotKey: matchId}} object (Map doesn't
-// survive JSON.stringify on its own) - deserializing drops any day that's
-// already in the past (a plain string compare against today's own key
-// works since localDateKey's format sorts lexicographically the same as
-// chronologically), the same pruning prunePinnedChoices below does on an
-// already-running page as today's date rolls forward - a pin can never be
-// looked up again once its own day is gone, so there's nothing to gain by
-// keeping it around indefinitely in localStorage or the synced payload.
+// state.pinnedChoices (Map<dayKey, Map<slotKey, matchId>>) - which member
+// of a multi-match slot (see isNearTotalOverlap) the viewer explicitly
+// swiped to commit to watching, per day. Local-only, like every other
+// preference in this file (see this file's own top comment) - the
+// serialization shape, staleness pruning, and the actual "is this a real
+// override or does it just match the algorithm's own default" decision
+// (see pinSlotChoice below) all live in ./lib/preferences.mjs, pure and
+// DOM-free (see tests/preferences.test.mjs) - this file only ever does the
+// localStorage read/write itself. `localDateKey`/`new Date` aren't defined
+// yet this early in the file, but both are plain function declarations
+// (hoisted) reading only the current wall clock, so calling them from here
+// at module-load time is safe.
 const PINNED_CHOICES_STORAGE_KEY = 'matchfind-pinned-choices';
 
-function deserializePinnedChoices(raw) {
-  const map = new Map();
-  if (!raw || typeof raw !== 'object') return map;
-  const todayKey = localDateKey(new Date());
-  Object.entries(raw).forEach(([dayKey, bySlot]) => {
-    if (dayKey < todayKey || !bySlot || typeof bySlot !== 'object') return;
-    const slotMap = new Map(Object.entries(bySlot).filter(([, matchId]) => typeof matchId === 'string'));
-    if (slotMap.size) map.set(dayKey, slotMap);
-  });
-  return map;
-}
-function serializePinnedChoices(map) {
-  const obj = {};
-  map.forEach((slotMap, dayKey) => {
-    obj[dayKey] = Object.fromEntries(slotMap);
-  });
-  return obj;
-}
 function loadPinnedChoices() {
   try {
-    return deserializePinnedChoices(JSON.parse(localStorage.getItem(PINNED_CHOICES_STORAGE_KEY)));
+    return deserializePinnedChoices(JSON.parse(localStorage.getItem(PINNED_CHOICES_STORAGE_KEY)), localDateKey(new Date()));
   } catch {
     return new Map();
   }
@@ -483,329 +413,23 @@ function savePinnedChoices() {
     // Private browsing / blocked storage - see savePriorityOrder's own comment.
   }
 }
-// Called on every applyEnabledSportsAndRender (a fresh data load/poll, or a
+// Called on every applyEnabledSportsAndRender (a fresh data load, or a
 // sport toggle) - state.days moves forward with the fetched window, and a
 // pin for a day that's fallen off the back of it, or simply passed, can
 // never be looked up by computeDayPlan again either way.
 function prunePinnedChoices() {
-  const todayKey = localDateKey(new Date());
-  let changed = false;
-  for (const dayKey of state.pinnedChoices.keys()) {
-    if (dayKey < todayKey) {
-      state.pinnedChoices.delete(dayKey);
-      changed = true;
-    }
-  }
+  const { pinnedChoices, changed } = pruneStalePinnedChoices(state.pinnedChoices, localDateKey(new Date()));
+  state.pinnedChoices = pinnedChoices;
   if (changed) savePinnedChoices();
 }
-// Same "save locally, push if paired" shape as persistSettingsAndSync -
-// kept separate since a pin is recorded far more often (every swipe) than
-// the Settings panel's own toggles, and bundles into the exact same synced
-// payload either way (see buildSyncPayloadObject).
-function persistPinnedChoicesAndSync() {
-  savePinnedChoices();
-  if (state.syncPasscode) syncPush();
-}
-
-// ---- Cross-device settings sync --------------------------------------------
-//
-// Syncs three things - priorityOrder, enabledSports, pinnedChoices -
-// across a viewer's own devices via a single passcode, through the shared
-// Cloudflare Worker (see the jaypengx-collab/shared-proxy repo's
-// /match-find-sync route, the same singleCredential design as its own
-// /vocab-sync: one passcode is
-// both the identifier and the only credential, no separate manager role,
-// because this is always "one person's own settings on their own devices",
-// never "one person's data read by many"). Never syncs fixture data or
-// scores - those already come from the one shared matches.json build, not
-// per-viewer state, and have nothing to do with this.
-//
-// state.proxyUrl comes from matches.json (see applyMatchData) - the same
-// Worker base URL the build script already uses for /match-recommend,
-// baked in at build time since a plain fetch target carries no credential
-// worth hiding. Sync is simply unavailable (buttons show a plain status
-// message, nothing throws) when it's empty - same graceful-absence
-// posture as PROXY_URL being unset for AI scoring at build time.
-const SYNC_PASSCODE_STORAGE_KEY = 'matchfind-sync-passcode';
-const SYNC_PROMPTED_STORAGE_KEY = 'matchfind-sync-prompted';
-
-function loadSyncPasscode() {
-  try {
-    return localStorage.getItem(SYNC_PASSCODE_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-function saveSyncPasscode(passcode) {
-  try {
-    if (passcode) localStorage.setItem(SYNC_PASSCODE_STORAGE_KEY, passcode);
-    else localStorage.removeItem(SYNC_PASSCODE_STORAGE_KEY);
-  } catch {
-    // Private browsing / blocked storage - sync still works for this page
-    // view, it just won't remember the passcode next time.
-  }
-}
-state.syncPasscode = loadSyncPasscode();
-
-function buildSyncPayloadObject() {
-  return {
-    recommendStyle: state.recommendStyle,
-    priorityOrder: state.priorityOrder,
-    enabledSports: [...state.enabledSports],
-    pinnedChoices: serializePinnedChoices(state.pinnedChoices)
-  };
-}
-
-// Applies a synced payload on top of local state - the same tolerant
-// filtering as the individual loadX functions above (an unknown sport id,
-// e.g. from an older or newer version of this site syncing with this one,
-// is dropped rather than trusted blindly), then persists it locally so a
-// later offline visit still has it.
-function applySyncPayloadObject(payload) {
-  if (RECOMMEND_STYLES.some(s => s.id === payload?.recommendStyle)) {
-    state.recommendStyle = payload.recommendStyle;
-  }
-  if (Array.isArray(payload?.priorityOrder)) {
-    const known = payload.priorityOrder.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
-    const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
-    state.priorityOrder = [...known, ...missing];
-  }
-  if (Array.isArray(payload?.enabledSports) && payload.enabledSports.length) {
-    const known = payload.enabledSports.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
-    if (known.length) state.enabledSports = new Set(known);
-  }
-  if (payload?.pinnedChoices && typeof payload.pinnedChoices === 'object') {
-    state.pinnedChoices = deserializePinnedChoices(payload.pinnedChoices);
-  }
-  saveRecommendStyle(state.recommendStyle);
-  savePriorityOrder(state.priorityOrder);
-  saveEnabledSports(state.enabledSports);
-  savePinnedChoices();
-}
-
-async function syncFetch(method, { passcode = state.syncPasscode, body } = {}) {
-  if (!state.proxyUrl) throw new Error('同步功能尚未設定');
-  const url = new URL(`${state.proxyUrl.replace(/\/+$/, '')}/match-find-sync`);
-  if (method !== 'POST') url.searchParams.set('passcode', passcode);
-  const response = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(15_000)
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error?.message || `HTTP ${response.status}`);
-  return data;
-}
-
-// The raw payload string this device last actually applied (from a pull
-// OR its own push - see persistSettingsAndSync/syncPush) - lets the
-// periodic poll below (see SYNC_POLL_INTERVAL_MS) tell "something
-// actually changed on another device" apart from "the usual no-op poll",
-// so it only re-renders (and, if Settings happens to be open, redraws
-// that panel) when there's a real change to show, not every single tick.
-let lastAppliedSyncPayloadRaw = '';
-
-// Pulls the synced payload and applies it if it's actually different from
-// what this device already has (see lastAppliedSyncPayloadRaw). Called
-// once unconditionally on load (see init()) when a passcode is already
-// stored, deliberately BEFORE the viewer does anything else, so a setting
-// changed on another device is what actually applies here, not whatever
-// this device happened to have cached from before ("if the app is updated
-// it should always fetch first" applies just as much to a viewer's own
-// synced settings as it does to matches.json/buildId) - and again on
-// SYNC_POLL_INTERVAL_MS's own interval and on tab focus after that (see
-// init()), which is the actual fix for "changing settings on one device
-// doesn't show up on another" for a tab that was already open: a single
-// pull on load only ever caught a change made BEFORE this tab loaded,
-// never one made while it was sitting open. Silent on failure (offline,
-// proxy down) - this device's own local settings are still a perfectly
-// good fallback, and the next poll tries again on its own.
-async function syncPull({ renderIfOpen = false } = {}) {
-  try {
-    const data = await syncFetch('GET');
-    if (!data.exists || typeof data.payload !== 'string' || !data.payload) return;
-    if (data.payload === lastAppliedSyncPayloadRaw) return; // nothing new
-    lastAppliedSyncPayloadRaw = data.payload;
-    applySyncPayloadObject(JSON.parse(data.payload));
-    applyEnabledSportsAndRender();
-    // The initial on-load pull runs before Settings could possibly be
-    // open, so this only actually matters for the periodic poll/focus
-    // pull - redraws the open panel's chip states/priority list so a
-    // change made on another device shows up there too, not just in the
-    // match list behind it.
-    if (renderIfOpen && !settingsPanel.hidden) renderSettingsPanel();
-  } catch (error) {
-    console.warn('sync pull failed', error);
-  }
-}
-
-// Fire-and-forget push after a local settings change (see
-// persistSettingsAndSync) - failure here just means this one change
-// didn't make it to other devices yet; it'll go out again next time
-// anything changes, and doesn't block or roll back the local change
-// itself.
-async function syncPush() {
-  try {
-    const payload = JSON.stringify(buildSyncPayloadObject());
-    await syncFetch('PATCH', { body: { payload } });
-    // This device's own change is now the server's own latest - recorded
-    // so the next periodic pull (see syncPull) recognizes it as already
-    // applied instead of redundantly re-applying/re-rendering it the
-    // moment it polls back.
-    lastAppliedSyncPayloadRaw = payload;
-  } catch (error) {
-    console.warn('sync push failed', error);
-  }
-}
-
-async function syncCreate() {
-  syncErrorText.hidden = true;
-  syncCreateBtn.disabled = true;
-  try {
-    const payload = JSON.stringify(buildSyncPayloadObject());
-    const data = await syncFetch('POST', { body: { payload } });
-    state.syncPasscode = data.passcode;
-    saveSyncPasscode(state.syncPasscode);
-    lastAppliedSyncPayloadRaw = payload; // see syncPush's own comment
-    renderSyncPanel();
-  } catch (error) {
-    syncErrorText.hidden = false;
-    syncErrorText.textContent = `建立同步碼失敗：${error.message}`;
-  } finally {
-    syncCreateBtn.disabled = false;
-  }
-}
-
-async function syncConnect(passcode) {
-  syncErrorText.hidden = true;
-  syncConnectBtn.disabled = true;
-  try {
-    const data = await syncFetch('GET', { passcode });
-    if (!data.exists) {
-      syncErrorText.hidden = false;
-      syncErrorText.textContent = '找不到這組同步碼，請確認輸入是否正確。';
-      return;
-    }
-    state.syncPasscode = passcode;
-    saveSyncPasscode(passcode);
-    if (typeof data.payload === 'string' && data.payload) {
-      lastAppliedSyncPayloadRaw = data.payload; // see syncPush's own comment
-      applySyncPayloadObject(JSON.parse(data.payload));
-      applyEnabledSportsAndRender();
-    }
-    // Full re-render, not just renderSyncPanel() - a synced payload can
-    // change priority order/enabled sports/my services, and the settings
-    // panel is open (this only runs from the connect button) showing
-    // whatever chip states it rendered with before the pull landed.
-    renderSettingsPanel();
-  } catch (error) {
-    syncErrorText.hidden = false;
-    syncErrorText.textContent = `連接失敗：${error.message}`;
-  } finally {
-    syncConnectBtn.disabled = false;
-  }
-}
-
-// Only forgets the passcode on THIS device - deliberately never calls
-// DELETE, since other devices may still be using the same code and
-// disconnecting one device's own local copy shouldn't wipe shared data out
-// from under them.
-function syncDisconnect() {
-  state.syncPasscode = '';
-  saveSyncPasscode('');
-  // A future reconnect - possibly to a DIFFERENT passcode - should never
-  // skip applying its payload just because it happens to match whatever
-  // string this device last saw under the old one.
-  lastAppliedSyncPayloadRaw = '';
-  renderSyncPanel();
-}
-
-function renderSyncPanel() {
-  const connected = !!state.syncPasscode;
-  syncConnectedView.hidden = !connected;
-  syncDisconnectedView.hidden = connected;
-  syncErrorText.hidden = true;
-  if (connected) {
-    syncCodeText.textContent = state.syncPasscode;
-    syncStatusText.textContent = '這個裝置已同步，變更設定會自動套用到其他同步過的裝置。';
-  } else if (!state.proxyUrl) {
-    syncStatusText.textContent = '同步功能尚未設定。';
-  } else {
-    syncStatusText.textContent = '建立一組同步碼，在其他裝置輸入同一組碼即可套用相同設定。';
-  }
-}
-
-syncCreateBtn.addEventListener('click', syncCreate);
-syncConnectBtn.addEventListener('click', () => {
-  const passcode = syncCodeInput.value.trim().toUpperCase();
-  if (passcode) syncConnect(passcode);
-});
-syncDisconnectBtn.addEventListener('click', syncDisconnect);
-syncCopyBtn.addEventListener('click', () => {
-  navigator.clipboard?.writeText(state.syncPasscode).catch(() => {});
-});
-
-// A one-time, dismissible nudge on first visit (never shown again either
-// way - see SYNC_PROMPTED_STORAGE_KEY) rather than asking on every load,
-// which would just be nagging. Only shown when sync is actually available
-// and this device isn't already paired.
-function maybeShowSyncPrompt() {
-  if (state.syncPasscode || !state.proxyUrl) return;
-  let prompted = false;
-  try {
-    prompted = localStorage.getItem(SYNC_PROMPTED_STORAGE_KEY) === '1';
-  } catch {
-    // Can't remember a dismissal without storage - default to not nagging.
-    prompted = true;
-  }
-  if (!prompted) syncPromptBanner.hidden = false;
-}
-function dismissSyncPrompt() {
-  syncPromptBanner.hidden = true;
-  try {
-    localStorage.setItem(SYNC_PROMPTED_STORAGE_KEY, '1');
-  } catch {
-    // Not fatal - worst case this asks again next visit.
-  }
-}
-syncPromptOpenBtn.addEventListener('click', () => {
-  dismissSyncPrompt();
-  openSettingsPanel();
-});
-syncPromptDismissBtn.addEventListener('click', dismissSyncPrompt);
 
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
-  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds, state.recommendStyle);
+  state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds);
   renderSections();
 }
 
-function renderRecommendStylePanel() {
-  settingsRecommendStyle.replaceChildren(
-    ...RECOMMEND_STYLES.map(style => {
-      const active = state.recommendStyle === style.id;
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = active ? 'settings-chip is-active' : 'settings-chip';
-      chip.textContent = style.label;
-      chip.title = style.hint;
-      chip.setAttribute('role', 'radio');
-      chip.setAttribute('aria-checked', String(active));
-      chip.addEventListener('click', () => {
-        if (state.recommendStyle === style.id) return;
-        state.recommendStyle = style.id;
-        persistSettingsAndSync();
-        renderRecommendStylePanel();
-        recomputeAndRender();
-      });
-      return chip;
-    })
-  );
-}
-
 function renderSettingsPanel() {
-  renderRecommendStylePanel();
   settingsSportList.replaceChildren(
     ...state.priorityOrder.map((sport, index) => {
       const row = document.createElement('div');
@@ -826,7 +450,7 @@ function renderSettingsPanel() {
         const to = from + delta;
         if (to < 0 || to >= state.priorityOrder.length) return;
         [state.priorityOrder[from], state.priorityOrder[to]] = [state.priorityOrder[to], state.priorityOrder[from]];
-        persistSettingsAndSync();
+        persistSettings();
         renderSettingsPanel();
         recomputeAndRender();
       }
@@ -851,19 +475,15 @@ function renderSettingsPanel() {
     })
   );
   renderEnabledSportsPanel();
-  renderSyncPanel();
 }
 
-// Saves every setting to localStorage and, if currently paired to a sync
-// code, pushes the combined payload to the shared proxy's /match-find-sync (see
-// "Cross-device settings sync" below) - one call after any settings
-// mutation, rather than each individual toggle/reorder handler needing to
-// remember to do both.
-function persistSettingsAndSync() {
-  saveRecommendStyle(state.recommendStyle);
+// Saves every setting to localStorage - local-only, no server call (see
+// this file's own top comment) - one place after any settings mutation,
+// rather than each individual toggle/reorder handler needing to remember
+// to save both.
+function persistSettings() {
   savePriorityOrder(state.priorityOrder);
   saveEnabledSports(state.enabledSports);
-  if (state.syncPasscode) syncPush();
 }
 
 // Toggle chips, not a full multi-select list - a disabled sport is a hard
@@ -890,7 +510,7 @@ function renderEnabledSportsPanel() {
         } else {
           state.enabledSports.add(sport);
         }
-        persistSettingsAndSync();
+        persistSettings();
         renderEnabledSportsPanel();
         applyEnabledSportsAndRender();
       });
@@ -913,7 +533,7 @@ settingsCloseBtn.addEventListener('click', closeSettingsPanel);
 settingsBackdrop.addEventListener('click', closeSettingsPanel);
 settingsResetBtn.addEventListener('click', () => {
   state.priorityOrder = DEFAULT_SPORT_ORDER.slice();
-  persistSettingsAndSync();
+  persistSettings();
   renderSettingsPanel();
   recomputeAndRender();
 });
@@ -930,11 +550,24 @@ function shortDayFormatter() {
   return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'numeric', day: 'numeric' });
 }
 
-function relativeLabel(startMs, endMs) {
-  const now = Date.now();
-  if (now >= startMs && now < endMs) return '直播中';
-  const diffMin = Math.round((startMs - now) / 60_000);
-  if (diffMin <= 0) return '即將開始';
+// Reads matchLifecycleState (./lib/recommendation.mjs) rather than
+// re-deriving "is this live/about to start" from raw start/end times
+// itself - that used to be duplicated ad hoc right here: the old version
+// computed `diffMin = start - now` and returned "即將開始" (starting soon)
+// for ANY diffMin <= 0, which is only reachable once `now` is already past
+// the match's own nominal end (the live window was handled by an earlier
+// branch) - so a match that had simply run long, without ESPN having
+// reported it finished yet, was mislabeled as "about to start" instead of
+// "still live". A match already underway can never be "about to start"
+// again, however long it runs - matchLifecycleState is the one place that
+// invariant is enforced, so this function (and buildMatchCard's is-live
+// styling below) can't independently drift from it.
+function relativeLabel(match, now = Date.now()) {
+  const state = matchLifecycleState(match, now);
+  if (state === LIFECYCLE_STATES.LIVE || state === LIFECYCLE_STATES.ENDING_SOON) return '直播中';
+  if (state === LIFECYCLE_STATES.STARTING_SOON) return '即將開始';
+
+  const diffMin = Math.round((Date.parse(match.startTimeUtc) - now) / 60_000);
   if (diffMin < 60) return `${diffMin} 分鐘後`;
   if (diffMin < 1440) {
     const hours = Math.floor(diffMin / 60);
@@ -1057,6 +690,18 @@ function dayLabelFor(date, { short = false } = {}) {
 // computeOverlapRange is still used directly below, in buildMatchCard's
 // own overlap note.
 
+// The exact same day-candidate + cross-day-repeat-penalty preparation
+// renderRecommendedSection needs to build today's plan - factored out so
+// pinSlotChoice below can ask "what would the algorithm pick here on its
+// own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
+// the actual rendered plan uses, rather than a second, slightly different
+// computation that could disagree with what's on screen.
+function dayCandidatesForPlan(dayKey) {
+  const dayCandidates = applySportFilter(matchesForDay(dayKey));
+  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory, state.recentPicksByDayKey.get(dayKey) || []);
+  return dayCandidates;
+}
+
 // The actual "I will watch this" commitment (see buildMatchStack) - records
 // the pin and triggers a full re-render, which recomputes computeDayPlan
 // for the current day and reflows every other slot around it.
@@ -1067,10 +712,22 @@ function dayLabelFor(date, { short = false } = {}) {
 // silently never matches computeDayPlan's own lookup on the next render
 // and gets thrown away - see recommendation.mjs's own comment on
 // choice.slotKey for the exact 3+-match scenario this bit the user on.
+//
+// Swiping to whatever the algorithm would ALREADY have picked for this
+// slot (naturalSlotChoice, computed with this slot's own pin - if any -
+// set aside so it reflects the true unpinned default) clears any existing
+// pin instead of setting one, via applySlotSwipe (./lib/preferences.mjs) -
+// this is the direct fix for "swiping back changes Recommend into
+// Prefer": without it, EVERY swipe recorded a pin, so a card the viewer
+// swiped straight back to the algorithm's own default stayed mislabeled
+// 偏好 forever instead of reverting to 推薦.
 function pinSlotChoice(dayKey, slotKey, matchId) {
-  if (!state.pinnedChoices.has(dayKey)) state.pinnedChoices.set(dayKey, new Map());
-  state.pinnedChoices.get(dayKey).set(slotKey, matchId);
-  persistPinnedChoicesAndSync();
+  const dayCandidates = dayCandidatesForPlan(dayKey);
+  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, state.pinnedChoices.get(dayKey), {
+    scoreField: 'planningScore'
+  });
+  state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, naturalMatchId);
+  savePinnedChoices();
   renderSections();
 }
 
@@ -1180,7 +837,7 @@ function buildMatchCard(match) {
     // same unreliable estimated end time.
     node.querySelector('.match-time-relative').textContent = match.isFinished
       ? finishedLabel(match)
-      : relativeLabel(start, end);
+      : relativeLabel(match);
   }
 
   const badge = node.querySelector('.sport-badge');
@@ -1306,15 +963,15 @@ function buildMatchCard(match) {
   }
   if (match.recommended) node.classList.add('is-recommended');
 
-  const now = Date.now();
-  // isFinished is authoritative (ESPN's own status - see build-data.mjs's
-  // own comment on why it can't just be inferred from `end`, which is only
-  // ever a per-sport AVERAGE duration) - checked first so a game that ran
-  // long past that average never gets mislabeled 直播中/live after it's
-  // actually already over.
-  if (match.isFinished) {
+  // Same single source of truth as relativeLabel above (matchLifecycleState)
+  // - isFinished (ESPN's own status) always wins, and LIVE/ENDING_SOON both
+  // read as "still live" for styling purposes; a match already underway
+  // that's simply run past its estimated end (see estimatedDurationMinutes)
+  // stays styled live rather than falling back to plain/upcoming.
+  const lifecycle = matchLifecycleState(match);
+  if (lifecycle === LIFECYCLE_STATES.ENDED) {
     node.classList.add('is-finished');
-  } else if (!match.timeTbd && now >= start && now < end) {
+  } else if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) {
     node.classList.add('is-live');
   }
 
@@ -1328,15 +985,17 @@ function buildMatchCard(match) {
 // the day's first match anyway, so it's a no-op there; it only visibly
 // reorders anything on the day containing "now".
 function pinCurrentOrNext(sortedMatches) {
-  const now = Date.now();
-  // isFinished (ESPN's own status) is checked first, same reasoning as
-  // pickInitialDay's own comment - without it, a match that ran long past
-  // its per-sport AVERAGE duration estimate (the fallback below) would
-  // still look "current" here even though it's already over, now that a
-  // finished match stays in the list instead of disappearing.
-  const pinIndex = sortedMatches.findIndex(
-    m => !m.isFinished && Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now
-  );
+  // isFinished (ESPN's own status, via matchLifecycleState) is authoritative
+  // and checked first, same reasoning as pickInitialDay's own comment -
+  // without it, a match that simply ran long past its estimated duration
+  // would look "not current anymore" here even though it's probably still
+  // live, now that a finished match stays in the list instead of
+  // disappearing. The first not-yet-ended match in start-time order is
+  // exactly "whichever is live right now, or failing that, the soonest
+  // still to come" - matchLifecycleState never calls a match ENDED on
+  // elapsed time alone (see that function's own comment), so this can't be
+  // fooled by a no-clock sport simply running long.
+  const pinIndex = sortedMatches.findIndex(m => matchLifecycleState(m) !== LIFECYCLE_STATES.ENDED);
   if (pinIndex <= 0) return sortedMatches;
   const pinned = sortedMatches[pinIndex];
   return [pinned, ...sortedMatches.slice(0, pinIndex), ...sortedMatches.slice(pinIndex + 1)];
@@ -1357,7 +1016,7 @@ function applySportFilter(matches) {
 // When a sport filter is active and the currently selected day turns out to
 // have zero matches for it, jump the day picker to the nearest day that
 // actually has one instead of leaving the viewer staring at an empty state
-// for no visible reason. This is a real, common case for MLB/MLS
+// for no visible reason. This is a real, common case for MLB
 // specifically, not an edge case: Taiwan is far enough ahead of US time
 // zones that a US evening fixture almost always lands on the viewer's NEXT
 // local calendar date, not the same one (see localDateKey) - so "今天"
@@ -1581,8 +1240,7 @@ function renderRecommendedSection() {
   // repeat penalty on "did we recommend this matchup yesterday" has to be
   // asking about what was ACTUALLY recommended, not what a differently
   // filtered view would have picked.
-  const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory, state.recentPicksByDayKey.get(dayKey) || []);
+  const dayCandidates = dayCandidatesForPlan(dayKey);
   const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   const ordered = pinCurrentOrNext(dayPlan);
 
@@ -1692,18 +1350,13 @@ function buildDayList(matches) {
 // show an empty state for no reason - jump ahead to the next day that
 // actually has a fixture still to come instead.
 function pickInitialDay(days, matches) {
-  const now = Date.now();
   const todayKey = localDateKey(new Date());
-  const todayHasRemaining = matches.some(m => {
-    if (localDateKey(new Date(m.startTimeUtc)) !== todayKey) return false;
-    // isFinished (ESPN's own status) is authoritative and checked first - a
-    // finished match now stays in `matches` for schedule continuity (see
-    // build-data.mjs), so without this a game that ran long past its
-    // per-sport AVERAGE duration estimate (the fallback below) would still
-    // read as "remaining" here even though it's actually already over.
-    if (m.isFinished) return false;
-    return Date.parse(m.startTimeUtc) + m.durationMinutes * 60_000 > now;
-  });
+  // matchLifecycleState (via isFinished, ESPN's own status) is what decides
+  // "remaining" here, never elapsed time alone - see that function's own
+  // comment on why a no-clock sport running long is never inferred as over.
+  const todayHasRemaining = matches.some(
+    m => localDateKey(new Date(m.startTimeUtc)) === todayKey && matchLifecycleState(m) !== LIFECYCLE_STATES.ENDED
+  );
   if (todayHasRemaining) return todayKey;
 
   const todayIndex = days.findIndex(d => d.key === todayKey);
@@ -1714,29 +1367,6 @@ function pickInitialDay(days, matches) {
   }
   return todayKey;
 }
-
-// How often an already-open tab checks for something new. Deliberately a
-// real network request each time (cache: 'no-store', same as the initial
-// load) rather than relying on the browser to notice on its own - without
-// this, a tab left open just keeps showing whatever was current when it
-// was first loaded, for as long as the tab stays open, since nothing else
-// in this page ever re-fetches matches.json (see the 60s interval further
-// down, which only re-renders the data already in memory - it never asks
-// the network for anything new).
-const DATA_POLL_INTERVAL_MS = 5 * 60_000;
-
-// Same "an already-open tab has to actually ask again" reasoning as
-// DATA_POLL_INTERVAL_MS above, for cross-device settings sync - a plain
-// GET against Firestore through the shared proxy (MATCH_FIND_SYNC_READ_RATE_LIMIT
-// there is 6000/hour per IP, so a poll every 30s from one tab, or even a
-// handful of tabs behind the same IP, is nowhere close to that), not the
-// heavier matches.json fetch, so this can run noticeably more often
-// without it costing anything real. This is the actual fix for "changing
-// settings on one device doesn't show up on another" for a tab that was
-// already open when the change happened elsewhere - previously sync only
-// ever pulled once, on that tab's own initial load (see syncPull's own
-// comment).
-const SYNC_POLL_INTERVAL_MS = 30_000;
 
 // "Gemini last used" (see build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS) -
 // purely informational, so a viewer curious why a brand new fixture still
@@ -1759,7 +1389,6 @@ function renderAiStatus(lastAiFetchAt) {
 // the initial load and by checkForUpdate() below, so "how a payload turns
 // into what's on screen" only exists in one place.
 function applyMatchData(data) {
-  state.proxyUrl = data.proxyUrl || '';
   const allMatches = Array.isArray(data.matches) ? data.matches : [];
   // TBD fixtures (see build-data.mjs's isTimeTbd) never carry a real
   // startTimeUtc, so they're split off here, before anything else touches
@@ -1806,7 +1435,7 @@ function applyEnabledSportsAndRender() {
   prunePinnedChoices();
   const rawMatches = state.allRawMatches.filter(m => state.enabledSports.has(m.sport));
   state.rawMatches = rawMatches;
-  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds, state.recommendStyle);
+  state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
   state.days = buildDayList(state.matches);
   // A sport filter that no longer exists at all (its sport just got
   // disabled in Settings) would otherwise leave the filter chips all
@@ -1831,7 +1460,7 @@ function applyEnabledSportsAndRender() {
 
   // A sport that's still enabled but simply has nothing on the day the
   // viewer happens to be on (see that function's own comment - the common
-  // MLB/MLS-vs-Taiwan-timezone case) jumps to the nearest day that has it.
+  // MLB-vs-Taiwan-timezone case) jumps to the nearest day that has it.
   ensureSelectedDayHasActiveSport();
 
   appEl.hidden = false;
@@ -1866,12 +1495,82 @@ function applyEnabledSportsAndRender() {
 //     file's own script/stylesheet tags with this build's commit sha at
 //     deploy time - pulls in fresh JS/CSS too, since the browser has never
 //     cached a URL with this exact query string before.
-// `silent` is what makes this the same function for both the background
-// poll (setInterval, see init()) and the two manual Settings buttons: the
-// background poll doesn't want status text fighting with whatever else the
-// viewer might be looking at, while a viewer who just tapped "檢查更新" or
-// "重新整理資料" wants to actually see the answer, not just react to
-// whatever silently changes on screen behind the panel.
+// ---- One update path: on load, and exactly when a relevant match starts
+// or ends ---------------------------------------------------------------
+//
+// No polling, no fixed-interval timers, no hidden background refreshes -
+// this is the ONLY place this page ever re-fetches matches.json on its
+// own, and it only ever does so at three moments: once on load (init()),
+// once at the moment a currently-loaded match's own start time arrives,
+// and once at its estimated broadcast end (see nextRelevantTransitionMs
+// below) - never a blind "check again in N minutes" regardless of whether
+// anything relevant is actually about to change. Both of the manual
+// Settings buttons (檢查更新/重新整理資料) call this same function too, so
+// "how a refresh happens" only exists in one place either way.
+let nextUpdateTimer = null;
+
+// How long to wait before retrying after a genuine fetch failure (offline,
+// a transient server error) - deliberately separate from the lifecycle-
+// transition scheduling below: a network hiccup needs its own short
+// recovery, not a wait for whatever match happens to start or end next
+// (which could be hours away, or never, in an empty window).
+const RETRY_AFTER_ERROR_MS = 60_000;
+// A transition instant that's already effectively "now" (e.g. loading the
+// page mid-match) still gets a short real delay rather than firing
+// immediately/recursively; capped at 24h so an empty or far-future window
+// never leaves this page with no scheduled check at all.
+const MIN_NEXT_UPDATE_DELAY_MS = 5_000;
+const MAX_NEXT_UPDATE_DELAY_MS = 24 * 60 * 60_000;
+
+// The soonest future instant, across every currently-loaded (non-finished,
+// non-TBD) match regardless of the viewer's own sport filter or selected
+// day, that its lifecycle meaningfully changes - it starts, or its
+// estimated broadcast ends (see matchLifecycleState/estimatedDurationMinutes
+// in ./lib/recommendation.mjs - an ESTIMATE, not a guarantee, so this can
+// occasionally fire a little before or after a no-clock sport's real end;
+// that's fine, ESPN's own status is what buildMatchCard/relativeLabel
+// actually trust, this timer only decides WHEN to go ask it again). A
+// sport the viewer has filtered out, or a day they aren't currently
+// looking at, still deserves a wake-up - switching back to it later should
+// already reflect reality, not whatever was true when they last looked.
+function nextRelevantTransitionMs(now = Date.now()) {
+  let soonest = Infinity;
+  for (const match of state.allRawMatches) {
+    if (match.isFinished || match.timeTbd) continue;
+    const start = Date.parse(match.startTimeUtc);
+    if (start > now && start < soonest) soonest = start;
+    const estimatedEnd = start + estimatedDurationMinutes(match) * 60_000;
+    if (estimatedEnd > now && estimatedEnd < soonest) soonest = estimatedEnd;
+  }
+  return Number.isFinite(soonest) ? soonest : null;
+}
+
+// Schedules exactly the next checkForUpdate call - clears any previously
+// scheduled one first, so there is only ever one live timer no matter how
+// many times this runs (called fresh after every load/checkForUpdate, see
+// below). A viewer mid-swipe on a card stack gets a short retry instead of
+// having the whole recommended list torn down and rebuilt under their
+// finger (see isStackBeingInteractedWith's own comment).
+function scheduleNextUpdate() {
+  if (nextUpdateTimer) clearTimeout(nextUpdateTimer);
+  const now = Date.now();
+  const target = nextRelevantTransitionMs(now) ?? now + MAX_NEXT_UPDATE_DELAY_MS;
+  const delay = Math.min(MAX_NEXT_UPDATE_DELAY_MS, Math.max(MIN_NEXT_UPDATE_DELAY_MS, target - now));
+  nextUpdateTimer = setTimeout(() => {
+    if (isStackBeingInteractedWith()) {
+      nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), STACK_INTERACTION_COOLDOWN_MS);
+      return;
+    }
+    checkForUpdate({ silent: true });
+  }, delay);
+}
+
+// `silent` is what makes this the same function for the three real
+// triggers (initial load, and the two scheduled lifecycle transitions
+// above) and the two manual Settings buttons: the scheduled/background
+// path doesn't want status text fighting with whatever else the viewer
+// might be looking at, while a viewer who just tapped "檢查更新" or
+// "重新整理資料" wants to actually see the answer.
 async function checkForUpdate({ silent = false } = {}) {
   if (!silent) {
     updateStatusText.textContent = '檢查中…';
@@ -1883,22 +1582,35 @@ async function checkForUpdate({ silent = false } = {}) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (data.generatedAt === state.generatedAt) {
+      // The underlying data hasn't changed, but a scheduled call here
+      // almost always means a match's OWN lifecycle just crossed a
+      // boundary (it started, or its estimated end passed) purely by wall
+      // clock, independent of whether the build has re-fetched anything -
+      // re-render so the is-live styling/relative label/pinned-to-top
+      // ordering (all derived from matchLifecycleState, which reads the
+      // current time) actually reflects that now, not just on the next
+      // unrelated event.
+      renderSections();
       if (!silent) updateStatusText.textContent = '已是最新版本。';
+      scheduleNextUpdate();
       return;
     }
 
     if (state.buildId && data.buildId && data.buildId !== state.buildId) {
       if (!silent) updateStatusText.textContent = '發現新版本，正在套用…';
       location.replace(`${location.pathname}?v=${encodeURIComponent(data.buildId)}`);
-      return;
+      return; // navigating away - nothing left here to schedule
     }
 
     state.generatedAt = data.generatedAt;
     applyMatchData(data);
+    scheduleNextUpdate();
     if (!silent) updateStatusText.textContent = '資料已更新。';
   } catch (error) {
     console.error('update check failed', error);
     if (!silent) updateStatusText.textContent = '檢查失敗，請稍後再試。';
+    if (nextUpdateTimer) clearTimeout(nextUpdateTimer);
+    nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), RETRY_AFTER_ERROR_MS);
   } finally {
     if (!silent) {
       checkUpdateBtn.disabled = false;
@@ -1939,7 +1651,6 @@ function exportRecommendationData() {
   const payload = {
     exportedAt: new Date().toISOString(),
     dataGeneratedAt: state.generatedAt || null,
-    recommendStyle: state.recommendStyle,
     priorityOrder: state.priorityOrder,
     enabledSports: [...state.enabledSports],
     // docs/recommendation-engine-audit.md section 15's "the planner should
@@ -1969,35 +1680,7 @@ async function init() {
     state.buildId = data.buildId;
 
     applyMatchData(data);
-
-    // Pull first if already paired (so another device's more recent
-    // settings win over whatever this one has cached), otherwise offer to
-    // pair - never both, on the initial load.
-    if (state.syncPasscode) syncPull();
-    else maybeShowSyncPrompt();
-
-    setInterval(() => {
-      // Skip this tick entirely rather than deferring it - see
-      // isStackBeingInteractedWith's own comment. The next 60s tick will
-      // pick the relative-time refresh back up once the swipe has settled.
-      if (isStackBeingInteractedWith()) return;
-      renderSections();
-    }, 60_000);
-    setInterval(() => checkForUpdate({ silent: true }), DATA_POLL_INTERVAL_MS);
-    // Periodic + on-focus sync pulls (see SYNC_POLL_INTERVAL_MS's own
-    // comment) - both no-ops while unpaired, and both safe to fire
-    // whenever: syncPull only ever actually applies/re-renders when the
-    // fetched payload is genuinely different from what this device
-    // already has. The focus listener is what makes switching back to an
-    // already-open tab feel immediate rather than waiting out the rest of
-    // the poll interval - the single most common real case ("I changed it
-    // on my phone, now I'm looking at my laptop's tab again").
-    setInterval(() => {
-      if (state.syncPasscode) syncPull({ renderIfOpen: true });
-    }, SYNC_POLL_INTERVAL_MS);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && state.syncPasscode) syncPull({ renderIfOpen: true });
-    });
+    scheduleNextUpdate();
   } catch (error) {
     console.error(error);
     errorState.hidden = false;

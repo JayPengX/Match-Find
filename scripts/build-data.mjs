@@ -1,6 +1,6 @@
 // ---- scripts/build-data.mjs ----
-// Fetches upcoming AND currently-live fixtures for the Premier League, MLS,
-// MLB, NBA, and F1 from ESPN's public scoreboard API (no key required)
+// Fetches upcoming AND currently-live fixtures for the Premier League, MLB,
+// NBA, and F1 from ESPN's public scoreboard API (no key required)
 // across the next DAYS_AHEAD days, scores each one for competitiveness/
 // watchability, and writes the flat result to public/data/matches.json for
 // the static site to render. Only a FINISHED fixture is excluded - a live
@@ -102,7 +102,15 @@ const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
 // "structured evidence layer" section. Every match already in the cache
 // predates this field, so this bump re-scores the whole window once to
 // backfill it.
-const PROMPT_VERSION = 9;
+// v10: the shared proxy's buildMatchRecommendPrompt now explicitly asks
+// Gemini to compare same-day/overlapping fixtures against each other
+// before scoring (competitiveness/watchability), instead of scoring the
+// whole batch in total isolation from itself - the base pass previously
+// only ever compared fixtures head-to-head in the separate, much smaller
+// /match-recommend-refine follow-up (findContestedClusters). Every cached
+// score predates that comparison, so this bump re-scores the whole window
+// once against the improved prompt.
+const PROMPT_VERSION = 10;
 
 // Allowed evidence categories - the audit's own vocabulary (see
 // docs/recommendation-engine-audit.md section 19), kept identical to the
@@ -261,7 +269,6 @@ const AI_SCORE_BATCH_SIZE = 75;
 // AVERAGE broadcast length, not any per-match actual duration.
 const TEAM_LEAGUES = [
   { id: 'epl', sportKey: 'soccer', leagueKey: 'eng.1', label: 'Premier League', durationMinutes: 115 },
-  { id: 'mls', sportKey: 'soccer', leagueKey: 'usa.1', label: 'MLS', durationMinutes: 115 },
   { id: 'mlb', sportKey: 'baseball', leagueKey: 'mlb', label: 'MLB', durationMinutes: 190 },
   { id: 'nba', sportKey: 'basketball', leagueKey: 'nba', label: 'NBA', durationMinutes: 150 }
 ];
@@ -381,7 +388,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
   // lookback above, PLUS one more so the loop's own far end actually
   // reaches windowEndMs (`now + daysAhead` days) instead of stopping one
   // day short of it. That off-by-one used to go unnoticed on the
-  // every-team-plays-daily leagues (MLB/MLS/NBA) - there was always
+  // every-team-plays-daily leagues (MLB/NBA) - there was always
   // another fixture somewhere inside the remaining, correctly-queried part
   // of the window to fill the page with - but it silently cost the
   // Premier League its entire NEXT gameweek whenever that gameweek's
@@ -1103,13 +1110,6 @@ async function main() {
             ? 'ai'
             : 'mixed'
           : 'heuristic',
-    // Baked in at build time so the browser knows where to send its own
-    // settings-sync calls (see public/app.js's sync section) - a plain
-    // variable, not a secret (same reasoning as PROXY_URL's own comment
-    // above): it's just a fetch target with no credential in it, and it's
-    // already effectively public the moment it ships in this static file
-    // regardless of where it came from.
-    proxyUrl: PROXY_URL || null,
     matches
   };
 

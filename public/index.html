@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Match Find — 今晚看什麼</title>
-<meta name="description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<meta name="description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="./icons/icon-180.png" />
 <link rel="manifest" href="./manifest.webmanifest" />
@@ -12,12 +12,12 @@
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Match Find" />
 <meta property="og:title" content="Match Find — 今晚看什麼" />
-<meta property="og:description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<meta property="og:description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <meta property="og:image" content="./og-image.png" />
 <meta property="og:url" content="https://jaypengx-collab.github.io/Match-Find/" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Match Find — 今晚看什麼" />
-<meta name="twitter:description" content="英超、MLS、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
+<meta name="twitter:description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <meta name="twitter:image" content="./og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -33,12 +33,6 @@
     </div>
 
     <section class="settings-section">
-      <h3>推薦風格</h3>
-      <p class="settings-hint">立即套用，不需重新整理。</p>
-      <div id="settings-recommend-style" class="settings-chip-list" role="radiogroup" aria-label="推薦風格"></div>
-    </section>
-
-    <section class="settings-section">
       <h3>賽事優先順序</h3>
       <p class="settings-hint">時間衝突時，排名較前的優先。</p>
       <div id="settings-sport-list" class="settings-sport-list"></div>
@@ -52,42 +46,19 @@
     </section>
 
     <section class="settings-section">
-      <h3>跨裝置同步</h3>
-      <p id="sync-status-text" class="settings-hint"></p>
-      <div id="sync-connected-view" hidden>
-        <p class="sync-code-display"><span id="sync-code-text"></span> <button id="sync-copy-btn" type="button">複製</button></p>
-        <button id="sync-disconnect-btn" type="button" class="settings-reset">停止同步</button>
-      </div>
-      <div id="sync-disconnected-view">
-        <button id="sync-create-btn" type="button" class="sync-action-btn">建立新的同步碼</button>
-        <div class="sync-connect-row">
-          <input id="sync-code-input" type="text" placeholder="輸入其他裝置的同步碼" maxlength="16" autocapitalize="characters" autocomplete="off" />
-          <button id="sync-connect-btn" type="button" class="sync-action-btn">連接</button>
-        </div>
-      </div>
-      <p id="sync-error-text" class="sync-error" hidden></p>
-    </section>
-
-    <section class="settings-section">
       <h3>更新</h3>
       <p id="update-status-text" class="settings-hint">檢查目前版本是否為最新。</p>
       <div class="settings-btn-row">
-        <button id="check-update-btn" type="button" class="sync-action-btn">檢查更新</button>
-        <button id="refresh-data-btn" type="button" class="sync-action-btn is-secondary">重新整理資料</button>
+        <button id="check-update-btn" type="button" class="settings-action-btn">檢查更新</button>
+        <button id="refresh-data-btn" type="button" class="settings-action-btn is-secondary">重新整理資料</button>
       </div>
     </section>
 
     <section class="settings-section">
       <h3>開發者工具</h3>
       <p class="settings-hint">匯出目前的推薦資料（JSON），可用來檢查推薦準確度。</p>
-      <button id="export-data-btn" type="button" class="sync-action-btn is-secondary">匯出推薦資料</button>
+      <button id="export-data-btn" type="button" class="settings-action-btn is-secondary">匯出推薦資料</button>
     </section>
-  </div>
-
-  <div id="sync-prompt-banner" class="update-banner" hidden role="status">
-    <span>要跨裝置同步你的設定嗎？</span>
-    <button id="sync-prompt-open-btn" type="button">設定同步</button>
-    <button id="sync-prompt-dismiss-btn" type="button" class="sync-prompt-dismiss">先不要</button>
   </div>
 
   <main id="app" hidden>

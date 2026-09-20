@@ -3,7 +3,7 @@
 **Live site: https://jaypengx-collab.github.io/Match-Find/**
 
 A tiny, Traditional-Chinese static site that answers "what's worth watching
-today" across the Premier League, MLS, MLB, NBA, and F1 — shown in your own
+today" across the Premier League, MLB, NBA, and F1 — shown in your own
 local time, with team logos, home/away labels, bilingual (English /
 Traditional Chinese) team names and venues, where to watch each fixture in
 Taiwan (愛爾達體育台, Apple TV, ...), a horizontally-scrolling day picker
@@ -64,11 +64,34 @@ Scoring and picking are split across two different places, deliberately:
    actually conflict" are both relative to *your* clock — happens in
    `computeDayPlan`, described in "The viewing plan" below.
 
+## Local-only, no accounts
+
+Every per-viewer preference - sport priority order, which sports are
+enabled, and which swiped match you Prefer for a slot - lives in this
+browser's own `localStorage` and nowhere else. There is no sign-up, no
+account, and no server-side sync of any kind: an earlier version of this
+site had a cross-device settings-sync feature (a shared passcode through
+the same Cloudflare Worker `scripts/build-data.mjs` already talks to for
+scoring); it's gone now, on purpose - one browser, one set of local
+preferences, nothing to pair or lose track of across devices. Match
+data/scores are the one thing that genuinely IS shared (the same
+`matches.json` build serves every viewer), which is exactly why they never
+lived in `localStorage` to begin with.
+
+There's also only ever ONE recommendation system, not a choice between
+competing ones: `bestMatchScore` (`public/lib/recommendation.mjs`) is the
+single blend every viewer's 推薦賽事 is built from - an earlier version let
+you pick between two subtly different "recommendation styles"; that choice
+added confusion without adding real value, so it's gone. The one place your
+own taste actually overrides the algorithm is **Prefer** - swiping a card
+stack to commit to a specific alternative (see "The viewing plan" below) -
+which is local, explicit, and per-match, not a blanket ranking toggle.
+
 ## The viewing plan
 
 You can only watch one thing at a time, so 推薦賽事 isn't a set of
 independent "this one's good" judgments - it's **one continuous back-to-back
-plan for the day**, built by `computeDayPlan` in `public/app.js`:
+plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`:
 
 - A fixture whose **local** start time falls between midnight and 5am is
   never a candidate, however good its score — this site won't tell you a
@@ -95,13 +118,29 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
   how much of its nominal length actually blocks the next pick from
   starting (`effectiveDurationMinutes`) - a fixture unlikely to stay
   watchable to the end frees the schedule up sooner than its full listed
-  length would suggest. On top of that, a sport with no real clock (MLB -
-  extra innings, rain delays) gets its own effective length shrunk further
-  before it's allowed to block anything after it (`SPORT_TIMING`,
-  `schedulingInterval`) - football/F1/MLS keep their exact old strictness,
-  only MLB (and NBA, more mildly) gets more permissive, and only by that
-  explicit uncertainty factor, never by loosening the 75% overlap rule
-  itself. A small fixed buffer (`TRANSITION_BUFFER_MINUTES`) also sits
+  length would suggest. **Baseball (and other no-clock sports) get a real
+  overrun buffer, not a discount:** a sport with no game clock (MLB - extra
+  innings, rain delays) is statistically more likely to run LONG than
+  short in real time, never the other way around - a standard 9-inning
+  game already averages roughly 2h40m of playing time alone (per MLB's own
+  officially published time-of-game figures), and extra innings/a rain
+  delay routinely add 30-60+ real minutes on top with no matching
+  mechanism that ever finishes a game meaningfully early. An earlier
+  version of this pipeline treated that same uncertainty as a DISCOUNT -
+  shrinking the reserved block for a low-reliability sport - which was
+  backwards, and was the direct cause of a reported bug: the scheduler
+  would offer a next pick only ~2h13m into a genuinely great MLB game,
+  producing 40-80 real-minute overlaps once the broadcast actually ran
+  anywhere near its own average length.
+  `DURATION_OVERRUN_BUFFER_BY_RELIABILITY`/`schedulingDurationMinutes`
+  (`public/lib/recommendation.mjs`) now only ever PAD a no-clock sport's
+  reserved block on top of the endurance-adjusted figure, never shrink it
+  below that value judgment - football/F1 (a real game clock) get no pad
+  at all, MLB gets the largest. This duration is always an ESTIMATE, never
+  a guaranteed end time - ESPN's own live status (`isFinished`) is what
+  actually decides a match is over (see `matchLifecycleState` below), this
+  only decides how much time the PLAN reserves before offering something
+  else. A small fixed buffer (`TRANSITION_BUFFER_MINUTES`) also sits
   between any two back-to-back picks, so "ends at 8:00, starts at 8:00" no
   longer counts as a real gap.
 - **The same matchup doesn't default to winning every day of a series.**
@@ -121,14 +160,22 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
   exists isn't. `computeWindowPlan`'s own `sportConcentration` return
   value exposes the whole window's actual sport split for anyone
   inspecting the data (also in the Settings "匯出資料" export).
-- **Swiping a stack is a real commitment, not just a peek.** Settling on a
-  different card pins that match as the slot's fixed choice
-  (`pinSlotChoice`) and rebuilds the WHOLE day's plan around it — the
-  matches scheduled both before and after it are freshly reasoned about
-  relative to the pin, not just appended after whatever was there before.
-  Picking a shorter alternative can free up enough time for a fixture that
-  didn't fit before to join the plan afterward. Pins are session-only (not
-  saved across a reload) and scoped to one calendar day.
+- **Swiping a stack is a real commitment, not just a peek - this IS
+  "Prefer".** Settling on a different card pins that match as the slot's
+  fixed choice (`pinSlotChoice`) and rebuilds the WHOLE day's plan around
+  it — the matches scheduled both before and after it are freshly reasoned
+  about relative to the pin, not just appended after whatever was there
+  before. Picking a shorter alternative can free up enough time for a
+  fixture that didn't fit before to join the plan afterward. A pin is
+  saved to `localStorage` (scoped to one calendar day) and survives a
+  reload, same as every other preference in this app - purely local, never
+  synced anywhere. Swiping back to whatever the algorithm would already
+  have picked for that slot (`naturalSlotChoice`,
+  `public/lib/recommendation.mjs`) CLEARS the pin instead of recording one,
+  so the card correctly reverts to 推薦 rather than staying mislabeled
+  偏好. A pinned card is tagged 偏好 ("preferred") instead of 推薦
+  ("recommended") precisely because it's the viewer's own choice
+  overriding the algorithm, not the algorithm's own judgment.
 - Any card whose start overlaps an **earlier** match — regardless of
   whether either one made the plan — gets a small note saying so and for
   how long ("與「X」重疊 45 分鐘"), a plain fact about the schedule shown
@@ -149,7 +196,7 @@ plan for the day**, built by `computeDayPlan` in `public/app.js`:
   Picking a sport chip that has nothing on the currently selected day (see
   `ensureSelectedDayHasActiveSport`) jumps the day picker to the nearest
   day that actually has one instead of leaving both sections empty for no
-  visible reason - a real, common case for MLB/MLS specifically: Taiwan is
+  visible reason - a real, common case for MLB specifically: Taiwan is
   far enough ahead of US time zones that a US evening fixture almost always
   lands on the viewer's *next* local calendar date (see `localDateKey`),
   so "today" can be genuinely, correctly empty for MLB while a full
@@ -267,29 +314,50 @@ actually watch live right now.
 
 ## AI runs in the background, not on page load
 
-Nothing in the browser ever calls Gemini or the proxy Worker. The only
-network request the page itself makes is one `fetch('./data/matches.json')`
-on load. All AI scoring happened earlier, unattended, in the scheduled
-build (see "Deployment" below) — by the time anyone opens the page, every
-fixture in the window is already scored and sitting in a static file.
+Nothing in the browser ever calls Gemini or the proxy Worker, and nothing
+in the browser ever calls any other network endpoint either - there is no
+server-side sync of any kind (see "Local-only, no accounts" below). The
+only network request this page ever makes is `fetch('./data/matches.json')`
+- once on load, and again at exactly two later moments (see "One update
+path" below), never on a blind timer. All AI scoring happened earlier,
+unattended, in the scheduled build (see "Deployment" below) — by the time
+anyone opens the page, every fixture in the window is already scored and
+sitting in a static file.
 
-## Staying up to date in a tab left open
+## One update path: on load, and exactly when a relevant match starts or ends
 
-A tab left open doesn't just freeze on whatever it first loaded: every 5
-minutes it re-fetches `matches.json` (`cache: 'no-store'`, same as the
-initial load) and reacts based on what actually changed, using `buildId`
-(the git commit the build ran from — `.github/workflows/deploy.yml` passes
-`github.sha`) to tell the two cases apart:
+No polling, no fixed-interval timers, no hidden background refreshes - a
+tab left open re-fetches `matches.json` at exactly three kinds of moment,
+never on a blind "check again in N minutes" schedule regardless of whether
+anything relevant is actually about to change:
+
+1. **On load.**
+2. **When a currently-loaded match's own start time arrives.**
+3. **When a currently-loaded match's own estimated broadcast end arrives**
+   (an ESTIMATE, not a guarantee - see "Baseball (and other no-clock
+   sports) get a real overrun buffer" below; a no-clock sport can still run
+   past it, which just means the actual "is this really over" answer comes
+   from ESPN's own status the next time this fires, not from the estimate
+   itself).
+
+`scheduleNextUpdate` (`public/app.js`) computes the single soonest such
+instant across every currently-loaded match (`nextRelevantTransitionMs`)
+and sets exactly one `setTimeout` for it - never a second, competing timer,
+and never `setInterval`. Each check reacts based on what actually changed,
+using `buildId` (the git commit the build ran from — `.github/workflows/
+deploy.yml` passes `github.sha`) to tell two cases apart:
 
 - **New data, same code** (a routine scheduled rebuild of the same commit —
   `buildId` unchanged): refreshes silently, keeping whatever day/filter the
-  viewer already has selected.
+  viewer already has selected, then schedules the next check.
 - **New code** (a real commit was deployed — `buildId` changed): this tab
   is still running the *old* JS/CSS/HTML no matter how fresh the data
   underneath it is, so a silent refresh can't actually pick up whatever
-  changed in the code. A small banner appears instead ("網站已推出新版本")
-  with a button that reloads the page — deliberately not an automatic
-  reload, so nobody gets yanked away mid-scroll or mid-tap.
+  changed in the code - the page navigates itself to a cache-busting URL
+  (`location.replace`) instead of trying to patch itself up in place.
+
+The two manual Settings buttons (檢查更新/重新整理資料) call the exact same
+function, so "how a refresh happens" only ever exists in one place.
 
 ## AI score cache (keeping Gemini usage flat)
 
@@ -407,6 +475,22 @@ side (broadcast rights are often team/game-specific, not sport-wide — e.g.
 some MLB teams' games air exclusively on Apple TV rather than the usual
 愛爾達/緯來), rather than answered from the model's static training-time
 knowledge alone.
+
+`/match-recommend` scores a whole batch of fixtures in one call, and its
+prompt explicitly asks Gemini to COMPARE same-day/overlapping fixtures
+against each other before scoring — rather than judging each one in total
+isolation — so a genuinely bigger story shows up as a clearly higher score
+next to a comparatively routine same-day alternative, instead of both
+landing on similar middling numbers. Gemini's own judgment is still only
+ever a SIGNAL feeding `computeDayPlan`'s deterministic scheduler
+(`public/lib/recommendation.mjs`), never the final decision by itself -
+timing, continuity, and the cross-day/sport variety penalties described
+above all apply on top of it regardless of how Gemini scored anything. A
+small, separate `/match-recommend-refine` follow-up (Pro-tier model,
+`findContestedClusters` in `scripts/build-data.mjs`) still exists on top of
+that for the rare case of two fixtures landing suspiciously close in score
+despite genuinely overlapping in time - defense in depth, not the only
+place comparison happens anymore.
 
 To enable it:
 

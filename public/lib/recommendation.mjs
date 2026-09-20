@@ -75,24 +75,25 @@ export function resolveService(whereToWatchTw) {
   return SERVICES.find(s => s.pattern.test(whereToWatchTw)) || null;
 }
 
-// ---- Recommendation-style blending -----------------------------------------
+// ---- One unified recommendation system: "Best Matches" ---------------------
 //
-// How much broadcastQuality tips the chosen style's own primary score, on
-// the same 1-10 scale both sides are already on - see app.js's "Recommendation
-// style setting" section for the full reasoning. Kept a genuine, noticeably-
-// felt nudge without ever letting it dominate: competitiveness/watchability
-// still make up 85% of the blend.
+// There used to be a viewer-selectable "recommendation style" (entertainment
+// vs competitive) picking which per-match score drove the recommended
+// lineup. That's gone - one well-reasoned score, not two competing answers
+// to the same question. `bestMatchScore` is watchability ("what a general
+// sports fan/mainstream media would find notable regardless of how close it
+// ends up being", per that field's own definition in the shared proxy's
+// buildMatchRecommendPrompt) nudged by broadcastQuality when it's actually
+// available - watchability needs no familiarity with a sport's standings or
+// current form to make sense of, unlike raw closeness. Falls back to the
+// build-time composite `match.score` when watchability itself isn't set (a
+// heuristic-scored/finished match with no real AI judgment behind it), and
+// skips the broadcastQuality blend entirely rather than producing NaN in
+// that same case.
 export const BROADCAST_QUALITY_WEIGHT = 0.15;
 
-// The chosen style's own primary score, nudged by broadcastQuality when
-// it's actually available - falls back to the build-time composite
-// `match.score` for 'competitive' (or any unrecognized style), and skips
-// the broadcastQuality blend entirely rather than producing NaN when a
-// match has no real basis for it (a heuristic-scored/finished match with no
-// real AI judgment behind it at all).
-export function recommendStyleScore(match, style) {
-  const primary =
-    style === 'entertainment' && Number.isFinite(match.watchability) ? match.watchability : match.score;
+export function bestMatchScore(match) {
+  const primary = Number.isFinite(match.watchability) ? match.watchability : match.score;
   if (!Number.isFinite(match.broadcastQuality)) return primary;
   return primary * (1 - BROADCAST_QUALITY_WEIGHT) + match.broadcastQuality * BROADCAST_QUALITY_WEIGHT;
 }
@@ -116,15 +117,15 @@ export const OWNED_SERVICE_SCORE_BONUS = 0.5;
 
 // The full breakdown behind one match's effectiveScore - `baseScore` is the
 // AI's own build-time composite (`match.score`, untouched by any viewer-
-// relative nudge), `styleScore` is that same match after the chosen
-// recommendation style + broadcastQuality blend (recommendStyleScore), and
-// `adjustments` names every further nudge stacked on top of it, so a given
-// effectiveScore is never just an opaque number - see docs/
-// recommendation-engine-audit.md for why this exists. `effectiveScore`
-// itself is exactly what app.js's resolveViewingPlan/computeDayPlan has
-// always computed; this function only makes the arithmetic explicit and
-// independently testable, it doesn't change it.
-export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment' } = {}) {
+// relative nudge), `bestMatchScore` is that same match after the one
+// unified Best Matches blend (see bestMatchScore above), and `adjustments`
+// names every further nudge stacked on top of it, so a given effectiveScore
+// is never just an opaque number - see docs/recommendation-engine-audit.md
+// for why this exists. `effectiveScore` itself is exactly what app.js's
+// resolveViewingPlan/computeDayPlan has always computed; this function only
+// makes the arithmetic explicit and independently testable, it doesn't
+// change it.
+export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds = new Set() } = {}) {
   const centerRank = (priorityOrder.length - 1) / 2;
   const rank = priorityOrder.indexOf(match.sport);
   const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
@@ -132,24 +133,24 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
   const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
 
   const baseScore = Number.isFinite(match.score) ? match.score : 0;
-  const styleScore = recommendStyleScore(match, recommendStyle);
-  // How much of styleScore is attributable to the broadcastQuality blend
-  // alone, isolated from the style choice itself - lets an explanation say
-  // "production quality nudged this up/down by X" instead of just "the
-  // style score is Y", per docs/recommendation-engine-audit.md's stated
-  // goal of never leaving an adjustment implicit.
-  const styleBase = recommendStyle === 'entertainment' && Number.isFinite(match.watchability) ? match.watchability : match.score;
-  const broadcastAdjustment = Number.isFinite(styleBase) ? styleScore - styleBase : 0;
+  const bestScore = bestMatchScore(match);
+  // How much of bestScore is attributable to the broadcastQuality blend
+  // alone - lets an explanation say "production quality nudged this up/down
+  // by X" instead of just "the score is Y", per docs/
+  // recommendation-engine-audit.md's stated goal of never leaving an
+  // adjustment implicit.
+  const preBlendBase = Number.isFinite(match.watchability) ? match.watchability : match.score;
+  const broadcastAdjustment = Number.isFinite(preBlendBase) ? bestScore - preBlendBase : 0;
 
   return {
     baseScore,
-    styleScore,
+    bestMatchScore: bestScore,
     adjustments: {
       broadcastQuality: Math.round(broadcastAdjustment * 1000) / 1000,
       priority: priorityNudge,
       service: serviceNudge
     },
-    effectiveScore: styleScore + priorityNudge + serviceNudge
+    effectiveScore: bestScore + priorityNudge + serviceNudge
   };
 }
 
@@ -210,7 +211,7 @@ export function computeRecommendationScore(match, context = {}) {
     // asks for so a caller doesn't have to know "baseScore" means "the
     // AI's objective judgment of the event itself" and "finalScore" means
     // "...after this viewer's own preferences" - eventScore never reflects
-    // priorityOrder/myServiceIds/recommendStyle, viewerScore always does.
+    // priorityOrder/myServiceIds, viewerScore always does.
     // There's deliberately no third `planningScore` here - that one also
     // needs same-day scheduling context and cross-day repeat history
     // (see applyRecentRepeatPenalties below), which a single match has no
@@ -346,7 +347,6 @@ export const SPORT_TIMING = {
   MLB: { durationReliability: 'low' },
   NBA: { durationReliability: 'medium' },
   'Premier League': { durationReliability: 'high' },
-  MLS: { durationReliability: 'high' },
   F1: { durationReliability: 'high' }
 };
 const DEFAULT_SPORT_TIMING = { durationReliability: 'medium' };
@@ -354,15 +354,32 @@ export function resolveSportTiming(sport) {
   return SPORT_TIMING[sport] || DEFAULT_SPORT_TIMING;
 }
 
-// How much a low/medium-reliability sport's own effective viewing window
-// (effectiveDurationMinutes) gets shrunk before it's allowed to block
-// anything scheduled after it - NOT a claim that an MLB game usually ends
-// 30% early, just an acknowledgment that it easily COULD have, which is
-// reason enough to still offer a strong later match as a continuation
-// rather than silently dropping it (see docs/recommendation-engine-audit.md
-// section 9: "MLB should be more permissive - but not blindly"). A
-// high-reliability sport gets 0 - its own nominal length is trusted as-is.
-export const DURATION_UNCERTAINTY_BY_RELIABILITY = { high: 0, medium: 0.1, low: 0.3 };
+// How much EXTRA time a low/medium-reliability sport's real clock duration
+// needs, ON TOP of its already-endurance-adjusted viewing window, before
+// it's safe to assume something else can start - a no-clock sport (MLB -
+// extra innings, rain delays) is statistically more likely to run LONG
+// than short in real time, never the other way around: per MLB's own
+// officially published time-of-game figures (Elias Sports Bureau, via
+// MLB.com's annual pace-of-play release), a standard 9-inning game already
+// averages roughly 2h40m of playing time alone, and extra innings or a
+// rain delay routinely add 30-60+ real minutes on top with no matching
+// mechanism that ever finishes a game meaningfully EARLY the way a
+// running-clock sport's own blowout garbage-time might. An earlier version
+// of this constant (DURATION_UNCERTAINTY_BY_RELIABILITY) treated this same
+// uncertainty as a DISCOUNT instead - shrinking the reserved block for
+// being "unsure" how long the game runs - which was backwards: it made the
+// scheduler free up a no-clock sport's slot SOONER specifically because
+// it's less sure how long the game really goes, when the honest response
+// to "not sure, but this sport tends to run over" is to reserve MORE time,
+// not less. That inversion is what let the day plan schedule a next pick
+// to start only ~2h13m into a genuinely great, high-endurance MLB game
+// (133 min - the OLD effectiveDurationMinutes(190) * (1 - 0.3) discount -
+// even though the plan itself had just judged that same game worth
+// watching the whole way through), producing the reported ~40-80 real-
+// minute overlaps once the actual broadcast ran anywhere close to its own
+// average length. A high-reliability sport gets 0 - its own nominal length
+// is already trusted as-is, nothing to pad.
+export const DURATION_OVERRUN_BUFFER_BY_RELIABILITY = { high: 0, medium: 0.1, low: 0.25 };
 
 // A small, deliberately flat realism buffer between two back-to-back picks
 // (see docs/recommendation-engine-audit.md's "no transition buffer" bug) -
@@ -373,26 +390,46 @@ export const DURATION_UNCERTAINTY_BY_RELIABILITY = { high: 0, medium: 0.1, low: 
 export const TRANSITION_BUFFER_MINUTES = 10;
 
 // How much of a match's schedule block a LATER pick actually has to wait
-// out - effectiveDurationMinutes (viewer engagement), shrunk further by
-// this sport's own duration uncertainty. This is deliberately the ONLY
-// duration figure the scheduler itself ever reads (see schedulingInterval)
-// - there is no second, separately-tuned notion of "how long is this event"
-// anywhere else in the planner, which is exactly the "two different
-// duration models" bug docs/recommendation-engine-audit.md flags.
+// out. Starts from effectiveDurationMinutes (the endurance-based "still
+// worth watching" judgment - a genuine blowout can still free the slot up
+// sooner, that's unchanged and unrelated to the fix below) and then PADS
+// it, never shrinks it further, by this sport's own real-clock overrun
+// risk (see DURATION_OVERRUN_BUFFER_BY_RELIABILITY) - the scheduling
+// number can never end up SMALLER than the value judgment that produced it
+// in the first place, only equal (high-reliability sports) or larger
+// (a no-clock sport padded for its own real overrun risk). This is
+// deliberately the ONLY duration figure the scheduler itself ever reads
+// (see schedulingInterval) - there is no second, separately-tuned notion
+// of "how long is this event" anywhere else in the planner.
 export function schedulingDurationMinutes(match) {
-  const uncertainty = DURATION_UNCERTAINTY_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
-  return effectiveDurationMinutes(match) * (1 - uncertainty);
+  const overrun = DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
+  return effectiveDurationMinutes(match) * (1 + overrun);
 }
 
 // The canonical scheduling representation every planner operation below
 // (weightedIntervalSchedule via computeDayPlan, canWatchSequentially) reads
-// - {start, end}, where `end` already bakes in this sport's own duration
-// uncertainty AND the transition buffer. Nothing downstream needs to know
+// - {start, end}, where `end` already bakes in this sport's own overrun
+// buffer AND the transition buffer. Nothing downstream needs to know
 // either of those exist; they just see one interval two matches either do
 // or don't overlap.
 export function schedulingInterval(match) {
   const start = Date.parse(match.startTimeUtc);
   return { start, end: start + schedulingDurationMinutes(match) * 60_000 + TRANSITION_BUFFER_MINUTES * 60_000 };
+}
+
+// The honest "how long will this realistically still be live" clock
+// estimate used for DISPLAY/lifecycle purposes (matchLifecycleState below)
+// - deliberately separate from schedulingDurationMinutes above, which
+// blends in the endurance-based "still worth watching" value judgment.
+// Whether a blowout is still worth recommending and whether the broadcast
+// is still literally on the air are two different questions; this is only
+// ever the second one; padded by the same real-clock overrun risk as
+// scheduling (see DURATION_OVERRUN_BUFFER_BY_RELIABILITY), never a
+// guarantee - see matchLifecycleState's own comment for why this can never
+// substitute for `isFinished`.
+export function estimatedDurationMinutes(match) {
+  const overrun = DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
+  return match.durationMinutes * (1 + overrun);
 }
 
 // The explicit conflict relation docs/recommendation-engine-audit.md asks
@@ -406,6 +443,74 @@ export function canWatchSequentially(a, b) {
   const bStart = Date.parse(b.startTimeUtc);
   const [earlier, later] = aStart <= bStart ? [a, b] : [b, a];
   return schedulingInterval(earlier).end <= Date.parse(later.startTimeUtc);
+}
+
+// ---- Match lifecycle state --------------------------------------------------
+//
+// The ONE place every caller (app.js's relativeLabel/is-live styling,
+// pinCurrentOrNext, pickInitialDay) reads to answer "what point in its
+// lifecycle is this match at right now" - UPCOMING -> STARTING_SOON ->
+// LIVE -> ENDING_SOON -> ENDED. Before this existed, that question was
+// answered ad hoc in at least two different places in app.js, each
+// against the plain NOMINAL end time (start + durationMinutes) with no
+// upper bound at all once a match had actually started: relativeLabel
+// computed `diffMin = startMs - now` and returned "即將開始" (starting
+// soon) for ANY diffMin <= 0 - which is only ever reachable once `now` is
+// past the nominal end too (the live window, `now < nominalEnd`, was
+// already handled by an earlier branch) - so a match that had simply run
+// long past its per-sport AVERAGE duration, without ESPN having reported
+// it finished yet, was mislabeled as "about to start" instead of "still
+// live" - a match that has already started can never be "about to start"
+// again, however long it runs. Centralizing the state machine here, used
+// everywhere a caller needs it, is what makes that class of bug
+// structurally impossible to reintroduce independently in a second call
+// site later.
+//
+// `isFinished` (ESPN's own reported status) is the ONLY thing that ever
+// produces ENDED - never inferred from elapsed time, even past the
+// overrun-padded estimate (see estimatedDurationMinutes) - because
+// duration here is always an ESTIMATE, never a guaranteed end time (a
+// no-clock sport can run arbitrarily long); a match still not reported
+// finished falls back to LIVE once its start has passed, which is far
+// more often correct than not for exactly the sports whose duration is
+// least certain.
+export const LIFECYCLE_STATES = {
+  UPCOMING: 'UPCOMING',
+  STARTING_SOON: 'STARTING_SOON',
+  LIVE: 'LIVE',
+  ENDING_SOON: 'ENDING_SOON',
+  ENDED: 'ENDED'
+};
+
+// How close to its own start/estimated-end a match has to be to count as
+// STARTING_SOON/ENDING_SOON rather than plain UPCOMING/LIVE - a UI nuance
+// (worth a slightly different label/urgency), not a scheduling input;
+// computeDayPlan/schedulingInterval never read this.
+export const STARTING_SOON_WINDOW_MINUTES = 15;
+export const ENDING_SOON_WINDOW_MINUTES = 15;
+
+export function matchLifecycleState(match, now = Date.now()) {
+  if (match.isFinished) return LIFECYCLE_STATES.ENDED;
+  if (match.timeTbd) return LIFECYCLE_STATES.UPCOMING;
+
+  const start = Date.parse(match.startTimeUtc);
+  if (now < start) {
+    const minutesToStart = (start - now) / 60_000;
+    return minutesToStart <= STARTING_SOON_WINDOW_MINUTES ? LIFECYCLE_STATES.STARTING_SOON : LIFECYCLE_STATES.UPCOMING;
+  }
+
+  // Already started, and NOT reported finished - never STARTING_SOON or
+  // UPCOMING again from here, whatever the estimated duration says.
+  const estimatedEnd = start + estimatedDurationMinutes(match) * 60_000;
+  if (now < estimatedEnd) {
+    return now >= estimatedEnd - ENDING_SOON_WINDOW_MINUTES * 60_000 ? LIFECYCLE_STATES.ENDING_SOON : LIFECYCLE_STATES.LIVE;
+  }
+  // Past even the overrun-padded estimate - still LIVE, not ENDED: the
+  // estimate was never a guarantee (see this section's own top comment),
+  // and a no-clock sport running past even a generous estimate is a real,
+  // unremarkable occurrence (extra innings, a long rain delay), not a
+  // sign the match must actually be over.
+  return LIFECYCLE_STATES.LIVE;
 }
 
 // ---- Quiet hours ------------------------------------------------------------
@@ -650,6 +755,28 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   });
 
   return picks.map(p => p.choice);
+}
+
+// What computeDayPlan would pick for one specific slot if THIS slot's own
+// pin didn't exist - i.e. the algorithm's own natural default for that
+// cluster, with every OTHER pin still respected. public/lib/preferences.mjs's
+// applySlotSwipe uses this to tell "the viewer swiped back to the default"
+// (clear the pin, revert to 推薦) apart from "the viewer chose a genuine
+// alternative" (keep the pin, show 偏好) - see that module's own comment
+// for why conflating the two mislabeled every swipe as a preference, even
+// swiping straight back to the algorithm's own top pick.
+//
+// Clones `dayMatches` internally (never mutates the caller's own match
+// objects/flags, same posture as explainWhyNotRecommended below) so this is
+// safe to call from a live swipe handler without disturbing whatever's
+// currently rendered.
+export function naturalSlotChoice(dayKey, dayMatches, slotKey, pinnedForDay = null, options = {}) {
+  const withoutThisSlot = new Map(pinnedForDay ? pinnedForDay.entries() : []);
+  withoutThisSlot.delete(slotKey);
+  const clone = dayMatches.map(m => ({ ...m }));
+  const picks = computeDayPlan(dayKey, clone, withoutThisSlot, options);
+  const picked = picks.find(m => m.slotKey === slotKey);
+  return picked ? picked.id : null;
 }
 
 // ---- Cross-day variety (soft recent-repeat penalty) ------------------------
@@ -912,13 +1039,13 @@ export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinned
 // displayed reason/.score always stay the true, un-nudged values; only
 // effectiveScore (the day plan's own DP weight by default, see
 // computeDayPlan's `scoreField` option) sees the adjusted number.
-export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set(), recommendStyle = 'entertainment') {
-  const context = { priorityOrder, myServiceIds, recommendStyle };
+export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = new Set()) {
+  const context = { priorityOrder, myServiceIds };
   const withScores = matches.map(match => {
     const breakdown = computeEffectiveScore(match, context);
     return {
       ...match,
-      score: breakdown.styleScore,
+      score: breakdown.bestMatchScore,
       effectiveScore: breakdown.effectiveScore,
       // See computeRecommendationScore's own comment - same numbers as
       // baseScore/effectiveScore above, under the names docs/
