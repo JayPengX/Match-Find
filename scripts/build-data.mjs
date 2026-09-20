@@ -61,6 +61,7 @@ import {
   predictNbaDurationMinutes,
   predictEplDurationMinutes,
   predictF1RaceDurationMinutes,
+  isMlbRivalry,
   isNbaRivalry,
   isEplDerby,
   isNationalBroadcast
@@ -589,6 +590,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
         away: mlbStandings?.get(away?.name) || null,
         home: mlbStandings?.get(home?.name) || null,
         isPostseason: match.isPostseason,
+        isRivalry: isMlbRivalry(away?.name, home?.name),
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });

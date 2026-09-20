@@ -194,6 +194,12 @@ describe('computeMlbObjectiveScore', () => {
     assert.equal(result.skill, null);
   });
 
+  test('a known historic rivalry raises watchability over an otherwise-identical non-rivalry fixture - the deterministic fix for a real, current-record-mediocre-but-historically-major matchup (e.g. Dodgers vs Giants) losing its slot by a razor-thin scheduling margin', () => {
+    const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: false });
+    const rivalry = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: true });
+    assert.ok(rivalry.watchability > plain.watchability);
+  });
+
 
   test('two evenly-matched teams with no other signals score high competitiveness', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });

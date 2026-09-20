@@ -81,7 +81,7 @@ for (const dayKey of dayKeys) {
         `${match.recommended ? '[PICKED]' : '[      ]'} id=${match.id} sport=${match.sport} name="${match.name}" ` +
           `start="${localStart}" durationMinutes=${match.durationMinutes} isFinished=${match.isFinished} ` +
           `skill=${match.skill} competitiveness=${match.competitiveness} watchability=${match.watchability} ` +
-          `enduranceScore=${match.enduranceScore} score=${match.score} planningScore=${round(match.planningScore)} ` +
+          `enduranceScore=${match.enduranceScore} broadcastQuality=${match.broadcastQuality} score=${match.score} planningScore=${round(match.planningScore)} ` +
           `recentRepeatPenalty=${match.recentRepeatPenalty ?? 0} sportConcentrationPenalty=${match.sportConcentrationPenalty ?? 0} ` +
           `alternativeIds=${JSON.stringify(match.alternativeIds || [])} reason="${match.reason || ''}"`
       );

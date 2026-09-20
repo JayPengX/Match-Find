@@ -213,6 +213,33 @@ export function isNbaRivalry(awayTeam, homeTeam, pairs = NBA_RIVALRY_PAIRS) {
   );
 }
 
+// A short, deliberately conservative list of MLB's own enduring, widely-
+// recognized rivalries - same "best-effort, a miss just loses one small
+// modifier, never breaks anything" posture as NBA_RIVALRY_PAIRS above.
+// Exists because a pure win%/standings-based objective score has no way to
+// know a matchup is a bigger draw than its current-season record alone
+// suggests - two historically significant franchises (Dodgers-Giants, the
+// oldest rivalry in MLB) drawing real, current, heavy media attention
+// regardless of either team's record this particular season is exactly the
+// kind of real-world fact this list captures deterministically, the same
+// way NBA_RIVALRY_PAIRS/EPL_DERBY_PAIRS already do for their own sports.
+export const MLB_RIVALRY_PAIRS = [
+  ['Los Angeles Dodgers', 'San Francisco Giants'],
+  ['New York Yankees', 'Boston Red Sox'],
+  ['New York Yankees', 'New York Mets'],
+  ['Chicago Cubs', 'St. Louis Cardinals'],
+  ['Chicago Cubs', 'Chicago White Sox'],
+  ['Los Angeles Angels', 'Los Angeles Dodgers'],
+  ['Houston Astros', 'Texas Rangers'],
+  ['Baltimore Orioles', 'Washington Nationals']
+];
+
+export function isMlbRivalry(awayTeam, homeTeam, pairs = MLB_RIVALRY_PAIRS) {
+  return pairs.some(
+    ([a, b]) => (a === awayTeam && b === homeTeam) || (a === homeTeam && b === awayTeam)
+  );
+}
+
 export function predictNbaDurationMinutes({ awayTeam, homeTeam, broadcast }) {
   const expectedOvertimeMinutes = NBA_OVERTIME_PROBABILITY * NBA_OVERTIME_REAL_MINUTES_PER_PERIOD;
   let modifierTotal = 0;

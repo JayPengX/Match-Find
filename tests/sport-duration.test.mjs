@@ -11,6 +11,7 @@ import {
   mlbOddsDurationModifier,
   MLB_LEAGUE_AVG_OVER_UNDER,
   MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES,
+  isMlbRivalry,
   NBA_BASELINE_MINUTES,
   isNationalBroadcast,
   isNbaRivalry,
@@ -83,6 +84,17 @@ describe('MLB duration prediction', () => {
     for (const [team, offset] of Object.entries(MLB_TEAM_PACE_OFFSET_MINUTES)) {
       assert.ok(Number.isFinite(offset), `${team} has a non-numeric offset`);
     }
+  });
+});
+
+describe('isMlbRivalry', () => {
+  test('recognizes a known historic rivalry in either direction', () => {
+    assert.ok(isMlbRivalry('Los Angeles Dodgers', 'San Francisco Giants'));
+    assert.ok(isMlbRivalry('San Francisco Giants', 'Los Angeles Dodgers'));
+  });
+
+  test('a non-rivalry matchup is not flagged', () => {
+    assert.ok(!isMlbRivalry('Los Angeles Dodgers', 'Miami Marlins'));
   });
 });
 

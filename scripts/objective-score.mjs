@@ -176,6 +176,7 @@ export function computeMlbObjectiveScore({
   away,
   home,
   isPostseason,
+  isRivalry,
   oddsSpread,
   oddsOverUnder
 }) {
@@ -223,17 +224,28 @@ export function computeMlbObjectiveScore({
   const momentum = momentumInputs.length ? Math.max(...momentumInputs) : null;
   if (Number.isFinite(momentum)) factors.push(`streak ${away?.streakCode || ''}/${home?.streakCode || ''}`.trim());
 
-  const watchability = clamp(
-    Math.round(
-      weightedAverage([
-        [stakes, 0.45],
-        [competitiveness, 0.35],
-        [momentum, 0.2]
-      ]) ?? 5
-    ),
-    1,
-    10
-  );
+  // Additive, same reasoning as computeNbaObjectiveScore/computeEplObjectiveScore's
+  // own rivalry/derby bonuses - a storied historic rivalry (Dodgers-Giants,
+  // Yankees-Red Sox) should only ever ADD watchability over the same two
+  // teams' non-rivalry competitiveness/stakes, never blend toward a fixed
+  // anchor and pull an already-good number down. This is a real, concrete
+  // gap the record-based formula alone can't see: two historically
+  // significant franchises can be a genuinely bigger draw than their
+  // current-season record alone suggests, which is exactly the kind of
+  // real-world fact a deterministic win%/stakes formula has no way to
+  // capture on its own - see docs/recommendation-engine-audit.md and the
+  // reported "Dodgers vs Giants, universally covered by media, still lost
+  // its slot by a razor-thin scheduling margin" case this fixes.
+  let watchability = weightedAverage([
+    [stakes, 0.45],
+    [competitiveness, 0.35],
+    [momentum, 0.2]
+  ]) ?? 5;
+  if (isRivalry) {
+    watchability += 1.5;
+    factors.push('known historic rivalry matchup');
+  }
+  watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(
     Math.round(weightedAverage([[competitiveness, 0.6], [recentCloseness, 0.4]]) ?? competitiveness),
