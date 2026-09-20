@@ -1031,3 +1031,93 @@ is what keeps this bounded to a few times a day rather than every 15
 minutes; if quota pressure shows up in practice, the next round's fix
 would be to raise that interval or reintroduce a lighter-weight cache, not
 to silently reduce which fixtures get validated.
+
+## Round 8 - the actual root cause of "swipe stack is stuck and buggy," found live
+
+A direct report ("the stack UI is stuck and buggy, the recommendation
+system is broken, redo it") prompted checking the DEPLOYED site directly -
+`node --test` was already green (279 assertions) and the live
+`/match-recommend` proxy was confirmed responding correctly with a real
+request, so neither "the tests are lying" nor "Gemini is down" explained
+the report. What did: driving the live site with a real headless browser
+(Chrome DevTools Protocol's `Input.dispatchTouchEvent`, same verification
+method Round 5's swipe work already used) and swiping an actual multi-game
+MLB stack found a genuine, reproducible bug that no unit test could have
+caught, because it isn't a pure-function bug at all.
+
+**The bug**: `computeDayPlan`'s `alternativeIds` (recommendation.mjs) is
+computed per PICK - every OTHER cluster member that directly
+(pairwise) overlaps whichever match is actually recommended for that slot.
+That's correct and well-tested for the unpinned/natural case. But a real
+MLB night's transitive conflict cluster can chain together 8-10+ games
+(see this document's own Round 2/6 comments on that exact shape), and two
+different members of the SAME cluster can have very different direct-
+overlap neighborhoods depending on where in the chain they sit - a game
+near the middle of a staggered slate directly overlaps more neighbors than
+one near either end. Since a swipe pins a NEW member and reruns
+`computeDayPlan`, `alternativeIds` gets recomputed from THAT new member's
+own (possibly much wider) neighborhood, not the one the viewer was
+actually looking at. Live-reproduced on the deployed site: swiping once,
+from the default pick to its very next card, took a 5-member stack (5
+dots) to an 8-member stack (8 dots) with three brand-new match cards the
+viewer had never seen appear mid-swipe - exactly the "stuck and buggy"
+feeling reported, and exactly the failure mode Round 2's and Round 6's own
+commit messages ("swipe-stack chaos," "swipe stack fracturing when pinning
+a non-adjacent chain member") were chasing, still present because both of
+those rounds fixed `alternativeIds`' CONTENT (direct vs. transitive
+conflicts) without fixing its STABILITY across a re-render of the same
+slot.
+
+**The fix**: `public/app.js`'s `renderRecommendedSection` now freezes each
+day+slot's presentational stack membership the first time it renders
+(`state.stackMembershipByDay`, `Map<dayKey, Map<slotKey, Set<matchId>>>`,
+keyed by the same full-cluster `slotKey` a pin is already looked up
+under). Every later render for that slot - a pin, a live score poll - looks
+up and reuses that same frozen member set instead of recomputing it from
+whichever match is now primary; only WHICH member is marked primary/pinned
+changes, never WHICH members are in the stack. A member that becomes
+independently `.recommended` elsewhere is still excluded from the frozen
+set on read (the same "never both recommended and someone else's
+alternative" invariant `computeDayPlan` already enforces), and the freeze
+is cleared in `applyMatchData` - the one place genuinely fresh match data
+(a fetch, a poll, a manual refresh) arrives, since a stale snapshot could
+otherwise hide a fixture that's newly relevant or keep a removed one
+around forever. `computeDayPlan`/`alternativeIds` itself is UNCHANGED -
+this is deliberately a presentation-layer fix, not a scheduling-math one,
+so the 279 existing pure-function tests (which exercise
+`alternativeIds`'s per-choice computation directly, including the exact
+A/B/C two-stack scenario this fix has to keep working) needed no changes
+and still pass unmodified.
+
+**Verified live, not just by inspection**: re-ran the same
+`Input.dispatchTouchEvent` reproduction against a local static server
+(this repo's own `public/` mounted against a real snapshot of the
+deployed `matches.json`) before and after the fix. Before: one forward
+swipe on the MLB stack grew it from 5 to 8 members. After: three
+consecutive forward swipes keep the member count at exactly 5 throughout,
+with the primary card correctly advancing through that fixed list each
+time. `node --test` (279/279) and `node --check public/app.js` both still
+pass.
+
+**What this round did NOT find broken**: the live `/match-recommend`
+proxy (`jaypengx-collab/shared-proxy`) was hit directly during this
+investigation and returned a valid, fast, correctly-shaped response;
+the deployed `matches.json` carries real, current AI-validated reasons
+(not stale/fallback objective-only scores); and `scripts/
+evaluate-recommendations.mjs` run against that same live export reports a
+sound planner (its independently-recomputed oracle matches the actual
+schedule wherever it has real recommended-flagged candidates to compare -
+see that script's own comment on why a raw `matches.json` export always
+reads 0 recommended by itself, `recommended`/`alternativeIds` are only
+ever set by the CLIENT's own `resolveViewingPlan`, never written to the
+server-side file). Nothing here pointed to Gemini or the scoring engine
+being the actual source of the reported "everything is broken" feeling -
+the swipe-stack bug above was.
+
+**Known limitation, unchanged from earlier rounds**: there's still no
+DOM/browser test harness in this repo's own `node --test` suite, so this
+fix (like the swipe/card-stack work in Round 5 and Round 7) is verified by
+a live/local headless-browser reproduction recorded here, not by an
+assertion `npm test` runs on every commit. A regression here would only
+resurface the same way this one was found - swiping an actual deployed
+stack, not a failing CI test.

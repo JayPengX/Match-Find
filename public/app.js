@@ -118,7 +118,20 @@ const state = {
   // export button that used to surface this was removed) currently only
   // ever inspected via public/data/matches.json directly or
   // scripts/evaluate-recommendations.mjs (see README).
-  sportConcentration: new Map()
+  sportConcentration: new Map(),
+  // Map<dayKey, Map<slotKey, Set<matchId>>> - which members a swipeable
+  // card stack actually shows, frozen the first time each day+slot renders
+  // - see renderRecommendedSection's own comment for why this exists:
+  // computeDayPlan's alternativeIds is recomputed per CHOICE, and a big
+  // real-world conflict cluster's members don't all have the same direct-
+  // overlap neighborhood, so swiping to a new primary without this could
+  // hand back a bigger/different member list than the one just shown,
+  // reading as the stack growing or reshuffling under the viewer's finger
+  // mid-swipe. In-memory only, never persisted - cleared in applyMatchData
+  // whenever genuinely fresh match data arrives (a fetch/poll can add,
+  // remove, or reschedule fixtures, so last render's snapshot is no longer
+  // trustworthy), never by a pin's own render.
+  stackMembershipByDay: new Map()
 };
 
 // Sport labels as ESPN/build-data.mjs spell them internally (see
@@ -1507,12 +1520,52 @@ function renderRecommendedSection() {
   // comment for why this exists at all.
   const pendingReuse = interactedStack;
   interactedStack = null;
+  // Per-day, per-slot FROZEN membership - see state.stackMembershipByDay's
+  // own comment for why. computeDayPlan's alternativeIds is genuinely
+  // recomputed per CHOICE (whichever member the scheduler/a pin actually
+  // picked for that slot this render), and two different members of the
+  // same big transitive conflict cluster can have very different direct-
+  // overlap neighborhoods (a real MLB slate stagger this codebase already
+  // documents) - so swiping to a new primary can hand back a larger/
+  // different alternatives list than the one the viewer was just looking
+  // at, which reads as the stack growing/reshuffling mid-interaction. Once
+  // a slot's member set is established on its first render for this day,
+  // every later render (a pin, a live poll) keeps showing exactly those
+  // same members - only which one is primary/pinned changes.
+  let dayMembership = state.stackMembershipByDay.get(dayKey);
+  if (!dayMembership) {
+    dayMembership = new Map();
+    state.stackMembershipByDay.set(dayKey, dayMembership);
+  }
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
-    const alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
+    let alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
     if (alternatives.length) {
-      const members = [match, ...alternatives];
+      let members = [match, ...alternatives];
       const slotKey = match.slotKey || slotKeyFromMembers(members);
+      const knownIds = dayMembership.get(slotKey);
+      if (knownIds) {
+        // Never `.recommended` (besides `match` itself) - a frozen member
+        // that ended up independently recommended elsewhere this render
+        // has to stay excluded here too, same invariant computeDayPlan's
+        // own alternativeIds already enforces (docs/
+        // recommendation-engine-audit.md's Invariant 1: never both
+        // recommended and someone else's alternative).
+        const stable = [...knownIds]
+          .map(id => byId.get(id))
+          .filter(m => m && (m.id === match.id || !m.recommended));
+        if (!knownIds.has(match.id)) stable.push(match);
+        members = stable;
+        alternatives = members.filter(m => m.id !== match.id);
+      } else {
+        dayMembership.set(slotKey, new Set(members.map(m => m.id)));
+      }
+      if (!alternatives.length) {
+        const card = buildMatchCard(match);
+        if (index === 0) card.classList.add('is-pinned');
+        fragment.appendChild(card);
+        return;
+      }
       const isTopOfDay = index === 0;
       if (
         pendingReuse &&
@@ -1666,6 +1719,11 @@ function renderAiStatus(lastAiFetchAt) {
 // the initial load and by checkForUpdate() below, so "how a payload turns
 // into what's on screen" only exists in one place.
 function applyMatchData(data) {
+  // Fresh data can add, remove, or reschedule fixtures - last render's
+  // frozen stack membership (see state.stackMembershipByDay's own comment)
+  // would otherwise keep pinning viewers to a now-stale member list, or
+  // permanently exclude a genuinely new alternative that just appeared.
+  state.stackMembershipByDay = new Map();
   const allMatches = Array.isArray(data.matches) ? data.matches : [];
   // TBD fixtures (see build-data.mjs's isTimeTbd) never carry a real
   // startTimeUtc, so they're split off here, before anything else touches
