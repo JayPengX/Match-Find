@@ -47,6 +47,18 @@ import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // correct forever the way the AI scores themselves can) so there's exactly
 // one definition of what "confidence" means, not two that could drift.
 import { computeConfidence } from '../public/lib/recommendation.mjs';
+// Deterministic, per-fixture broadcast-length formulas (MLB team pace,
+// NBA/EPL modifiers, F1 circuit baselines) - see that module's own
+// top-of-file comment for why this replaces the old flat per-league
+// average and why it deliberately never calls Gemini for this. This is
+// the "sport specific formula" half of duration/broadcast prediction;
+// resolveWhereToWatchTw below (a plain rule, not a formula) is the other.
+import {
+  predictMlbDurationMinutes,
+  predictNbaDurationMinutes,
+  predictEplDurationMinutes,
+  predictF1RaceDurationMinutes
+} from './sport-duration.mjs';
 
 const PROXY_URL = (process.env.PROXY_URL || '').trim().replace(/\/+$/, '');
 // The commit this build ran from (.github/workflows/deploy.yml passes
@@ -263,15 +275,55 @@ const AI_SCORE_BATCH_SIZE = 75;
 
 // Team-sport leagues, all sharing the same ESPN scoreboard shape
 // (site.api.espn.com/apis/site/v2/sports/<sportKey>/<leagueKey>/scoreboard).
-// durationMinutes is this script's only notion of "how long a match runs" -
-// ESPN's scoreboard never gives an end time, so every conflict/scheduling
-// decision (see app.js's resolveViewingPlan) works off this per-sport
-// AVERAGE broadcast length, not any per-match actual duration.
+// durationMinutes here is now only a FALLBACK flat average - see
+// computeDurationMinutes below, which computes a real per-fixture estimate
+// from scripts/sport-duration.mjs for every league listed here. It stays
+// on this table (rather than being deleted) purely as the "no formula
+// recognizes this league" default, same role league.durationMinutes always
+// played, just no longer the everyday case for mlb/nba/epl.
 const TEAM_LEAGUES = [
   { id: 'epl', sportKey: 'soccer', leagueKey: 'eng.1', label: 'Premier League', durationMinutes: 115 },
   { id: 'mlb', sportKey: 'baseball', leagueKey: 'mlb', label: 'MLB', durationMinutes: 190 },
   { id: 'nba', sportKey: 'basketball', leagueKey: 'nba', label: 'NBA', durationMinutes: 150 }
 ];
+
+// The one place that decides "how long will this specific fixture's
+// broadcast run" - a real per-team/circuit formula for the three leagues
+// this build actually has one for (see scripts/sport-duration.mjs), and
+// the league's own flat average for anything else. away/home are this
+// function's own buildCompetitor objects (`.name` is ESPN's team
+// displayName, exactly what sport-duration.mjs's tables are keyed by).
+export function computeDurationMinutes(league, away, home, venue, broadcast) {
+  switch (league.id) {
+    case 'mlb':
+      return predictMlbDurationMinutes({ awayTeam: away.name, homeTeam: home.name, venue });
+    case 'nba':
+      return predictNbaDurationMinutes({ awayTeam: away.name, homeTeam: home.name, broadcast });
+    case 'epl':
+      return predictEplDurationMinutes({ awayTeam: away.name, homeTeam: home.name });
+    default:
+      return league.durationMinutes;
+  }
+}
+
+// ---- Taiwan broadcast source (a hardcoded rule, not an AI guess) --------
+//
+// Product decision: 愛爾達體育台 carries nearly everything this site
+// recommends in Taiwan, and the one real, well-documented exception is
+// MLB's Apple TV "Friday Night Baseball" package - a genuine GLOBAL
+// streaming exclusive with no regional blackout, unlike an ordinary US
+// national cable network name. ESPN's own scoreboard already reports the
+// on-record broadcaster for every fixture (the `broadcast` field built
+// below), which is already a reliable, free, zero-latency signal for
+// exactly that one case - there's nothing left for a per-fixture Gemini
+// search to add here, so this is now a plain deterministic rule instead of
+// a live grounded lookup repeated on every build. Every other MLB game and
+// every other sport this site covers (EPL, NBA, F1) defaults to
+// 愛爾達體育台 unconditionally.
+export function resolveWhereToWatchTw(match) {
+  if (match.sport === 'MLB' && /apple\s*tv/i.test(match.broadcast || '')) return 'Apple TV';
+  return '愛爾達體育台';
+}
 
 const F1_LOGO = 'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png';
 
@@ -510,7 +562,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         // per-sport AVERAGE broadcast length (see TEAM_LEAGUES' own
         // comment), not this specific game's real one.
         isFinished,
-        durationMinutes: league.durationMinutes,
+        durationMinutes: computeDurationMinutes(league, away, home, competition.venue?.fullName || '', broadcast || ''),
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
@@ -585,6 +637,12 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       if (!timeTbd && !isLive && !isFinished && (startMs < now.getTime() || startMs > windowEndMs)) continue;
 
       const broadcast = (session.broadcasts || []).flatMap(b => b.names || []).slice(0, 1)[0];
+      const venue = event.circuit?.fullName || '';
+      // Only the main Race gets a circuit-specific prediction - see
+      // sport-duration.mjs's own comment for why Qualifying/Sprint keep
+      // their flat session.durationMinutes instead.
+      const durationMinutes =
+        sessionType.abbreviation === 'Race' ? predictF1RaceDurationMinutes(venue) : sessionType.durationMinutes;
 
       matches.push({
         id: `f1-${event.id}-${sessionType.abbreviation.toLowerCase()}`,
@@ -594,8 +652,8 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
         startTimeUtc: new Date(startMs).toISOString(),
         timeTbd,
         isFinished,
-        durationMinutes: sessionType.durationMinutes,
-        venue: event.circuit?.fullName || '',
+        durationMinutes,
+        venue,
         broadcast: broadcast || '',
         logo: F1_LOGO,
         competitors: [],
@@ -615,18 +673,22 @@ export function heuristicScore(match) {
   const records = match.competitors.map(c => c.record).filter(Boolean);
   // The site is Traditional Chinese throughout (see public/app.js) - this
   // reason has to read that way too even though it never touched Gemini,
-  // same as venueZh/whereToWatchTw below staying empty rather than an
-  // untranslated English placeholder. The UI itself appends an "(估計，非
-  // AI 推薦)" caveat (see styles.css .is-heuristic) - this stays purely
-  // descriptive so the two don't repeat each other.
+  // same as venueZh below staying empty rather than an untranslated
+  // English placeholder. The UI itself appends an "(估計，非 AI 推薦)"
+  // caveat (see styles.css .is-heuristic) - this stays purely descriptive
+  // so the two don't repeat each other. whereToWatchTw stays '' here too -
+  // it's always overwritten by build-data.mjs's own deterministic
+  // resolveWhereToWatchTw rule regardless of score source (AI or
+  // heuristic), so there's genuinely nothing for this fallback path to
+  // guess at anymore.
   if (records.length !== 2) {
     return {
       competitiveness: 5,
       watchability: 5,
       // No real basis to judge production quality or endurance locally
-      // either (same reasoning as venueZh/whereToWatchTw below) - neutral
-      // rather than guessing at a specific platform's reputation or a
-      // matchup's competitive arc.
+      // either (same reasoning as venueZh above) - neutral rather than
+      // guessing at a specific platform's reputation or a matchup's
+      // competitive arc.
       broadcastQuality: 5,
       enduranceScore: 5,
       reason: '目前沒有雙方的戰績資料可供估計。',
@@ -644,10 +706,11 @@ export function heuristicScore(match) {
     broadcastQuality: 5,
     enduranceScore: 5,
     reason: `依雙方目前戰績估計（${records[0].wins}勝${records[0].losses}敗 對 ${records[1].wins}勝${records[1].losses}敗）。`,
-    // Neither can be guessed locally - no real-world knowledge behind this
-    // fallback path at all (see this function's own top comment) - so both
-    // stay empty and the UI just omits that line rather than showing a
-    // fabricated translation or broadcaster.
+    // venueZh can't be guessed locally - no real-world knowledge behind
+    // this fallback path at all (see this function's own top comment) - so
+    // it stays empty and the UI just omits that line rather than showing a
+    // fabricated translation. whereToWatchTw stays '' for the same reason
+    // as the branch above (always overwritten downstream).
     venueZh: '',
     whereToWatchTw: ''
   };
@@ -1015,6 +1078,7 @@ async function main() {
       match.reason = '';
       match.venueZh = '';
       match.whereToWatchTw = '';
+      match.aiSuggestedWhereToWatchTw = '';
       match.evidence = [];
       match.evidenceRetrievedAt = null;
       match.source = 'finished';
@@ -1035,7 +1099,14 @@ async function main() {
     match.enduranceScore = scored.enduranceScore ?? 5;
     match.reason = scored.reason;
     match.venueZh = scored.venueZh || '';
-    match.whereToWatchTw = scored.whereToWatchTw || '';
+    // whereToWatchTw is now the hardcoded rule above, not the AI's own
+    // guess/grounded-search answer - Gemini's answer (`scored.whereToWatchTw`,
+    // still cached under the same field for the historical record) is kept
+    // only as `aiSuggestedWhereToWatchTw`, a secondary/validation signal a
+    // human can audit against the rule's own decision, never the thing
+    // actually shown to a viewer.
+    match.whereToWatchTw = resolveWhereToWatchTw(match);
+    match.aiSuggestedWhereToWatchTw = scored.whereToWatchTw || '';
     // Same "explicit empty, not absent" convention as the cache entry
     // itself - a heuristic-scored match (never actually searched) also
     // just gets [] here, not undefined.
