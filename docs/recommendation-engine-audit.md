@@ -1230,3 +1230,49 @@ round didn't make unilaterally.
   decision above - every fixture still scores on the deterministic
   formula plus AI validation alone, same as before this round, just with
   the specific 0-0 scoring bug now fixed underneath it.
+
+## Round 10 - alternativeIds gets a quality gate: variety isn't "show every conflict"
+
+A direct product-level complaint about the swipe stack itself: every
+direct scheduling conflict was being surfaced as a swipeable alternative
+regardless of how good it actually was, so a slot with one clearly
+outstanding pick and one throwaway conflicting fixture rendered exactly
+the same "pick one of these" stack as a slot with two genuinely
+comparable games. That's not variety, it's noise - and it actively erodes
+trust in the stack once a viewer swipes a few times and finds most
+"alternatives" aren't real options at all.
+
+**Change**: `computeDayPlan`'s `alternativeIds` computation (`public/lib/
+recommendation.mjs`) now gates each direct conflict on
+`ALTERNATIVE_MAX_SCORE_GAP` (2.5, matching this file's own existing
+`RECENT_REPEAT_PENALTY_BY_GAP_DAYS` notion of "close enough to be a real
+call" rather than inventing a second scale) against whichever score field
+the plan was actually built with. A conflict that's more than 2.5 worse
+than the pick on that score is dropped from `alternativeIds` - the slot
+renders as a single card, no swipe UI at all, since there's no genuine
+choice to offer. It stays fully visible in `renderAllMatchesSection`
+either way; this only decides whether the RECOMMENDED slot pretends
+there's a decision to make. The gate is one-directional: an alternative
+that's BETTER than the pick (a negative gap) is never hidden, however
+large the gap - covers the case where the pick only won because it's a
+hard viewer pin against a much stronger natural candidate (see "a pinned
+choice only excludes matches it directly conflicts with" in
+`tests/recommendation.test.mjs`), where hiding the stronger option would
+be actively harmful, not a variety tradeoff.
+
+This directly answers "not every day is equally good" - a day/slot where
+the top pick has no real rival now shows exactly that (one confident
+card), while a day/slot with two-plus fixtures worth actually weighing
+against each other still gets the full stack. Four new tests cover: a
+clearly-worse conflict being dropped, a conflict right at the threshold
+still counting, a better-than-pick conflict never being hidden even
+behind a pin, and a 3-way slot where only the close conflict survives the
+gate. All pre-existing `alternativeIds` assertions in the test suite
+already had gaps ≤ 2.5 and needed no changes - 285/285 assertions pass.
+
+### Known limitations after Round 10
+
+- The 2.5 threshold is a reasoned constant tied to this file's own
+  existing "close call" scale, not independently tuned against real
+  viewer swipe behavior (no analytics pipeline exists to measure that) -
+  it may need adjusting once real usage data on stack engagement exists.

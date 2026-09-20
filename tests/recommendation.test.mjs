@@ -57,7 +57,8 @@ import {
   slotKeyFromMembers,
   liveExcitementBonus,
   LIVE_EXCITEMENT_MAX_BONUS,
-  estimateLiveDurationMinutes
+  estimateLiveDurationMinutes,
+  ALTERNATIVE_MAX_SCORE_GAP
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -608,6 +609,55 @@ describe('Test 4 - one winner per genuine conflict window', () => {
     assert.equal(plan.length, 1);
     assert.equal(plan[0].id, 'a');
     assert.deepEqual(new Set(a.alternativeIds), new Set(['b', 'c']));
+  });
+});
+
+describe('alternativeIds only surfaces a genuine choice, not every conflict', () => {
+  test('a direct conflict clearly worse than the pick is never offered as a swipeable alternative', () => {
+    // The pick (9) so thoroughly outclasses its only conflict (3, a gap of
+    // 6, well past ALTERNATIVE_MAX_SCORE_GAP) that presenting them as a
+    // coin flip would be actively misleading - the loser stays fully
+    // visible elsewhere (renderAllMatchesSection), it just isn't offered
+    // as if it were a real second opinion in this slot's own stack.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 3 });
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.deepEqual(plan.map(m => m.id), ['a']);
+    assert.equal(a.recommended, true);
+    assert.equal(b.recommended, false);
+    assert.equal(a.alternativeIds, null); // no genuine choice here - render as a single card
+  });
+
+  test('a direct conflict right at the edge of the gap still counts as a genuine choice', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 9 - ALTERNATIVE_MAX_SCORE_GAP });
+    const plan = computeDayPlan('2026-09-19', [a, b]);
+    assert.deepEqual(plan.map(m => m.id), ['a']);
+    assert.deepEqual(a.alternativeIds, ['b']);
+  });
+
+  test('a conflict that is BETTER than the pick always stays in, however large the gap', () => {
+    // A viewer-forced pin can beat a much stronger natural candidate (see
+    // "a pinned choice only excludes matches it directly conflicts with"
+    // above) - the quality gate must never hide that stronger option from
+    // the stack, since that's the one case a viewer most needs to still
+    // see and be able to swipe back to.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 2 });
+    const pinnedForDay = new Map([[[a.id, b.id].sort().join('|'), 'b']]);
+    const plan = computeDayPlan('2026-09-19', [a, b], pinnedForDay);
+    assert.deepEqual(plan.map(m => m.id), ['b']);
+    assert.deepEqual(b.alternativeIds, ['a']);
+  });
+
+  test('in a 3-way slot only the genuinely close conflicts are offered, not the far-off one', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 8 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:04:00.000Z', effectiveScore: 2 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c]);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].id, 'a');
+    assert.deepEqual(a.alternativeIds, ['b']);
   });
 });
 

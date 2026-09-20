@@ -867,6 +867,19 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 // globally best plan"). Conflict clusters (groupIntoSlots) still exist, but
 // only as a presentation label computed AFTER scheduling, from whichever
 // picks the DP actually made.
+// How much worse (on whichever score field the plan was actually built
+// with - viewerScore/planningScore, both effectively the same 1-10ish
+// scale as effectiveScore) a direct conflict is allowed to be and still
+// count as a genuine swipeable alternative rather than just noise -
+// "not everyday is equally good": some days a slot's best pick has no
+// real rival at all and the stack should just show ONE card, other days
+// two or three fixtures in the same slot are a real toss-up and every one
+// of them belongs in the stack. 2.5 matches this same file's own settled
+// notion of "close enough to be a real call" (see
+// RECENT_REPEAT_PENALTY_BY_GAP_DAYS's top tier) rather than inventing a
+// second, unrelated scale for the same judgment.
+export const ALTERNATIVE_MAX_SCORE_GAP = 2.5;
+
 export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore' } = {}) {
   dayMatches.forEach(match => {
     match.recommended = false;
@@ -1002,12 +1015,33 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   // the same cluster agree on where a pin against it lives, even though
   // the members each stack actually DISPLAYS are now its own direct
   // conflicts only.
+  // A direct conflict only earns a spot in the swipeable stack when it's
+  // actually a live question, not whenever one merely exists - see
+  // ALTERNATIVE_MAX_SCORE_GAP's own comment. A match that's clearly worse
+  // than the pick on the exact score the scheduler just used to choose
+  // between them isn't a real second opinion, it's a decoy: showing it
+  // dilutes the ONE genuinely good option down to "one of several", and
+  // trains a viewer to stop trusting the stack ("every card has an
+  // alternative, most of them junk"). It's never deleted - still fully
+  // visible in the plain match list below (renderAllMatchesSection) -
+  // this only decides whether it's worth a viewer's swipe. Never gates in
+  // the other direction: an alternative that's BETTER than the pick
+  // (negative gap) always stays in, however large the gap - that's not
+  // "variety", that's a better game the viewer would otherwise miss
+  // entirely, including the case where the pick only won because it's a
+  // hard pin (see forcedIds above) against a much stronger natural
+  // candidate.
   picks.forEach(({ choice }) => {
     const cluster = clusterByMatchId.get(choice.id);
     if (!cluster || cluster.members.length < 2) return;
     choice.slotKey = slotKeyFromMembers(cluster.members);
+    const pickedScore = getScore(choice);
     const alternatives = cluster.members.filter(
-      m => m.id !== choice.id && !m.recommended && isNearTotalOverlap(m, choice)
+      m =>
+        m.id !== choice.id &&
+        !m.recommended &&
+        isNearTotalOverlap(m, choice) &&
+        pickedScore - getScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );
     if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
   });
