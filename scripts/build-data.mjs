@@ -32,14 +32,26 @@
 // real, current, data-grounded number either way, just without that one
 // extra layer of judgment.
 //
-// There is no persistent per-match cache. Every unthrottled run (see
-// AI_FETCH_MIN_INTERVAL_HOURS below) sends EVERY currently non-finished
-// fixture in the fetch window to Gemini fresh - not just newly-appeared
-// ones - since the objective score itself is also recomputed fresh every
-// run and a stale validation from hours ago is worth less than re-checking
-// against today's actual data. A throttled scheduled run in between just
-// leaves every fixture on its objective score alone until the next
-// unthrottled one.
+// Every unthrottled run (see AI_FETCH_MIN_INTERVAL_HOURS below) sends EVERY
+// currently non-finished fixture in the fetch window to Gemini fresh - not
+// just newly-appeared ones - since the objective score itself is also
+// recomputed fresh every run and a stale validation from hours ago is worth
+// less than re-checking against today's actual data.
+//
+// A throttled scheduled run in between doesn't just leave every fixture on
+// its objective score alone, though - it reuses each fixture's own LAST
+// real Gemini adjustment from data/ai-meta.json (see
+// AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS) until either that cache entry goes
+// stale or the next unthrottled run replaces it with a fresh one. Without
+// this, "AI-validated" status flickered on and off roughly every 15
+// minutes on the deployed site: the schedule runs 4x as often as Gemini is
+// actually allowed to be called, so 3 out of 4 runs used to silently
+// overwrite matches.json with every fixture's validation reset to zero,
+// even fixtures a call earlier that same hour had already validated -
+// confirmed as the real cause of reports that "AI validation isn't showing
+// consistently" (nothing was wrong with the validation calls themselves;
+// their own results were just being discarded by the very next routine
+// rebuild).
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -171,6 +183,20 @@ const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
 // either, since ESPN data (the actually time-sensitive half) is refetched
 // unconditionally on every run no matter what this throttle decides.
 const AI_FETCH_MIN_INTERVAL_HOURS = 1;
+
+// How long a match's own last real Gemini validation stays usable across
+// runs that don't call Gemini again for it (a throttled scheduled run, or
+// a batch that failed) - see the "AI validation" section's own note on why
+// this exists at all. Deliberately several throttle windows long (the
+// schedule fires every 15 minutes, Gemini is only actually called once an
+// hour), so a viewer's browser doesn't see a fixture's validated reason/
+// evidence appear for one 15-minute window and then vanish back to the
+// generic objective-score reason for the next three, purely because that
+// particular run happened to be throttled - not because anything about the
+// match actually changed. Still bounded, not indefinite: a validation from
+// a real Gemini call several hours ago is old enough that re-checking
+// against by-then-current data is worth more than keeping it forever.
+const AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS = 6;
 
 // ---- Contested-cluster refinement (the shared proxy's /match-recommend-refine) ------
 //
@@ -723,6 +749,30 @@ function toRecommendPayloadItem(m) {
   };
 }
 
+// Fills in `adjustments` (mutated in place) for every fixture in
+// `needsScoring` that didn't already get a fresh Gemini pick THIS run (a
+// throttled run skipped Gemini entirely, or this one specific fixture's
+// batch failed), from its own last real validation in `cachedAdjustments` -
+// as long as that entry isn't older than `maxAgeHours`. Without this, a
+// fixture's validated reason/evidence would reset to the generic
+// objective-score default on every run except the roughly 1-in-4 that
+// actually calls Gemini (the schedule fires 4x more often than
+// AI_FETCH_MIN_INTERVAL_HOURS allows) - confirmed as the real cause behind
+// reports that "AI validation isn't showing consistently" on the deployed
+// site. A cache entry's own `cachedAt` is never bumped here - it keeps
+// aging normally across however many runs reuse it, so it eventually falls
+// out of the window on its own rather than looking permanently fresh.
+export function applyCachedAdjustments(adjustments, needsScoring, cachedAdjustments, nowMs, maxAgeHours) {
+  for (const match of needsScoring) {
+    if (adjustments.has(match.id)) continue;
+    const cached = cachedAdjustments[match.id];
+    if (!cached) continue;
+    const ageMs = nowMs - Date.parse(cached.cachedAt || '');
+    if (!Number.isFinite(ageMs) || ageMs > maxAgeHours * 60 * 60 * 1000) continue;
+    adjustments.set(match.id, cached);
+  }
+}
+
 // Sends every fixture that needs scoring this run to the shared Cloudflare
 // Worker (jaypengx-collab/shared-proxy), which owns the actual Gemini
 // prompt/schema (see that repo's worker.js, route /match-recommend) and
@@ -867,6 +917,11 @@ async function refineContestedClusters(matches, adjustments) {
           entry.competitivenessAdjustment = clampAdjustment(pick.competitivenessAdjustment);
           entry.watchabilityAdjustment = clampAdjustment(pick.watchabilityAdjustment);
           entry.reason = String(pick.reason || entry.reason || '').slice(0, 300);
+          // A genuinely fresh Gemini response just now, whether `entry`
+          // started this run as a fresh pick or a carried-over cache entry
+          // (see main()'s own cachedAdjustments fallback) - either way this
+          // resets how long it's allowed to keep being reused.
+          entry.cachedAt = new Date().toISOString();
         }
         entry.refined = true;
       }
@@ -953,13 +1008,16 @@ async function main() {
   if (toFetchNow.length && PROXY_URL) meta.lastAiFetchAt = now.toISOString();
   const freshPicks = await fetchAiScores(toFetchNow);
 
-  // In-memory only, for the duration of this one run - see the "AI
-  // validation" section above for why nothing here is written back to
-  // disk.
+  // Persisted across runs in data/ai-meta.json (see AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS
+  // and the "AI validation" section's own note on why this exists) - keyed
+  // by match id, each entry stamped with WHEN it was actually produced by a
+  // real Gemini call, not when this particular run happened to write it.
+  const cachedAdjustments = meta.adjustments && typeof meta.adjustments === 'object' ? meta.adjustments : {};
+
   const adjustments = new Map();
   for (const match of toFetchNow) {
     const pick = freshPicks.get(match.id);
-    if (!pick) continue; // no matching pick this run - stays on its objective score alone below
+    if (!pick) continue; // no matching pick this run - falls through to the cache/objective-score fallback below
     adjustments.set(match.id, {
       competitivenessAdjustment: clampAdjustment(pick.competitivenessAdjustment),
       watchabilityAdjustment: clampAdjustment(pick.watchabilityAdjustment),
@@ -972,9 +1030,16 @@ async function main() {
       evidence: Array.isArray(pick.evidence)
         ? pick.evidence.slice(0, 5).map(sanitizeCachedEvidenceItem).filter(item => item.finding)
         : [],
-      source: 'ai'
+      source: 'ai',
+      cachedAt: now.toISOString()
     });
   }
+
+  // Every OTHER currently-needed fixture that didn't get a fresh pick this
+  // run (a throttled run skipped Gemini entirely, or this one specific
+  // fixture's batch failed) falls back to its own last real validation, as
+  // long as it's not too stale - see applyCachedAdjustments' own comment.
+  applyCachedAdjustments(adjustments, needsScoring, cachedAdjustments, now.getTime(), AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS);
 
   let usedAi = false;
   for (const match of matches) {
@@ -1051,6 +1116,15 @@ async function main() {
       }
     }
   }
+
+  // Persists exactly the adjustments this run actually ended up using
+  // (fresh Gemini picks, refined picks, and cache entries reused as-is)
+  // back into data/ai-meta.json for the NEXT run's own cache fallback
+  // above - pruned to only matches still in this run's own fetch window,
+  // so a fixture that ages out of the schedule doesn't linger in this file
+  // forever.
+  const currentMatchIds = new Set(matches.map(m => m.id));
+  meta.adjustments = Object.fromEntries([...adjustments].filter(([id]) => currentMatchIds.has(id)));
 
   matches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
 

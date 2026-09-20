@@ -394,34 +394,43 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   page itself only ever shows the recommendation, not the data behind it.
 - A recommended fixture with a genuinely can't-watch-both alternative (see
   "The viewing plan" above) renders as a **horizontally swipeable card
-  stack** (native CSS scroll-snap, the same kind of touch swipe the day
-  picker already uses) - only one card is on screen by default, the other
-  a deliberate swipe away with dots marking how many there are. Unlike an
-  earlier version of this same stack, swiping here is a real choice: it
-  pins that match as the slot's committed pick and rebuilds the rest of
-  the day's plan around it (`pinSlotChoice`). A card whose start overlaps
-  an earlier match - whether or not either one made the plan - gets a
-  small note naming that match and how long they overlap
-  (`computeOverlapRange` in `buildMatchCard`). The pin re-render reuses the
-  exact DOM node the viewer's finger just settled on rather than rebuilding
-  it (see `interactedStack`/`renderRecommendedSection` in `app.js`) - but
-  reusing the node still means detaching and reattaching it once, which by
-  itself is enough to reset a scrollable element's own scroll position back
-  to its first card on at least some mobile WebKit builds. The reused
-  node's scroll position is explicitly captured before that move and
-  restored after, so a completed swipe can't snap back to (and get stuck
-  on) the wrong card. That reused node also tracks which member is
-  currently pinned on the node itself (`wrapper.dataset.primaryId`), not in
-  a variable captured once when the stack was first built - the node can
-  survive many reuse-renders across many swipes, and a value captured only
-  once at build time went stale the moment the first swipe changed the pin,
-  which was the direct cause of a worse regression than either bug above:
-  a swipe landing back on that ORIGINAL first-loaded card compared true
-  against the stale value and silently did nothing at all (the pin never
-  actually changed), which then looked like the stack getting stuck, and
-  every following swipe on that same node broke the identical way until an
-  unrelated render corrected it back to the real pin from somewhere else -
-  which read as the stack suddenly flicking back and freezing there again.
+  stack** - only one card is on screen by default, the other a deliberate
+  swipe away with dots marking how many there are. Swiping is a real
+  choice: settling on a different card pins that match as the slot's
+  committed pick and rebuilds the rest of the day's plan around it
+  (`pinSlotChoice`). A card whose start overlaps an earlier match - whether
+  or not either one made the plan - gets a small note naming that match and
+  how long they overlap (`computeOverlapRange` in `buildMatchCard`).
+  **The stack is driven entirely by explicit pointer events and a CSS
+  `transform`** (`buildMatchStack` in `app.js`), not native CSS scroll-snap -
+  an earlier design (scrollLeft + scroll-snap + a requestAnimationFrame poll
+  waiting for native momentum to "settle") went through three separate
+  rounds of reported regressions (stuck cards, flicking back, cards landing
+  on the wrong index, a stack's dots jumping/shrinking mid-swipe) because
+  real touch momentum and native scroll-snap timing vary enough across
+  devices and browsers that no fixed poll/threshold tuned against one
+  device stayed correct on every other one. A transform is just a plain CSS
+  property this code sets directly (`translateX(calc(-index*100% + dragPx))`)
+  and reads back exactly what it set - there's no separate physics engine
+  whose output has to be inferred after the fact. `pointerdown`/`pointermove`/
+  `pointerup` track the gesture directly: a small movement threshold decides
+  horizontal-swipe vs. vertical-page-scroll before committing to either (so
+  a swipe starting on a stack never fights the page's own scroll), a live
+  drag renders immediately as the finger moves (with resistance past either
+  end, never a hard stop), and release commits to the next/previous card
+  the instant it crosses a distance-or-velocity threshold - no polling, no
+  waiting for anything to "settle", since nothing is still moving under the
+  hood after that. Verified against a real headless-browser reproduction
+  driving actual `PointerEvent`s (not just reasoning about scroll physics)
+  across a 3-card chain and a synthetic 10-game slate shaped like a real
+  MLB night. The node-reuse mechanism this replaced (keeping the exact DOM
+  node a swipe just landed on alive across the pin's own re-render, tracking
+  which member is currently pinned via `wrapper.dataset.primaryId` rather
+  than a value captured once at build time) is unchanged - a `transform` is
+  just a plain style property, though, so the extra scroll-position
+  capture/restore the old scrollLeft-based version needed around that reuse
+  (to survive a detach+reattach resetting scroll position on some mobile
+  WebKit builds) is gone; there's nothing left to reset.
   A stack's own member list (`alternativeIds` in `recommendation.mjs`)
   is now only the OTHER candidates that DIRECTLY (pairwise) overlap the
   recommended pick, not every member of its wider presentational cluster.
@@ -725,22 +734,40 @@ still works fine against a `public/data/matches.json` copy saved any other
 way (a browser's own devtools, or straight from a GitHub Actions run).
 Settings now shows only what an ordinary viewer would actually use.
 
-## AI validation (no persistent per-match cache)
+## AI validation (per-match adjustment cache survives throttled runs)
 
-There is no per-match AI cache. Every unthrottled run sends **every
-currently non-finished fixture** in the 14-day window to Gemini fresh via
-the shared proxy's `/match-recommend`, not just newly-appeared ones - the
-objective score itself is also recomputed fresh every run (standings/form
-genuinely change day to day), so a validation from hours or days ago isn't
-worth preserving over just asking again. The response is an **adjustment**
-(`competitivenessAdjustment`/`watchabilityAdjustment`/
+Every unthrottled run sends **every currently non-finished fixture** in the
+14-day window to Gemini fresh via the shared proxy's `/match-recommend`,
+not just newly-appeared ones - the objective score itself is also
+recomputed fresh every run (standings/form genuinely change day to day),
+so a validation from hours or days ago isn't worth preserving over just
+asking again when Gemini IS actually being called. The response is an
+**adjustment** (`competitivenessAdjustment`/`watchabilityAdjustment`/
 `enduranceScoreAdjustment`/`broadcastQualityAdjustment`, each -2 to +2,
-plus `reason`/`venueZh`/`evidence`), held in memory for the duration of one
-build and applied on top of that run's own objective score - never written
-back to disk, so there's nothing to go stale or need a schema-version bump
-for. Requests are batched under the shared Worker's 80-fixtures-per-call
-cap (see `AI_SCORE_BATCH_SIZE`), since an unthrottled run against a full
-14-day window can easily mean a few hundred fixtures at once.
+plus `reason`/`venueZh`/`evidence`), applied on top of that run's own
+objective score. Requests are batched under the shared Worker's
+80-fixtures-per-call cap (see `AI_SCORE_BATCH_SIZE`), since an unthrottled
+run against a full 14-day window can easily mean a few hundred fixtures at
+once.
+
+**A fixture's own last real adjustment DOES survive between runs, though**
+(`data/ai-meta.json`'s `adjustments` map, keyed by match id, each stamped
+with `cachedAt`) - specifically so a THROTTLED run (see below; the
+schedule fires 4x more often than Gemini is actually allowed to be called)
+reuses a fixture's own last validation instead of resetting it to a bare
+objective score. An earlier version genuinely had no per-match cache at
+all, on the theory above that a stale validation isn't worth keeping - in
+practice that meant "AI validated" status flickered on and off roughly
+every 15 minutes on the deployed site: 3 out of 4 scheduled runs silently
+overwrote matches.json with every fixture's adjustment reset to zero, even
+ones a call earlier that same hour had just validated. `applyCachedAdjustments`
+(build-data.mjs) now falls back to the cache for any fixture that didn't
+get a fresh pick this run, as long as that cache entry isn't older than
+`AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS` (6 - several throttle windows, but
+still bounded so a genuinely stale validation eventually ages out rather
+than being kept forever). A cache entry's own timestamp is never bumped
+just because some later run happened to reuse it, so it keeps aging
+normally either way.
 
 **Throttling how often Gemini gets called**: the workflow itself runs
 every 15 minutes so the free ESPN half of the build stays fresh (see

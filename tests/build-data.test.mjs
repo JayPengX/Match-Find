@@ -17,7 +17,8 @@ import {
   MIN_FINISHED_DURATION_MINUTES,
   computeMatchObjectiveScore,
   describeFactorsZh,
-  buildObjectiveReasonZh
+  buildObjectiveReasonZh,
+  applyCachedAdjustments
 } from '../scripts/build-data.mjs';
 
 describe('isTimeTbd', () => {
@@ -230,6 +231,44 @@ describe('finishedDurationMinutes', () => {
     const start = '2026-09-19T18:00:00.000Z';
     const now = new Date('2026-09-19T18:05:00.000Z');
     assert.equal(finishedDurationMinutes(start, now), MIN_FINISHED_DURATION_MINUTES);
+  });
+});
+
+describe('applyCachedAdjustments (AI validation stays visible across throttled runs)', () => {
+  const NOW_MS = Date.parse('2026-09-20T12:00:00.000Z');
+
+  test('leaves a fresh-this-run adjustment alone (never overwritten by a cache entry)', () => {
+    const adjustments = new Map([['a', { source: 'ai', reason: 'fresh' }]]);
+    const cached = { a: { source: 'ai', reason: 'stale', cachedAt: new Date(NOW_MS - 60_000).toISOString() } };
+    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
+    assert.equal(adjustments.get('a').reason, 'fresh');
+  });
+
+  test('falls back to a cache entry within the max age for a fixture with no fresh pick', () => {
+    const adjustments = new Map();
+    const cached = { a: { source: 'ai', reason: 'from 2 hours ago', cachedAt: new Date(NOW_MS - 2 * 60 * 60 * 1000).toISOString() } };
+    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
+    assert.equal(adjustments.get('a').reason, 'from 2 hours ago');
+  });
+
+  test('ignores a cache entry older than the max age - falls through to the objective-score default', () => {
+    const adjustments = new Map();
+    const cached = { a: { source: 'ai', reason: 'from 7 hours ago', cachedAt: new Date(NOW_MS - 7 * 60 * 60 * 1000).toISOString() } };
+    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
+    assert.equal(adjustments.has('a'), false);
+  });
+
+  test('ignores a missing or malformed cachedAt rather than treating it as infinitely fresh', () => {
+    const adjustments = new Map();
+    const cached = { a: { source: 'ai', reason: 'no timestamp' } };
+    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
+    assert.equal(adjustments.has('a'), false);
+  });
+
+  test('never invents an entry for a fixture with no cache record at all', () => {
+    const adjustments = new Map();
+    applyCachedAdjustments(adjustments, [{ id: 'never-validated' }], {}, NOW_MS, 6);
+    assert.equal(adjustments.has('never-validated'), false);
   });
 });
 

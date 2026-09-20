@@ -1216,14 +1216,23 @@ function patchStackSelectionTags(stackNode, members, isTopOfDay, primaryId) {
 }
 
 // A slot with more than one near-total-overlapping member (see
-// groupIntoSlots) - a horizontally swipeable card stack, native CSS
-// scroll-snap, same touch mechanism the day picker already uses. Unlike an
-// earlier version of this stack, swiping here is a real commitment, not
-// just a peek: settling on a different card PINS that match as this
-// slot's fixed choice and rebuilds the whole day's plan around it (see
-// pinSlotChoice/computeDayPlan) - matches before and after it reflow to
-// connect with it instead of with whichever match was the plan's own
-// default pick.
+// groupIntoSlots) - a horizontally swipeable card stack. Driven entirely
+// by explicit pointer events and a CSS transform, NOT native scroll-snap -
+// see this function's own git history for the whole prior design (scrollLeft
+// + scroll-snap + a requestAnimationFrame poll waiting for native momentum
+// to settle) and the string of real, reported regressions that design kept
+// producing: real touch momentum/snap timing varies enough across devices
+// (and native scroll-snap "always stop at every card" behavior enough
+// between browsers) that no fixed poll/threshold tuned against one device
+// stayed correct on every other one - stuck cards, flicking back, cards
+// landing on the wrong index. A transform-based position is just a plain
+// CSS property this code sets directly and reads back exactly what it set -
+// there is no separate physics engine (native momentum/snap) whose output
+// has to be inferred after the fact by polling. Settling on a different
+// card PINS that match as this slot's fixed choice and rebuilds the whole
+// day's plan around it (see pinSlotChoice/computeDayPlan) - matches before
+// and after it reflow to connect with it instead of with whichever match
+// was the plan's own default pick.
 function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // The CLUSTER's own key (every near-total-overlapping member, set by
   // computeDayPlan on the recommended pick - see that field's own comment
@@ -1244,20 +1253,21 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   hint.className = 'match-stack-hint';
   hint.textContent = '⟷ 這個時段只能擇一收看，滑動選擇要看哪一場';
 
-  const scroller = document.createElement('div');
-  scroller.className = 'match-stack-scroller';
+  const viewport = document.createElement('div');
+  viewport.className = 'match-stack-viewport';
+  const track = document.createElement('div');
+  track.className = 'match-stack-track';
   // A FIXED order (by score, highest first) - independent of which member
   // is currently pinned/primary. An earlier version put the current pick
   // first and sorted the rest around it, which reshuffled the whole stack
-  // on every pin; since a pin re-renders (see the settle handler below),
-  // that reset the scroller back to position 0 every time. On a 3+-member
-  // stack, a plain "swipe forward" from that reset position could only
-  // ever reach whichever card the reshuffle happened to place second -
-  // reaching a third member required an unnaturally large single swipe,
-  // which read as "you can only pick between two of them." Keeping the
-  // order stable means normal sequential swiping reaches every member;
-  // only the SCROLL POSITION needs to reflect the current pick (see the
-  // requestAnimationFrame call below), not the member order itself.
+  // on every pin; since a pin re-renders, that reset the track back to
+  // position 0 every time. On a 3+-member stack, a plain "swipe forward"
+  // from that reset position could only ever reach whichever card the
+  // reshuffle happened to place second - reaching a third member required
+  // an unnaturally large single swipe, which read as "you can only pick
+  // between two of them." Keeping the order stable means normal sequential
+  // swiping reaches every member; only the POSITION needs to reflect the
+  // current pick, not the member order itself.
   // viewerScore, not the older effectiveScore name - see
   // recommendation.mjs's computeRecommendationScore/resolveViewingPlan for
   // why both exist (same number, viewerScore is the audit's own explicit
@@ -1271,89 +1281,59 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // full rebuild instead of reusing something stale.
   wrapper.dataset.memberOrderKey = slotMemberOrderKey(ordered);
   // Tracks "which member is currently pinned" on the LIVE node itself,
-  // read/written by settle() below instead of the closed-over `primary`
-  // parameter - see settle()'s own comment for why: this same wrapper (and
-  // therefore this same closure) can be REUSED across many renders (see
+  // read/written by commitToIndex() below instead of a closed-over
+  // `primary` variable - this same wrapper (and therefore this same
+  // closure) can be REUSED across many renders (see
   // renderRecommendedSection's reuse branch), each of which can change
   // which member is actually pinned via patchStackSelectionTags, but never
   // re-runs buildMatchStack itself. `primary.id` is only ever this specific
-  // call's own snapshot - it goes stale the moment the first reuse-render
-  // patches a DIFFERENT primaryId onto this node, silently freezing
-  // settle()'s idea of "the default" at whatever the page happened to open
-  // with.
+  // call's own snapshot - it would go stale the moment the first
+  // reuse-render patches a DIFFERENT primaryId onto this node.
   wrapper.dataset.primaryId = primary.id;
-  const primaryIndex = ordered.findIndex(m => m.id === primary.id);
+  let currentIndex = Math.max(0, ordered.findIndex(m => m.id === primary.id));
+
   ordered.forEach((match, index) => {
     const card = buildMatchCard(match);
-    if (index === primaryIndex && isTopOfDay) card.classList.add('is-pinned');
-    scroller.appendChild(card);
+    if (index === currentIndex && isTopOfDay) card.classList.add('is-pinned');
+    track.appendChild(card);
   });
+  viewport.appendChild(track);
 
   const dots = document.createElement('div');
   dots.className = 'match-stack-dots';
   const dotEls = ordered.map((_, index) => {
     const dot = document.createElement('span');
-    dot.className = 'match-stack-dot' + (index === primaryIndex ? ' is-active' : '');
+    dot.className = 'match-stack-dot' + (index === currentIndex ? ' is-active' : '');
     dots.appendChild(dot);
     return dot;
   });
-  // Runs after the browser has actually laid out the scroller (it isn't
-  // attached to the live document yet at the point buildMatchStack itself
-  // runs, so clientWidth would read 0 here) - opens the stack already
-  // scrolled to whichever member the plan currently has chosen, rather
-  // than always starting at the fixed order's own first (highest-scored)
-  // card regardless of what's actually pinned.
-  requestAnimationFrame(() => {
-    scroller.scrollLeft = primaryIndex * scroller.clientWidth;
-  });
-  // Reads which card is actually centered right now, clamped to a real
-  // index - scroll-snap's own momentum/rubber-banding can briefly push
-  // scrollLeft a little negative or past the last card's offset (an
-  // overscroll bounce at either end), which without clamping rounded to an
-  // out-of-bounds index and, worse, drifted the settle handler's read of
-  // "which card is this" away from where the browser had actually snapped.
-  function currentIndex() {
-    const width = Math.max(1, scroller.clientWidth);
-    return Math.min(ordered.length - 1, Math.max(0, Math.round(scroller.scrollLeft / width)));
+
+  // The track's own position is always "currentIndex's own page, plus
+  // however many live drag pixels are currently applied on top" - a pure
+  // function of state this code already tracks, never inferred from a
+  // separate scroll position. `%` for the page offset (correct regardless
+  // of viewport width, no clientWidth read needed to just SHOW the current
+  // card) plus a `px` drag offset (needs clientWidth, but only to decide
+  // when to COMMIT to a swipe - see onPointerUp - never to render it).
+  function render(dragPx, animate) {
+    track.style.transition = animate ? '' : 'none';
+    track.style.transform = `translateX(calc(${-currentIndex * 100}% + ${dragPx}px))`;
   }
-  // The actual pin+rebuild only fires once the gesture SETTLES, not on
-  // every intermediate tick mid-swipe (which would otherwise re-pin, and
-  // re-render the whole page, dozens of times during one swipe).
-  //
-  // Settling is detected by POLLING scrollLeft across animation frames
-  // until it stops changing, rather than a fixed debounce or relying on
-  // native 'scrollend' (unsupported on pre-18.2 Safari, a very real chunk
-  // of this site's own iOS PWA audience). A fixed timeout is fundamentally
-  // the wrong tool here: native momentum/snap scrolling can keep moving the
-  // scroll position for anywhere from under 100ms (a short, decisive flick)
-  // to several hundred ms (a slow, gentle drag) depending on gesture speed
-  // and device - a timeout tuned for the fast case fires WHILE a slow
-  // swipe's momentum is still carrying it, reading a transient mid-flight
-  // index and pinning the wrong card; a timeout long enough for the slow
-  // case makes every swipe feel sluggish. Polling naturally waits exactly
-  // as long as the actual scroll takes, however long that is, on every
-  // browser that supports requestAnimationFrame.
-  const SETTLE_STABLE_FRAMES = 3; // ~50ms at 60fps with no change - reliably past a snap's own final micro-adjustment
-  let settlePollId = null;
-  let settleStableCount = 0;
-  let lastPolledScrollLeft = null;
-  function settle() {
-    const activeIndex = currentIndex();
-    const chosen = ordered[activeIndex];
-    // wrapper.dataset.primaryId, NOT the closed-over `primary.id` - see
-    // that dataset field's own comment. Using the stale closure value here
-    // was the actual cause of a reported regression worse than the
-    // original "flashes back" bug: after this exact node survived one
-    // reuse-render (any swipe that isn't this stack's very first), a swipe
-    // that happened to land back on THIS BUILD's original primary card
-    // compared true against that stale id and skipped calling
-    // pinSlotChoice entirely - leaving the actual pinned state (whatever
-    // the FIRST swipe had already set) silently out of sync with what the
-    // scroller visually showed. The stack then looked "stuck" (the swipe
-    // registered nothing) until some unrelated later render corrected
-    // scrollLeft back to the real pin, which read as the stack "flicking
-    // back" and freezing there, since the same stale comparison broke
-    // every subsequent swipe on this node the same way.
+  render(0, false);
+
+  // A swipe commits (pins the card and rebuilds the day's plan around it -
+  // see pinSlotChoice) the instant the pointer lifts past the decision
+  // threshold below - no polling, no waiting for anything to "settle",
+  // since there's no native momentum left running that could still move
+  // the position after this function returns.
+  function commitToIndex(index) {
+    currentIndex = Math.min(ordered.length - 1, Math.max(0, index));
+    render(0, true);
+    dotEls.forEach((dot, i) => dot.classList.toggle('is-active', i === currentIndex));
+    const chosen = ordered[currentIndex];
+    // wrapper.dataset.primaryId, NOT a closed-over variable - see that
+    // dataset field's own comment above for why (this node can be reused
+    // across many renders that each change which member is pinned).
     if (chosen && chosen.id !== wrapper.dataset.primaryId) {
       // Recorded BEFORE pinSlotChoice triggers its own render, so that
       // render can find and reuse this exact node - see interactedStack's
@@ -1363,39 +1343,82 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       pinSlotChoice(dayKey, slotKey, chosen.id);
     }
   }
-  function pollSettle() {
-    settlePollId = null;
-    const current = scroller.scrollLeft;
-    if (current === lastPolledScrollLeft) {
-      settleStableCount += 1;
-    } else {
-      settleStableCount = 0;
-      lastPolledScrollLeft = current;
-    }
-    if (settleStableCount >= SETTLE_STABLE_FRAMES) {
-      settle();
-      return;
-    }
-    settlePollId = requestAnimationFrame(pollSettle);
-  }
-  scroller.addEventListener(
-    'scroll',
-    () => {
-      // Marks "a stack is actively mid-swipe right now" (see
-      // markStackInteraction's own comment) on every tick, not just once at
-      // gesture start - the periodic 60s re-render this guards against can
-      // land at any point during a swipe that takes longer than one tick.
-      markStackInteraction();
-      const activeIndex = currentIndex();
-      dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
-      settleStableCount = 0;
-      lastPolledScrollLeft = null;
-      if (settlePollId == null) settlePollId = requestAnimationFrame(pollSettle);
-    },
-    { passive: true }
-  );
 
-  wrapper.append(hint, scroller, dots);
+  // A swipe commits past either a distance threshold (dragged more than
+  // this fraction of the viewport's own width) OR a fast-flick velocity
+  // threshold (a short, decisive flick that never traveled very far) -
+  // together these are the two ways a real swipe gesture actually reads as
+  // "the viewer meant to change cards" on any touch UI.
+  const COMMIT_DISTANCE_FRACTION = 0.28;
+  const COMMIT_FLICK_VELOCITY_PX_PER_MS = 0.5;
+  // Below this, a touch is a tap/scroll-start, not a horizontal swipe yet -
+  // avoids hijacking a vertical page-scroll gesture that merely started on
+  // top of this stack.
+  const DIRECTION_LOCK_THRESHOLD_PX = 8;
+  // Dragging past either end still moves, but resisted - visible feedback
+  // that this IS the first/last card without a hard, jarring stop.
+  const OVERDRAG_RESISTANCE = 0.35;
+
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let lastX = 0;
+  let startTime = 0;
+  // true = committed to a horizontal swipe, false = handed off to the
+  // page's own vertical scroll, null = not yet decided this gesture.
+  let horizontal = null;
+
+  function onPointerDown(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pointerId = event.pointerId;
+    startX = lastX = event.clientX;
+    startY = event.clientY;
+    startTime = performance.now();
+    horizontal = null;
+    markStackInteraction();
+  }
+  function onPointerMove(event) {
+    if (event.pointerId !== pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (horizontal === null) {
+      if (Math.abs(dx) < DIRECTION_LOCK_THRESHOLD_PX && Math.abs(dy) < DIRECTION_LOCK_THRESHOLD_PX) return;
+      horizontal = Math.abs(dx) > Math.abs(dy);
+      if (horizontal) track.setPointerCapture?.(pointerId);
+    }
+    if (!horizontal) return; // vertical gesture - let the page scroll, touch-action already allows it
+    event.preventDefault();
+    lastX = event.clientX;
+    markStackInteraction();
+    const atStart = currentIndex === 0 && dx > 0;
+    const atEnd = currentIndex === ordered.length - 1 && dx < 0;
+    render(atStart || atEnd ? dx * OVERDRAG_RESISTANCE : dx, false);
+  }
+  function onPointerUp(event) {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    if (!horizontal) return;
+    const dx = lastX - startX;
+    const elapsedMs = Math.max(1, performance.now() - startTime);
+    const velocity = dx / elapsedMs;
+    const width = Math.max(1, viewport.clientWidth);
+    const pastDistance = Math.abs(dx) / width > COMMIT_DISTANCE_FRACTION;
+    const pastVelocity = Math.abs(velocity) > COMMIT_FLICK_VELOCITY_PX_PER_MS;
+    const delta = pastDistance || pastVelocity ? (dx < 0 ? 1 : -1) : 0;
+    commitToIndex(currentIndex + delta);
+  }
+  function onPointerCancel(event) {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    if (horizontal) commitToIndex(currentIndex); // snap back to wherever this card already was
+  }
+
+  track.addEventListener('pointerdown', onPointerDown);
+  track.addEventListener('pointermove', onPointerMove, { passive: false });
+  track.addEventListener('pointerup', onPointerUp);
+  track.addEventListener('pointercancel', onPointerCancel);
+
+  wrapper.append(hint, viewport, dots);
   return wrapper;
 }
 
@@ -1433,10 +1456,6 @@ function renderRecommendedSection() {
   const pendingReuse = interactedStack;
   interactedStack = null;
   const fragment = document.createDocumentFragment();
-  // Set at most once below, by the single reused stack's own branch (see
-  // its comment) - captured here, restored after the fragment is actually
-  // back in the live document.
-  let reusedScrollerToRestore = null;
   ordered.forEach((match, index) => {
     const alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
     if (alternatives.length) {
@@ -1449,28 +1468,18 @@ function renderRecommendedSection() {
         pendingReuse.slotKey === slotKey &&
         pendingReuse.memberOrderKey === slotMemberOrderKey(members)
       ) {
-        // The viewer's own gesture already scrolled this exact node to
-        // exactly the right card - reuse it and only patch the small bit
-        // of state a pin actually changes, rather than tearing it down and
-        // rebuilding it (see interactedStack's own comment for the original
-        // "flashes back to the previous card" bug this fixes).
-        //
-        // Moving it into `fragment` and then into recommendedListEl below
-        // is still a real DOM detach+reattach of this exact node, though -
-        // on at least some mobile WebKit builds that alone is enough to
-        // reset a scrollable element's own scrollLeft back to 0, which
-        // showed up as an even worse regression than the original bug:
-        // every completed swipe snapped the stack straight back to its
-        // first (highest-scored) card and stayed there, with nothing left
-        // to correct it since (unlike buildMatchStack's own
-        // requestAnimationFrame call for a freshly built stack) this reuse
-        // path never re-applied the viewer's own scroll position after the
-        // move. Capturing it before the move and restoring it after -
-        // synchronously and, in case the reset only happens after layout,
-        // once more on the next frame - closes that gap without giving up
-        // the node-reuse fix itself.
-        const scrollerEl = pendingReuse.node.querySelector('.match-stack-scroller');
-        reusedScrollerToRestore = scrollerEl ? { scrollerEl, scrollLeft: scrollerEl.scrollLeft } : null;
+        // The viewer's own gesture already positioned this exact node on
+        // exactly the right card (a plain CSS transform, set directly by
+        // buildMatchStack's own commitToIndex - see that function's own
+        // comment) - reuse it and only patch the small bit of state a pin
+        // actually changes, rather than tearing it down and rebuilding it
+        // (see interactedStack's own comment for the original "flashes back
+        // to the previous card" bug this fixes). Moving it into `fragment`
+        // and then into recommendedListEl below is still a real DOM
+        // detach+reattach of this exact node, but unlike the old
+        // scrollLeft-based design, a transform is just a plain style
+        // property - detaching and reattaching an element never resets it,
+        // so there's nothing left here to capture/restore.
         patchStackSelectionTags(pendingReuse.node, members, isTopOfDay, match.id);
         fragment.appendChild(pendingReuse.node);
       } else {
@@ -1483,20 +1492,6 @@ function renderRecommendedSection() {
     }
   });
   recommendedListEl.replaceChildren(fragment);
-  // Only NOW is the reused node actually back in the live document - see
-  // its own comment above for why the detach+reattach above can reset its
-  // scrollLeft on some mobile WebKit builds, and why restoring it has to
-  // happen after this insertion (setting scrollLeft on a node still sitting
-  // in a detached DocumentFragment doesn't reliably stick once it's moved
-  // again right after). Set synchronously and once more next frame, in
-  // case the reset only actually happens after layout settles.
-  if (reusedScrollerToRestore) {
-    const { scrollerEl, scrollLeft } = reusedScrollerToRestore;
-    scrollerEl.scrollLeft = scrollLeft;
-    requestAnimationFrame(() => {
-      scrollerEl.scrollLeft = scrollLeft;
-    });
-  }
 }
 
 function renderAllMatchesSection() {

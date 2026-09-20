@@ -99,16 +99,20 @@ jobs:
       - name: Commit AI fetch timestamp
         # data/ai-meta.json (unlike public/data/matches.json, which is fully
         # regenerated every run and never committed) is the persistent
-        # record of when Gemini was last actually called - see
-        # build-data.mjs's "AI validation" section. There is no per-match
-        # cache any more: every unthrottled run re-validates every current
-        # fixture against Gemini fresh, so this file holds only that one
-        # timestamp, which is what lets a routine scheduled run tell "we
-        # just called it" apart from "call it again". Only commits when the
-        # timestamp actually changed, so this doesn't add a commit every
-        # single run. contents: write (see permissions above) is what lets
-        # this push succeed; a commit made with the default GITHUB_TOKEN
-        # never re-triggers this same workflow, so this can't loop.
+        # record of when Gemini was last actually called, PLUS (see
+        # build-data.mjs's AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS) each currently
+        # relevant fixture's own last real validation - not just a
+        # timestamp any more. That per-match cache is what lets a routine
+        # THROTTLED run (the schedule fires 4x more often than Gemini is
+        # actually allowed to be called) keep showing a fixture's real
+        # validated reason/evidence instead of resetting it to the generic
+        # objective-score reason until the next unthrottled run - without
+        # it, "AI validated" status flickered on and off roughly every 15
+        # minutes on the deployed site. Only commits when this file actually
+        # changed, so this doesn't add a commit every single run. contents:
+        # write (see permissions above) is what lets this push succeed; a
+        # commit made with the default GITHUB_TOKEN never re-triggers this
+        # same workflow, so this can't loop.
         run: |
           if ! git diff --quiet -- data/ai-meta.json; then
             git config user.name "github-actions[bot]"
