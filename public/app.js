@@ -11,9 +11,12 @@
 //     both relative to the viewer's own clock, and one static build serves
 //     every viewer in every timezone at once.
 //
-// The AI scoring itself (competitiveness/watchability/reason/venueZh/
-// whereToWatchTw) already happened automatically in the background, on a
-// schedule, well before this page ever loaded - see build-data.mjs.
+// The AI scoring itself (competitiveness/watchability/reason/venueZh)
+// already happened automatically in the background, on a schedule, well
+// before this page ever loaded - see build-data.mjs. `whereToWatchTw` is
+// NOT one of those AI answers anymore - it's a hardcoded rule
+// (`resolveWhereToWatchTw`, also in build-data.mjs): 愛爾達體育台 for
+// everything except an MLB fixture ESPN itself reports as Apple TV.
 // Nothing here ever calls Gemini, and nothing here ever calls any other
 // network endpoint either - the ONLY network request this page makes is
 // one `fetch('./data/matches.json')` (see "One update path" below).
@@ -193,10 +196,15 @@ function buildSportIcon(sport) {
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` (see the shared proxy's /match-recommend) is free-form text written
-// by Gemini, not a fixed enum - this registry is what turns that text back
-// into something the UI can badge/color/reason about consistently, and
-// what OWNED (see DEFAULT_MY_SERVICE_IDS below) means at all. Adding a new service
+// `whereToWatchTw` is now a fixed rule's output (see build-data.mjs's
+// `resolveWhereToWatchTw`), not Gemini's own free-form guess, but this
+// registry still matches it by plain text rather than a hardcoded enum
+// value here - both service names it can now actually produce (愛爾達體育台/
+// Apple TV) already match an entry below, and staying text-matched costs
+// nothing while keeping this file decoupled from exactly how the rule
+// spells each name. This is what turns that text into something the UI can
+// badge/color/reason about consistently, and what OWNED (see
+// DEFAULT_MY_SERVICE_IDS below) means at all. Adding a new service
 // later is just one more entry here (id, matching pattern, badge/color) -
 // nothing else in this file needs to change, same reasoning as
 // SPORT_LABELS_ZH above for sports.
@@ -245,6 +253,13 @@ function buildSportIcon(sport) {
 // it's a scoring input, not something worth a viewer's attention on every
 // card. SERVICES/resolveService themselves now live in ./lib/recommendation.mjs
 // (imported above) - this file only still owns which of them are "mine".
+// 'netflix' staying in this list is harmless but now permanently inert for
+// the score nudge above: since build-data.mjs's `resolveWhereToWatchTw`
+// hardcoded every fixture's `whereToWatchTw` to either 愛爾達體育台 or
+// Apple TV (see this repo's README), no fixture can ever match Netflix
+// here anymore - kept rather than removed since this constant is still
+// meant to describe the owner's real subscriptions, not just which ones
+// currently affect scoring.
 const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
 
 const appEl = document.getElementById('app');

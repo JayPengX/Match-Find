@@ -42,18 +42,19 @@ Scoring and picking are split across two different places, deliberately:
    that file's own comment; a team missing from it just shows English-only).
 2. It sends only fixtures it hasn't already scored (see "AI score cache"
    below) to a `/match-recommend` endpoint on a shared Cloudflare Worker
-   (see "AI recommendations" below), which asks Gemini for five things per
+   (see "AI recommendations" below), which asks Gemini for four things per
    fixture: **competitiveness** (how close it's likely to be),
    **watchability** (how entertaining/notable it is regardless of
    closeness), **enduranceScore** (how likely it is to STAY worth watching
    all the way to the end, rather than turning into a blowout - see "The
-   viewing plan" below for how this feeds the schedule itself), the venue's
-   **Traditional Chinese name**, and **where to watch it in Taiwan** (a TV
-   channel or streaming service, e.g. 愛爾達體育台 or Apple TV — ESPN's API
-   has no concept of Taiwan broadcast rights at all, so this can only come
-   from the model's own knowledge, same as the scoring). None of this
-   depends on who's looking at the page or when, so it's all computed once,
-   at build time, and cached.
+   viewing plan" below for how this feeds the schedule itself), and the
+   venue's **Traditional Chinese name**. This is judgment that genuinely
+   needs real-world sports knowledge no deterministic rule can approximate,
+   which is exactly why it's the one part still delegated to Gemini - see
+   "Duration and Taiwan broadcast source are deterministic, not AI-guessed"
+   below for the two things this build now decides with a plain formula/
+   rule instead. None of this depends on who's looking at the page or when,
+   so it's all computed once, at build time, and cached.
 3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
@@ -216,13 +217,16 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   below - no separate "已訂閱" mark on the card itself; which services count
   as yours only ever affects scoring, silently, see that section). MLB in
   particular is very often carried on both 緯來體育台 and 愛爾達體育台 at
-  once - the prompt (see the shared proxy's `/match-recommend`) is told to always name
-  愛爾達體育台 when both apply, rather than answering inconsistently.
+  once - `resolveWhereToWatchTw` (see "Duration and Taiwan broadcast source
+  are deterministic, not AI-guessed" below) always names 愛爾達體育台 when
+  both apply, as a fixed rule rather than an answer that could vary
+  fixture to fixture.
 - Each fixture shows one time range ("7:00 下午 – 9:35 下午") plus a short
   relative countdown next to it, instead of three separate stacked labels -
   the countdown switches from hours to whole days once a fixture is more
   than 24 hours out ("2 天 5 小時後", not "53 小時後"), both computed from
-  the sport's average broadcast length.
+  the fixture's own predicted broadcast length (see "Duration and Taiwan
+  broadcast source are deterministic, not AI-guessed" below).
 - No competitiveness/watchability meters on the card - just the one-sentence
   AI reason. The numbers still drive the plan itself behind the scenes; the
   page itself only ever shows the recommendation, not the data behind it.
@@ -270,6 +274,58 @@ enough on its own to make a mediocre match beat a genuinely great one. The
 order is stored in `localStorage` (per-browser, nothing sent anywhere) and
 re-ranking re-runs the whole plan and re-renders immediately, without
 closing the panel or reloading.
+
+## Duration and Taiwan broadcast source are deterministic, not AI-guessed
+
+Two things that used to be either a flat guess or a per-fixture Gemini
+judgment call are now plain, auditable rules computed entirely from ESPN's
+own fixture data - no network call, no dependence on Gemini being
+reachable, same answer every time for the same input:
+
+- **Per-fixture predicted duration** (`scripts/sport-duration.mjs`) — every
+  fixture used to get one flat per-league average (every MLB game: 190
+  minutes, regardless of which two teams were playing). Real per-team pace
+  varies by roughly 20 minutes across MLB alone, so this is now a real
+  formula per sport: MLB averages each team's own documented pace offset
+  (plus a Coors Field venue modifier and a fixed 2026 Automated
+  Ball-Strike challenge-review padding), NBA adds an expected-value
+  overtime term plus a rivalry/national-broadcast modifier, EPL adds a
+  derby modifier (clamped to a realistic min/max), and F1's race session
+  uses a per-circuit baseline (fuzzy-matched from ESPN's own circuit name)
+  capped at the sport's real regulatory maximum. Every input is a fact
+  already available pre-game from ESPN's own scoreboard (team names,
+  venue, national broadcaster) - nothing here is knowable only after the
+  fact (a blowout margin, a safety car, actual weather), and nothing here
+  is a guess: an unrecognized team/circuit just contributes a neutral
+  default rather than skewing the estimate or failing the build. This
+  feeds every scheduling decision downstream (`public/lib/
+  recommendation.mjs`'s `effectiveDurationMinutes`/
+  `schedulingDurationMinutes`/overrun buffer), not just the on-card time
+  range, so a more accurate per-fixture number improves the whole viewing
+  plan, not just what's printed on one card.
+- **Taiwan broadcast source** (`resolveWhereToWatchTw` in
+  `scripts/build-data.mjs`) — 愛爾達體育台 is the hardcoded default for
+  every sport this site covers. The one exception is MLB's Apple TV
+  "Friday Night Baseball" package, a genuine global streaming exclusive
+  with no regional blackout - ESPN's own `broadcast` field (already
+  fetched for every fixture) already reports this reliably, so detecting
+  it is a plain string check (`/apple\s*tv/i` against that field, MLB
+  fixtures only), never a live search or a model guess.
+
+**Gemini's role here is now explicitly secondary, not the decision-maker**:
+the shared proxy's `/match-recommend` can still return its own
+`whereToWatchTw` guess (its own training-data knowledge, or its grounded
+search pass — see "AI recommendations" below), and `build-data.mjs` still
+records it on each fixture as `aiSuggestedWhereToWatchTw` in
+`public/data/matches.json` — but purely as a secondary signal for spot-
+checking the rule against reality, never what's actually shown to a
+viewer (`whereToWatchTw`, computed by the rule above, is what the page
+renders). This mirrors the same posture Gemini's competitiveness/
+watchability scoring has always had toward `computeDayPlan`'s scheduler
+(see "AI recommendations" below): a signal that feeds a deterministic
+process, never the final word by itself - applied here to duration and
+broadcast source too, both of which no longer need Gemini's judgment at
+all, only ESPN's own already-fetched fixture data.
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 
@@ -469,12 +525,13 @@ Worker in its own dedicated repo,
 (`worker.js`, route `/match-recommend`) — this repo doesn't hold, and never
 needs, a Gemini API key of its own. That Worker also backs two sibling
 sites' own AI/sync features (Orbit, Orbit Vocab), so it's already deployed
-and configured if either of those is already running. `whereToWatchTw` in
-particular is grounded in an actual Google Search lookup on the proxy's
-side (broadcast rights are often team/game-specific, not sport-wide — e.g.
-some MLB teams' games air exclusively on Apple TV rather than the usual
-愛爾達/緯來), rather than answered from the model's static training-time
-knowledge alone.
+and configured if either of those is already running. The proxy still runs
+a grounded Google Search lookup for its own `whereToWatchTw` guess, but
+this repo no longer treats that answer as authoritative - see "Duration
+and Taiwan broadcast source are deterministic, not AI-guessed" above for
+why the actual displayed broadcast source is now a hardcoded rule, with
+the proxy's guess kept only as a secondary `aiSuggestedWhereToWatchTw`
+signal for spot-checking the rule.
 
 `/match-recommend` scores a whole batch of fixtures in one call, and its
 prompt explicitly asks Gemini to COMPARE same-day/overlapping fixtures
@@ -527,7 +584,9 @@ interval scheduling, `computeDayPlan`, `resolveViewingPlan`, confidence) -
 extracted out of `public/app.js` specifically so it's testable without a
 DOM and reusable from `scripts/build-data.mjs`. `npm test` (`node --test`,
 no dependencies to install) runs `tests/*.test.mjs` against it, plus
-`scripts/build-data.mjs`'s own pure ESPN-shape helpers and
+`scripts/build-data.mjs`'s own pure ESPN-shape helpers (including
+`resolveWhereToWatchTw`/`computeDurationMinutes`),
+`scripts/sport-duration.mjs`'s own per-sport duration formulas, and
 `scripts/evaluate-recommendations.mjs` below. Also runs as its own step in
 `.github/workflows/deploy.yml`, before the build step, on every push/
 schedule/dispatch. See `docs/recommendation-engine-audit.md` for the fuller

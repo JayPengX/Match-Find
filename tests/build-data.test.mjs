@@ -11,7 +11,9 @@ import {
   oddsContext,
   heuristicScore,
   isEvidenceStale,
-  sanitizeCachedEvidenceItem
+  sanitizeCachedEvidenceItem,
+  resolveWhereToWatchTw,
+  computeDurationMinutes
 } from '../scripts/build-data.mjs';
 
 describe('isTimeTbd', () => {
@@ -115,6 +117,38 @@ describe('sanitizeCachedEvidenceItem', () => {
     const item = sanitizeCachedEvidenceItem({ category: 'recentContext', finding: 'x'.repeat(500), source: 'y'.repeat(500) });
     assert.ok(item.finding.length <= 200);
     assert.ok(item.source.length <= 80);
+  });
+});
+
+describe('resolveWhereToWatchTw (the hardcoded Taiwan broadcast rule)', () => {
+  test('defaults every sport to 愛爾達體育台', () => {
+    assert.equal(resolveWhereToWatchTw({ sport: 'Premier League', broadcast: 'Peacock' }), '愛爾達體育台');
+    assert.equal(resolveWhereToWatchTw({ sport: 'NBA', broadcast: 'TNT' }), '愛爾達體育台');
+    assert.equal(resolveWhereToWatchTw({ sport: 'F1', broadcast: 'Apple TV' }), '愛爾達體育台');
+  });
+
+  test('an MLB fixture ESPN lists as Apple TV overrides the default', () => {
+    assert.equal(resolveWhereToWatchTw({ sport: 'MLB', broadcast: 'Apple TV' }), 'Apple TV');
+    assert.equal(resolveWhereToWatchTw({ sport: 'MLB', broadcast: 'AppleTV+' }), 'Apple TV');
+  });
+
+  test('an ordinary MLB broadcaster still defaults to 愛爾達體育台', () => {
+    assert.equal(resolveWhereToWatchTw({ sport: 'MLB', broadcast: 'Fox' }), '愛爾達體育台');
+    assert.equal(resolveWhereToWatchTw({ sport: 'MLB', broadcast: '' }), '愛爾達體育台');
+  });
+});
+
+describe('computeDurationMinutes', () => {
+  test('routes MLB/NBA/EPL through their own sport-duration.mjs formula', () => {
+    const away = { name: 'New York Yankees' };
+    const home = { name: 'Tampa Bay Rays' };
+    const mlb = computeDurationMinutes({ id: 'mlb', durationMinutes: 190 }, away, home, '', '');
+    assert.notEqual(mlb, 190); // the flat fallback would have been 190 - this should be the real formula's output
+  });
+
+  test('falls back to the league\'s own flat duration for an unrecognized league id', () => {
+    const duration = computeDurationMinutes({ id: 'mls', durationMinutes: 120 }, { name: 'A' }, { name: 'B' }, '', '');
+    assert.equal(duration, 120);
   });
 });
 
