@@ -1353,7 +1353,28 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // own comment.
       interactedStack = { dayKey, slotKey, memberOrderKey: wrapper.dataset.memberOrderKey, node: wrapper };
       wrapper.dataset.primaryId = chosen.id;
-      pinSlotChoice(dayKey, slotKey, chosen.id);
+      // Double rAF, not a direct call: render(0, true) just above set this
+      // track's `transform` to its committed value with the CSS transition
+      // enabled (see that function's own comment) - but pinSlotChoice's own
+      // renderSections() detaches and reappends this exact node
+      // synchronously (the reuse path a few lines down in
+      // renderRecommendedSection), in the SAME tick, before the browser has
+      // painted a single frame of that transition. Confirmed live-reported:
+      // this reads fine on Chromium (this repo's only real browser-
+      // automation target, see this function's own history/comment on why)
+      // but reliably freezes the slide animation mid-flight on real Safari,
+      // leaving the card stuck part-way between cards - reparenting an
+      // element mid-transition, before its first paint, is exactly the kind
+      // of WebKit-vs-Chromium timing gap a Chromium-only sandbox can't
+      // catch. The first rAF fires before the NEXT paint (too early - that
+      // paint hasn't happened yet); the second one runs in the frame AFTER
+      // it, once the transition has genuinely started rendering, so the
+      // reparent below only ever interrupts an ALREADY-PLAYING transition
+      // (which every tested browser, WebKit included, carries through
+      // correctly) instead of one that never got a chance to start.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => pinSlotChoice(dayKey, slotKey, chosen.id));
+      });
     }
   }
 
