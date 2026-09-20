@@ -1768,3 +1768,105 @@ surface symptom:**
 
 279/279 tests pass (up from 276, three new cases for the finished-duration
 cap).
+
+## Round 14: EPL draws bug, undiluted marquee bonus, MLB overrun tuning, exact-tie variety, and a real persistence bug found along the way
+
+Triggered by a further live report insisting on the EXACT same three
+threads Round 13 pushed back on (one wrongly) plus a genuinely new one:
+
+- *"9/20 TW time should recommend Liverpool vs Bournemouth (currently
+  Palace vs Leeds)"* - traced to a REAL, previously-unnoticed data bug:
+  `parseOverallRecord` (build-data.mjs) captured a soccer record's third
+  regex group (draws) but discarded it, keeping only `{wins, losses}`.
+  ESPN's real 2026-09-20 summary for Crystal Palace was `"1-1-3"` (1 win,
+  1 loss, 3 draws - 5 games), but this function read it as `{wins:1,
+  losses:1}` - a fake 2-game, .500 record instead of the real 5-game,
+  .200 one. That inflated Crystal Palace's win% enough to make Crystal
+  Palace @ Leeds United's season-closeness score (8) beat Liverpool @ AFC
+  Bournemouth (3) outright. Fixed by keeping the third group as `ties` and
+  including it in games-played (never in the win numerator). Even after
+  the fix, though, Liverpool/Bournemouth's raw bestMatchScore STILL didn't
+  clear Palace/Leeds - isBigClub's own +2 watchability bump (added in an
+  earlier round for this exact matchup) only reaches the final blend
+  diluted through watchability's 0.35 weight (+0.7 net), nowhere near
+  enough. Added `isMarqueeFixture`/`MARQUEE_FIXTURE_SCORE_BONUS` (+2) to
+  recommendation.mjs, applied UNDILUTED directly on top of bestMatchScore
+  (same treatment as the existing priority/service nudges), reading
+  straight off `objectiveFactors`' already-shipped derby/big-club/rivalry
+  strings rather than a new build-time field.
+- *"9/23, 9/25 10:10 both Padres vs Dodgers... it should only show once"*
+  plus a new, precise complaint: *"I can't swipe on the card stack that is
+  not the first... any other match will kill the first card stack, we
+  should allow that... it has to be able to kill the first card and make
+  them the only card"* and *"the ~10-15 minute overlap [blocking Rays vs
+  Yankees] is acceptable... optimize the engine further." A from-scratch
+  live simulation (fetching matches.json fresh, replicating
+  computeWindowPlan exactly as app.js does) fully reproduced all of it
+  this time:
+  - Tampa Bay Rays @ New York Yankees (9/24 23:05 UTC, enduranceScore 9)
+    missed San Diego Padres @ Los Angeles Dodgers' 02:10 UTC start by
+    exactly ~15 minutes, purely from `DURATION_OVERRUN_BUFFER_BY_
+    RELIABILITY.low`'s 25% MLB padding (152.28min effective duration *
+    1.25 + 10min transition = 200.35min reserved, 15.35min past the
+    185min actually available) - losing the whole slot to a lower-scoring
+    Reds/Braves + Padres/Dodgers combination even though Rays/Yankees
+    outscored both on every axis. Brought the low-reliability buffer down
+    from 0.25 to 0.12 (still real padding - ~19min on a 162min game - just
+    no longer manufacturing a false conflict out of padding alone for a
+    typical MLB back-to-back gap).
+  - Separately, once that was fixed, Padres/Dodgers (already recommended
+    2 days earlier) and Houston Astros @ Athletics (a fresh matchup) came
+    out to the EXACT SAME total whole-day plan value (16.725) for 9/25's
+    late slot, once both candidates' variety penalties were capped to the
+    same 2.5 - a genuine coin-flip the DP happened to resolve by original
+    array order, not any real quality difference, so the same matchup kept
+    winning back-to-back recommended days by implementation accident.
+    Added `VARIETY_TIEBREAK_FACTOR` (0.001, scaled by each candidate's own
+    UNCAPPED penalty total, so the more-penalized/already-repeated
+    candidate loses an otherwise-exact tie) - far below this system's real
+    score granularity (every input is an integer 1-10 through weights that
+    are themselves multiples of 0.05), so it can only ever decide an
+    actual tie, never override a real gap ALTERNATIVE_MAX_SCORE_GAP's own
+    cap protects.
+  - The "can't swipe on a later stack" report was the user's own correct
+    diagnosis: a slot whose conflict cluster has only one member renders
+    as a plain, non-swipeable card (renderRecommendedSection's own
+    `!alternatives.length` branch) - there's nothing to swipe TO within
+    that cluster. The actual ask was a new capability: let a viewer
+    override ANY slot with a match from anywhere else that day, killing
+    (excluding) whatever it conflicts with. computeDayPlan's forcedIds/
+    excludedIds pinning mechanism already does exactly this generically
+    for any matchId - the missing piece was purely a UI entry point.
+    Added a "設為偏好" button to buildMatchCard (shown on any not-yet-
+    recommended, non-quiet-hours card) wired to a new `preferMatch`
+    function that computes the target's own conflict cluster fresh and
+    calls the existing `pinSlotChoice` - no core scheduling changes
+    needed. Verified live in a browser: preferring a buried Padres/Dodgers
+    card correctly forced it in as a lone 偏好 card and reshuffled the
+    rest of the day's plan around it.
+  - Together, all three fixes (marquee bonus doesn't touch MLB; overrun
+    buffer + tie-break together) produced a fully re-verified live window
+    with genuine day-to-day MLB variety and no repeated matchup within a
+    2-day gap - confirmed via a fresh whole-window simulation.
+- **A real, independent, previously-undetected bug found while manually
+  testing the new "設為偏好" button in a browser**: pinning a match, then
+  doing a FULL PAGE RELOAD, silently lost the pin every time - even though
+  `localStorage` still had it. Root cause: `state`'s object literal
+  (app.js) called `pinnedChoices: loadPinnedChoices()` directly, but
+  `loadPinnedChoices` reads `PINNED_CHOICES_STORAGE_KEY`, a `const`
+  declared ~350 lines later in the same file. Module top-level code runs
+  top-to-bottom, so referencing that binding from inside the state literal
+  hit it while still in the temporal dead zone, threw a `ReferenceError`
+  caught by `loadPinnedChoices`'s own try/catch, and silently returned an
+  empty Map - on EVERY page load, for EVERY pin, ever since (this is a
+  general, longstanding bug, not specific to the new button).
+  `savePinnedChoices` mid-session always worked fine, which is exactly why
+  this went unnoticed: a pin looked like it was working right up until the
+  next real reload. Fixed the same way `state.priorityOrder` already
+  avoids this trap: `pinnedChoices: new Map()` in the literal, with the
+  real `state.pinnedChoices = loadPinnedChoices()` moved to a separate
+  statement placed after the storage key is actually declared. Verified
+  with a Playwright test that pins a match, reloads the page, and confirms
+  the pin (and its 偏好 tag) survives.
+
+283/283 tests pass (up from 279).

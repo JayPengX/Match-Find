@@ -31,6 +31,8 @@ import {
   BEST_MATCH_WEIGHTS,
   PRIORITY_SCORE_DELTA,
   OWNED_SERVICE_SCORE_BONUS,
+  isMarqueeFixture,
+  MARQUEE_FIXTURE_SCORE_BONUS,
   resolveSportTiming,
   schedulingDurationMinutes,
   schedulingInterval,
@@ -172,7 +174,7 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(notOwned.adjustments.service, 0);
   });
 
-  test('effectiveScore is exactly bestMatchScore + priority + service, nothing hidden', () => {
+  test('effectiveScore is exactly bestMatchScore + priority + service + marquee, nothing hidden', () => {
     const match = makeMatch({ sport: 'MLB', watchability: 7, broadcastQuality: 9, whereToWatchTw: 'Apple TV' });
     const breakdown = computeEffectiveScore(match, {
       priorityOrder: ['MLB', 'NBA'],
@@ -180,8 +182,24 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     });
     assert.equal(
       breakdown.effectiveScore,
-      breakdown.bestMatchScore + breakdown.adjustments.priority + breakdown.adjustments.service
+      breakdown.bestMatchScore + breakdown.adjustments.priority + breakdown.adjustments.service + breakdown.adjustments.marquee
     );
+  });
+
+  // Live-verified case (docs/recommendation-engine-audit.md Round 14):
+  // Liverpool @ AFC Bournemouth (2026-09-20) lost its slot to Crystal Palace
+  // @ Leeds United even after isBigClub's own +2 watchability bump, because
+  // that bump only reaches bestMatchScore diluted through watchability's own
+  // 0.35 weight (worth +0.7 net, nowhere near enough). The marquee bonus is
+  // applied UNDILUTED, on top of bestMatchScore, same as priority/service.
+  test('a marquee fixture (derby/big-club/rivalry) gets its bonus applied undiluted, not blended through watchability', () => {
+    const marquee = makeMatch({ objectiveFactors: ['known big-club fixture'] });
+    const plain = makeMatch({ objectiveFactors: ['season win% gap 5.0pp'] });
+    const marqueeBreakdown = computeEffectiveScore(marquee, {});
+    const plainBreakdown = computeEffectiveScore(plain, {});
+    assert.equal(marqueeBreakdown.adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
+    assert.equal(plainBreakdown.adjustments.marquee, 0);
+    assert.equal(marqueeBreakdown.effectiveScore, marqueeBreakdown.bestMatchScore + MARQUEE_FIXTURE_SCORE_BONUS);
   });
 
   test('computeRecommendationScore composes the score breakdown with confidence', () => {
@@ -191,6 +209,18 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(result.confidence, CONFIDENCE_OBJECTIVE);
     assert.ok(result.adjustments);
     assert.equal(typeof result.baseScore, 'number');
+  });
+});
+
+describe('isMarqueeFixture', () => {
+  test('true for derby/big-club/rivalry factor strings, false otherwise', () => {
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known derby fixture'] })), true);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known big-club fixture'] })), true);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known historic rivalry matchup'] })), true);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known rivalry matchup'] })), true);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['season win% gap 5.0pp'] })), false);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: [] })), false);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: undefined })), false);
   });
 });
 
@@ -663,8 +693,8 @@ describe('Test 5 - MLB continuation respects the real overrun-padded end, not ju
 
   test('a later match CAN follow an MLB game once its overrun-padded end has passed', () => {
     const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
-    // schedulingInterval(game).end = 18:00 + 190*1.25 (overrun) + 10
-    // (transition buffer) minutes = 22:07:30.
+    // schedulingInterval(game).end = 18:00 + 190*1.12 (overrun) + 10
+    // (transition buffer) minutes = 21:42:48.
     const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T22:10:00.000Z', effectiveScore: 7 });
     assert.ok(canWatchSequentially(game, next));
   });
@@ -774,12 +804,46 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
     );
     // Uncapped, a2's planningScore would have been 8 - 2.5 - 1.5 = 4.0,
     // losing to b's 5 despite a2's own effectiveScore leading by 3 -
-    // capped at 2.5, a2's planningScore is 8 - 2.5 = 5.5, correctly still
+    // capped at 2.5 (plus a negligible tie-break factor scaled off that
+    // same uncapped 4.0 - see VARIETY_TIEBREAK_FACTOR's own comment),
+    // a2's planningScore is 8 - 2.5 - 4.0*0.001 = 5.496, correctly still
     // ahead of b.
     assert.equal(a2.recentRepeatPenalty, 2.5);
     assert.equal(a2.sportConcentrationPenalty, SPORT_CONCENTRATION_PENALTY);
-    assert.equal(a2.planningScore, 5.5);
+    assert.equal(a2.planningScore, 5.496);
     assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['a2']);
+  });
+
+  // Live-verified case (docs/recommendation-engine-audit.md Round 14): San
+  // Diego Padres @ Los Angeles Dodgers, recommended on 9/23, was ALSO
+  // recommended on 9/25's late slot ahead of Houston Astros @ Athletics -
+  // both sequences totaled the exact same whole-day plan value once the cap
+  // above capped both candidates' penalties to the same 2.5, a genuine
+  // coin-flip the DP resolved by array order, not by any real quality
+  // difference. VARIETY_TIEBREAK_FACTOR exists to resolve exactly this: the
+  // MORE heavily penalized (already-repeated) candidate should lose an
+  // otherwise-exact tie to a comparable, less-recently-shown alternative.
+  test('an exact tie between a repeated matchup and a fresh alternative in the SAME slot is broken toward variety', () => {
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Repeated Matchup' })];
+    // Same start time as freshAlt below (and same duration) - a direct,
+    // mutually-exclusive conflict, exactly like two MLB games airing at the
+    // same time. 2 days later: repeat penalty 1.5
+    // (RECENT_REPEAT_PENALTY_BY_GAP_DAYS[2]) + sport concentration 1.5
+    // (day1's only pick was also MLB) = 3.0 uncapped, capped to 2.5.
+    const repeated = mlbMatch({ id: 'repeated', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 9, name: 'Repeated Matchup' });
+    // A different matchup, same sport (still MLB, still hits the same 1.5
+    // concentration penalty alone, no repeat) - deliberately scored so that
+    // WITHOUT the tie-break factor both candidates' planningScore lands on
+    // the exact same 6.5 (9 - 2.5 = 8 - 1.5).
+    const freshAlt = mlbMatch({ id: 'fresh', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 8, name: 'Fresh Matchup' });
+    const { plan } = computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-21', [repeated, freshAlt]]
+      ])
+    );
+    assert.ok(repeated.planningScore < freshAlt.planningScore, 'the already-repeated candidate should lose the tie');
+    assert.deepEqual(plan.get('2026-09-21').map(m => m.id), ['fresh']);
   });
 
   test('matchupKey is order-independent and keeps F1 session types distinct', () => {
@@ -837,7 +901,8 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
     const match = footballMatch({ id: 'a', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8 });
     applyRecentRepeatPenalties([match], '2026-09-20', new Map([[matchupKey(match), '2026-09-19']]));
     assert.equal(match.effectiveScore, 8);
-    assert.equal(match.planningScore, 5.5);
+    // 8 - 2.5 (capped repeat penalty) - 2.5*0.001 (VARIETY_TIEBREAK_FACTOR) = 5.4975.
+    assert.equal(match.planningScore, 5.4975);
   });
 });
 
@@ -1005,7 +1070,9 @@ describe('Invariant checks', () => {
     // score floor (see weightedIntervalSchedule) means a non-conflicting
     // candidate is never worse than recommending nothing - but the cap
     // still matters the moment a real (if weaker) rival exists.
-    assert.equal(a2.planningScore, 5.5);
+    // 8 - 2.5 (capped) - 4.0*0.001 (VARIETY_TIEBREAK_FACTOR, off the
+    // uncapped 4.0) = 5.496.
+    assert.equal(a2.planningScore, 5.496);
   });
 });
 

@@ -151,6 +151,37 @@ export const PRIORITY_SCORE_DELTA = 1;
 // for" without turning this into a hard filter.
 export const OWNED_SERVICE_SCORE_BONUS = 0.5;
 
+// True when scripts/objective-score.mjs already flagged this fixture as a
+// real, independently-known draw (a derby, a "Big Six"-style globally
+// followed club, or a historic rivalry) - see that module's own EPL/MLB/NBA
+// comments for why this exists at all: a pure win%-based formula has no way
+// to see that a famous club/rivalry pulls mainstream attention regardless of
+// this particular season's record. Read straight off `objectiveFactors`
+// (already shipped in matches.json, see build-data.mjs) rather than needing
+// a brand new build-time field - every relevant factor string already has a
+// stable, matchable substring.
+const MARQUEE_FACTOR_SUBSTRINGS = ['derby fixture', 'big-club fixture', 'rivalry matchup'];
+export function isMarqueeFixture(match) {
+  return Array.isArray(match.objectiveFactors) && match.objectiveFactors.some(f => MARQUEE_FACTOR_SUBSTRINGS.some(s => f.includes(s)));
+}
+
+// Live-verified case this exists for (docs/recommendation-engine-audit.md
+// Round 14): Liverpool @ AFC Bournemouth (2026-09-20) still lost its slot to
+// Crystal Palace @ Leeds United even after isBigClub's own +2 watchability
+// bump (see computeEplObjectiveScore) - that bump only ever reaches
+// bestMatchScore diluted through watchability's own 0.35 weight (worth
+// +0.7 to the final blend, nowhere near enough against a competitiveness gap
+// this size). A real-world marquee draw isn't a small tiebreaker the way
+// PRIORITY_SCORE_DELTA/OWNED_SERVICE_SCORE_BONUS are - it's applied here,
+// UNDILUTED, directly on top of bestMatchScore, the same way those other two
+// nudges already are, so it actually moves the number by its full stated
+// value instead of losing 65% of itself in a weighted average. Deliberately
+// flat (one flag, one bonus) rather than stacking multiple marquee factors -
+// a derby between two big clubs is already unambiguously marquee; it
+// doesn't need to out-bid a non-marquee fixture by more just for having two
+// reasons instead of one.
+export const MARQUEE_FIXTURE_SCORE_BONUS = 2;
+
 // The full breakdown behind one match's effectiveScore - `baseScore` is the
 // AI's own build-time composite (`match.score`, untouched by any viewer-
 // relative nudge), `bestMatchScore` is that same match after the one
@@ -167,6 +198,7 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
   const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
   const service = resolveService(match.whereToWatchTw);
   const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
+  const marqueeNudge = isMarqueeFixture(match) ? MARQUEE_FIXTURE_SCORE_BONUS : 0;
 
   const baseScore = Number.isFinite(match.score) ? match.score : 0;
   const bestScore = bestMatchScore(match);
@@ -185,9 +217,10 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
     adjustments: {
       blend: Math.round(blendAdjustment * 1000) / 1000,
       priority: priorityNudge,
-      service: serviceNudge
+      service: serviceNudge,
+      marquee: marqueeNudge
     },
-    effectiveScore: bestScore + priorityNudge + serviceNudge
+    effectiveScore: bestScore + priorityNudge + serviceNudge + marqueeNudge
   };
 }
 
@@ -336,7 +369,23 @@ export function resolveSportTiming(sport) {
 // minute overlaps once the actual broadcast ran anywhere close to its own
 // average length. A high-reliability sport gets 0 - its own nominal length
 // is already trusted as-is, nothing to pad.
-export const DURATION_OVERRUN_BUFFER_BY_RELIABILITY = { high: 0, medium: 0.1, low: 0.25 };
+//
+// `low` brought down from 0.25 to 0.12 (docs/recommendation-engine-audit.md
+// Round 14) - live-verified case: Tampa Bay Rays @ New York Yankees
+// (2026-09-24, enduranceScore 9, effective duration ~152min) missed San
+// Diego Padres @ Los Angeles Dodgers' own 02:10 UTC start by exactly ~15
+// minutes purely because of this buffer's own 25% padding (152*1.25+10min
+// transition = 200min, 15min past the 185min actually available) - losing
+// the whole day's slot to a lower-scoring Reds/Braves+Padres/Dodgers
+// combination even though Rays/Yankees clearly outscored both on every
+// single axis. Explicitly reported and confirmed as an acceptable trade:
+// a 10-15 real-minute overlap is a viewer inconvenience, not the "silently
+// blocks a next pick that could obviously follow it" failure mode this
+// constant exists to prevent (see this comment's own top half) - 0.12 still
+// reserves real extra time for genuine overrun risk (~19min on a 162-min
+// game) while no longer manufacturing a false conflict out of padding alone
+// for a back-to-back MLB slate's own typical ~2.5-3.5 hour gaps.
+export const DURATION_OVERRUN_BUFFER_BY_RELIABILITY = { high: 0, medium: 0.1, low: 0.12 };
 
 // A small, deliberately flat realism buffer between two back-to-back picks
 // (see docs/recommendation-engine-audit.md's "no transition buffer" bug) -
@@ -1129,21 +1178,49 @@ function sportConcentrationPenalty(sport, recentPicks) {
 // override a genuinely decisive lead, not just tip a real toss-up, which
 // is backwards from the stated design intent both here and in
 // ALTERNATIVE_MAX_SCORE_GAP's own comment.
+//
+// A negligible extra nudge, PROPORTIONAL to the uncapped penalty rather
+// than a flat add-on (docs/recommendation-engine-audit.md Round 14) - live-
+// verified case: San Diego Padres @ Los Angeles Dodgers (already
+// recommended two days earlier - repeat 1.5 + concentration 1.5 = 3.0
+// uncapped) and Houston Astros @ Athletics (concentration 1.5 only, no
+// repeat) landed on the EXACT same total whole-day plan value (16.725
+// either way) for 2026-09-25's late slot once both were capped to the same
+// 2.5 - a genuine coin-flip the DP happened to resolve by original array
+// order, not by any real quality difference, so the SAME matchup kept
+// winning its slot on back-to-back recommended days purely by
+// implementation accident. Scaling by the UNCAPPED total (rather than
+// adding one flat constant whenever any penalty applies at all) is what
+// actually breaks that tie: Padres/Dodgers' own uncapped 3.0 picks up
+// slightly more of this nudge than Astros/A's uncapped 1.5, so the more
+// heavily/repeatedly penalized candidate loses the coin-flip, while a flat
+// per-match add-on would have cancelled out between them and changed
+// nothing. The factor (0.001) is far below this system's real score
+// granularity (every input here is an integer 1-10 combined through
+// weights that are themselves multiples of 0.05, so two genuinely
+// different sequences never land closer than that) - it can only ever
+// decide an actual tie, never override a real gap the cap above protects.
+const VARIETY_TIEBREAK_FACTOR = 0.001;
 export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks = []) {
   dayMatches.forEach(match => {
     const lastDayKey = lastRecommendedDayKey.get(matchupKey(match));
     const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
     const repeatPenalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
     const sportPenalty = sportConcentrationPenalty(match.sport, recentPicks);
-    const varietyPenalty = Math.min(ALTERNATIVE_MAX_SCORE_GAP, repeatPenalty + sportPenalty);
+    const uncappedPenalty = repeatPenalty + sportPenalty;
+    const varietyPenalty = Math.min(ALTERNATIVE_MAX_SCORE_GAP, uncappedPenalty) + uncappedPenalty * VARIETY_TIEBREAK_FACTOR;
     // Recomputed fresh every call (never accumulated) from match's own
     // CURRENT competitor scores - see liveExcitementBonus's own comment.
     const liveBonus = liveExcitementBonus(match);
     match.recentRepeatPenalty = repeatPenalty;
     match.sportConcentrationPenalty = sportPenalty;
     match.liveExcitementBonus = liveBonus;
+    // Rounded to 6dp purely to avoid float noise from the tiny tie-break
+    // factor above (e.g. 8 - 2.5025 landing on 5.4974999999999996 instead of
+    // 5.4975) - 6dp is still far finer than VARIETY_TIEBREAK_FACTOR's own
+    // 0.001, so this never masks a real difference, only binary float grot.
     match.planningScore =
-      (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - varietyPenalty + liveBonus;
+      Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - varietyPenalty + liveBonus) * 1e6) / 1e6;
   });
 }
 

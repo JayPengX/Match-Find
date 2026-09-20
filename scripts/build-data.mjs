@@ -268,19 +268,29 @@ async function fetchJson(url) {
   return response.json();
 }
 
-// One competitor's overall win-loss record as {wins, losses}, or null if
-// ESPN didn't report one (a brand new season, or a sport/league whose
-// records aren't shaped like "W-L", e.g. soccer's points-based standings
-// aren't summarized here at all). Feeds both the objective scoring engine's
-// win% signal and the short human-readable context string handed to
-// Gemini - never trusted for anything more precise than "roughly how good
-// is this team right now".
+// One competitor's overall record as {wins, losses, ties}, or null if ESPN
+// didn't report one (a brand new season, or a sport/league whose records
+// aren't shaped like this at all). `ties` is the regex's own third group -
+// 0 for MLB/NBA's plain "W-L" summary (no such thing as a tie), but a real,
+// load-bearing number for EPL's own "W-L-D" summary, where it means DRAWS.
+// Live-verified bug this fixes: Crystal Palace's real 2026-09-20 summary was
+// "1-1-3" (1 win, 1 loss, 3 draws - 5 games played), but this function used
+// to keep only the first two numbers, silently discarding the draws from
+// BOTH the numerator and the denominator - not merely rounding them off,
+// but deleting 3 of the team's 5 games from existence. That read Palace as
+// a small-sample 1-1 (.500) side instead of the real, much worse 1-1-3
+// (.200) one, directly inflating computeEplObjectiveScore's season-closeness
+// signal (a fake near-.500-vs-.400 "close game" instead of the real
+// .200-vs-.400 gap) - see docs/recommendation-engine-audit.md's Round 14.
+// Feeds both the objective scoring engine's win% signal and the short
+// human-readable context string handed to Gemini - never trusted for
+// anything more precise than "roughly how good is this team right now".
 export function parseOverallRecord(competitor) {
   const summary = (competitor.records || []).find(r => r.type === 'total' || r.name === 'overall')
     ?.summary;
   const match = /^(\d+)-(\d+)(?:-(\d+))?$/.exec(summary || '');
   if (!match) return null;
-  return { wins: Number(match[1]), losses: Number(match[2]) };
+  return { wins: Number(match[1]), losses: Number(match[2]), ties: Number(match[3] || 0) };
 }
 
 function buildCompetitor(leagueId, c) {
@@ -303,7 +313,11 @@ function buildCompetitor(leagueId, c) {
 
 function competitorContext(competitor) {
   const record = competitor.record;
-  return record ? `${competitor.name} (${record.wins}-${record.losses})` : competitor.name;
+  if (!record) return competitor.name;
+  // Ties only ever print for a sport that actually has them (EPL) - a
+  // trailing "-0" on every MLB/NBA context string would be dead noise.
+  const suffix = record.ties ? `-${record.ties}` : '';
+  return `${competitor.name} (${record.wins}-${record.losses}${suffix})`;
 }
 
 // ESPN's own on-record betting line for the fixture, when a provider has
@@ -572,8 +586,14 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
   // renormalizes away via weightedAverage instead of being treated as a
   // real value - that guard just never worked while a missing record's
   // "0 games" was itself indistinguishable from "a real 0.000 average".
-  const awayGames = away?.record ? away.record.wins + away.record.losses : 0;
-  const homeGames = home?.record ? home.record.wins + home.record.losses : 0;
+  // Ties count toward games PLAYED (the denominator) but never toward wins
+  // (the numerator) - a draw is worth more than a loss but isn't a win, and
+  // leaving it out of the denominator entirely (the bug parseOverallRecord's
+  // own comment documents) understates how many games a draw-heavy team has
+  // actually played, inflating its win% toward whatever its wins/losses
+  // alone happen to divide out to.
+  const awayGames = away?.record ? away.record.wins + away.record.losses + (away.record.ties || 0) : 0;
+  const homeGames = home?.record ? home.record.wins + home.record.losses + (home.record.ties || 0) : 0;
   const awayWinPct = awayGames > 0 ? away.record.wins / awayGames : null;
   const homeWinPct = homeGames > 0 ? home.record.wins / homeGames : null;
 

@@ -54,6 +54,8 @@ import {
   computeDayPlan,
   resolveViewingPlan,
   slotKeyFromMembers,
+  groupIntoSlots,
+  isQuietHours,
   computeOverlapRange,
   isNearTotalOverlap,
   computeWindowPlan,
@@ -96,7 +98,19 @@ const state = {
   // days' entries get pruned (see prunePinnedChoices) rather than kept
   // forever, since a day that's aged out of the fetched window can never be
   // looked up again anyway.
-  pinnedChoices: loadPinnedChoices(),
+  //
+  // Starts empty here, deliberately - the REAL load (state.pinnedChoices =
+  // loadPinnedChoices()) happens as a separate statement further down,
+  // same pattern as state.priorityOrder below. loadPinnedChoices() reads
+  // PINNED_CHOICES_STORAGE_KEY, a `const` declared much later in this file
+  // (module top-level code runs top-to-bottom) - calling it HERE, still
+  // inside this very literal, hit that binding while it was still in the
+  // temporal dead zone, threw a caught-and-swallowed ReferenceError, and
+  // silently discarded every pin on every single page load. Live-reported
+  // as "swiping to a preference doesn't survive a reload" - the pin was
+  // sitting untouched in localStorage the whole time (savePinnedChoices
+  // still worked fine mid-session), just never read back on the load path.
+  pinnedChoices: new Map(),
   // Map<dayKey, Map<matchupKey, dayKey>> - computeWindowPlan's
   // historyByDayKey: for each day, the most recent EARLIER day (across the
   // WHOLE fetched window, regardless of the current sport filter) that
@@ -456,6 +470,11 @@ function savePinnedChoices() {
     // Private browsing / blocked storage - see savePriorityOrder's own comment.
   }
 }
+// The REAL load - see state.pinnedChoices's own comment in the state
+// literal above for why this can't happen there directly (PINNED_CHOICES_
+// STORAGE_KEY's own TDZ), same pattern as state.priorityOrder's assignment
+// right after loadPriorityOrder above.
+state.pinnedChoices = loadPinnedChoices();
 // Called on every applyEnabledSportsAndRender (a fresh data load, or a
 // sport toggle) - state.days moves forward with the fetched window, and a
 // pin for a day that's fallen off the back of it, or simply passed, can
@@ -784,6 +803,32 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   renderSections();
 }
 
+// Lets a viewer promote ANY not-currently-recommended candidate straight
+// from its own card into a hard pin, via the exact same forcedIds/
+// excludedIds mechanism computeDayPlan already uses for an in-stack swipe
+// (see pinSlotChoice above). Reported directly: a slot whose own conflict
+// cluster has only ONE member renders as a plain, non-swipeable card (see
+// renderRecommendedSection's own `!alternatives.length` branch) - "I can't
+// swipe on the card stack that is not the first... I think it's because
+// that's the only match" - so a viewer who wanted to override THAT slot
+// with a completely different match (one from another time, another
+// cluster, even one that time-conflicts with today's current pick) had no
+// swipe target to act on at all. Computing the match's own conflict cluster
+// FRESH here, the same way computeDayPlan itself will on the very next
+// render, is what makes the pin correctly "kill" (exclude) whatever it
+// pairwise-conflicts with - including a totally different slot's current
+// pick - and, since forcing in a fixture whose own cluster has no other
+// members leaves nothing to show alternatives for, it reduces to a single
+// 偏好 card once forced in: "it has to be able to kill the first card and
+// make them the only card."
+function preferMatch(match) {
+  const dayKey = localDateKey(new Date(match.startTimeUtc));
+  const dayCandidates = dayCandidatesForPlan(dayKey).filter(m => !isQuietHours(m));
+  const cluster = groupIntoSlots(dayCandidates).find(c => c.members.some(m => m.id === match.id));
+  const slotKey = cluster ? slotKeyFromMembers(cluster.members) : match.id;
+  pinSlotChoice(dayKey, slotKey, match.id);
+}
+
 // ---- Rendering ------------------------------------------------------------
 
 function buildTeamRow({ logo, name, nameZh, homeAway }) {
@@ -1001,6 +1046,19 @@ function buildMatchCard(match) {
     else conflictNote.classList.add('is-info');
   }
   if (match.recommended) node.classList.add('is-recommended');
+
+  // "設為偏好" - lets a viewer promote THIS card into a hard pin directly,
+  // without needing it to already be a member of some other slot's swipe
+  // stack - see preferMatch's own comment for why this exists (a slot with
+  // only one cluster member has no swipe stack at all to act on). Never
+  // shown for a match that's already the plan's own choice (nothing to
+  // override) or a quiet-hours fixture (computeDayPlan excludes those from
+  // every candidate set outright, so pinning one would silently do nothing).
+  const preferBtn = node.querySelector('.match-prefer-btn');
+  if (!match.isFinished && !match.recommended && !isQuietHours(match)) {
+    preferBtn.hidden = false;
+    preferBtn.addEventListener('click', () => preferMatch(match));
+  }
 
   // Same single source of truth as relativeLabel above (matchLifecycleState)
   // - isFinished (ESPN's own status) always wins, and LIVE/ENDING_SOON both

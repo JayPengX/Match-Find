@@ -35,10 +35,10 @@ describe('isTimeTbd', () => {
 
 describe('parseOverallRecord', () => {
   test('parses a plain win-loss summary', () => {
-    assert.deepEqual(parseOverallRecord({ records: [{ type: 'total', summary: '93-60' }] }), { wins: 93, losses: 60 });
+    assert.deepEqual(parseOverallRecord({ records: [{ type: 'total', summary: '93-60' }] }), { wins: 93, losses: 60, ties: 0 });
   });
-  test('parses a win-loss-tie summary (ignores the tie count, same as the rest of this codebase)', () => {
-    assert.deepEqual(parseOverallRecord({ records: [{ name: 'overall', summary: '10-4-2' }] }), { wins: 10, losses: 4 });
+  test('parses a win-loss-tie summary, keeping the tie count (EPL: wins-losses-draws)', () => {
+    assert.deepEqual(parseOverallRecord({ records: [{ name: 'overall', summary: '10-4-2' }] }), { wins: 10, losses: 4, ties: 2 });
   });
   test('returns null when no total/overall record is present', () => {
     assert.equal(parseOverallRecord({ records: [{ type: 'home', summary: '5-2' }] }), null);
@@ -154,6 +154,35 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
     const match = { sport: 'NBA', broadcast: 'ESPN', competitors: [{ record: null }, { record: null }] };
     const result = computeMatchObjectiveScore(match, {});
     assert.equal(result.broadcastQuality, 7);
+  });
+
+  // Live-verified regression (2026-09-20, docs/recommendation-engine-audit.md
+  // Round 14): Crystal Palace's real ESPN summary that day was "1-1-3" (1
+  // win, 1 loss, 3 draws), parsed by the OLD parseOverallRecord into just
+  // {wins: 1, losses: 1} - reading Palace as a small-sample 1-1 (.500) side
+  // instead of the real 1-1-3 (.200) one. That fake near-even record made
+  // Crystal Palace @ Leeds United (a genuinely draw-heavy, below-average
+  // side) score competitiveness 8, outranking Liverpool @ AFC Bournemouth
+  // purely on this distortion. Draws must count as games played (denominator)
+  // without ever counting as a win (numerator).
+  test('EPL draws count as games played but never as a win (Crystal Palace 1-1-3 case)', () => {
+    const match = {
+      sport: 'Premier League',
+      broadcast: 'Peacock',
+      oddsSpread: null,
+      oddsOverUnder: null,
+      competitors: [
+        { name: 'Crystal Palace', record: { wins: 1, losses: 1, ties: 3 } },
+        { name: 'Leeds United', record: { wins: 2, losses: 3, ties: 0 } }
+      ]
+    };
+    const result = computeMatchObjectiveScore(match, {});
+    // Real win% gap: Palace 1/5=0.2 vs Leeds 2/5=0.4 -> gap 0.2 -> closeness 6.
+    // The old (buggy) gap was 0.5 vs 0.4 -> gap 0.1 -> closeness 8.
+    assert.ok(result.competitiveness <= 6, `expected the real .2/.4 gap, got competitiveness ${result.competitiveness}`);
+    // avg points-rate (0.2+0.4)/2 = 30.0% - the OLD bug (ignoring ties) would
+    // have reported an inflated (0.5+0.4)/2 = 45.0% here instead.
+    assert.ok(result.factors.some(f => f.includes('avg points-rate 30.0%')));
   });
 });
 

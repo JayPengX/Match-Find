@@ -715,6 +715,28 @@ main#app {
   font-weight: 600;
 }
 
+/* "設為偏好" - promotes a not-currently-recommended card straight into a
+   hard pin (see app.js's preferMatch). Small and quiet by default (this is
+   an override action, not the card's main affordance) but still a real
+   44px tap target, same floor every other tappable control on a card
+   uses. */
+.match-prefer-btn {
+  margin-top: 10px;
+  padding: 8px 14px;
+  min-height: var(--tap);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.match-prefer-btn:hover,
+.match-prefer-btn:active {
+  background: var(--accent-soft);
+}
+
 .empty-state {
   max-width: 760px;
   margin: 0 auto;
