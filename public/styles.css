@@ -655,15 +655,20 @@ main#app {
   font-size: 0.82rem;
   color: var(--text-muted);
 }
-/* Devigged sportsbook win% (see build-data.mjs's parseOddsSignal / public/
-   lib/odds.mjs) - a single track split into an away segment (accent blue)
-   and a home segment (warm amber), so which side is currently favored
-   reads at a glance without needing to parse two separate numbers first. */
+/* Devigged Polymarket win% (see public/lib/polymarket.mjs) - a track split
+   into per-team colored segments (see
+   app.js's teamOddsColor/./lib/color.mjs - each team's own real brand
+   color when it reads legibly, a tuned sport-accent fallback otherwise)
+   so which side is favored, and by whom, reads at a glance. EPL's own
+   market is a genuine three-outcome one, so a middle draw segment (plain
+   neutral gray - a draw has no "team" of its own to color it by) appears
+   whenever real draw odds exist; MLB/NBA's two-outcome market simply never
+   shows one (see .match-odds-seg-draw[hidden] taking zero space). */
 .match-odds {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 6px 0 0;
+  margin: 10px 0 0;
 }
 .match-odds-pct {
   font-size: 0.78rem;
@@ -677,18 +682,55 @@ main#app {
 .match-odds-bar {
   flex: 1;
   height: 6px;
-  border-radius: 999px;
-  /* A translucent RGBA fill, not `opacity` - opacity on this element would
-     also fade its .match-odds-bar-fill child (opacity composites down the
-     whole subtree), which needs to stay fully solid to read as "the
-     favored side" against the muted track underneath it. */
-  background: rgba(255, 184, 77, 0.35);
-  overflow: hidden;
+  display: flex;
+  /* Visible, not hidden - the draw segment's own percentage label sits
+     just above the bar (see .match-odds-seg-label below), which `overflow:
+     hidden` here would otherwise clip. Each end segment rounds its own
+     outer corner directly instead (see .match-odds-seg-away/-home). */
+  overflow: visible;
 }
-.match-odds-bar-fill {
+.match-odds-seg {
   display: block;
   height: 100%;
-  background: var(--accent);
+}
+.match-odds-seg-away { border-radius: 999px 0 0 999px; }
+.match-odds-seg-home { border-radius: 0 999px 999px 0; }
+.match-odds-seg-draw {
+  position: relative;
+  background: var(--text-faint);
+}
+.match-odds-seg-label {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -100%);
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* F1's own odds shape: an outright winner market across ~20 drivers, not a
+   two-/three-way bar (see public/lib/polymarket.mjs's own comment on why
+   this needs an entirely different display) - just the top few favorites
+   as plain "name %" chips, in the sport's own tuned accent color rather
+   than a team color (a driver has no "team fill" concept the way a
+   two-sided match does). */
+.match-odds-outright {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+}
+.match-odds-outright-label {
+  color: var(--text-faint);
+}
+.match-odds-outright-item {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--sport-f1);
 }
 .match-watch {
   display: flex;

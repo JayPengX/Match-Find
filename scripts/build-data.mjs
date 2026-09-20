@@ -62,11 +62,17 @@ import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // forever the way an already-computed score can) so there's exactly one
 // definition of what "confidence" means, not two that could drift.
 import { computeConfidence } from '../public/lib/recommendation.mjs';
-// The same devigged-moneyline-to-win% math the live-poll refresh (public/
-// lib/espn.mjs) uses, kept in one shared pure module so a card's initial
-// build-time percentage and every later live update to it are computed
-// identically - see that module's own top-of-file comment.
-import { parseMoneylineWinPct } from '../public/lib/odds.mjs';
+// The on-card win% odds come from Polymarket, not ESPN - see that module's
+// own top-of-file comment for why (a real prediction market's own trade
+// price needs no American-odds conversion, and it's the only feed here
+// that covers F1 at all). enrichWithPolymarketOdds below is what actually
+// wires this in, once per build, after every match is otherwise built.
+import {
+  POLYMARKET_TAG_ID,
+  polymarketEventsByTagUrl,
+  resolveTeamOdds,
+  resolveF1WinnerOdds
+} from '../public/lib/polymarket.mjs';
 // Deterministic, per-fixture broadcast-length formulas (MLB team pace,
 // NBA/EPL modifiers, F1 circuit baselines), plus the rivalry/derby/
 // national-broadcast detectors the objective scoring engine below reuses
@@ -306,6 +312,15 @@ function buildCompetitor(leagueId, c) {
     abbreviation,
     logo: c.team?.logo || '',
     homeAway: c.homeAway || '',
+    // ESPN's own bare hex strings (no leading #, e.g. "d00027") for this
+    // team's real brand colors - see public/lib/color.mjs's
+    // pickReadableTeamColor, which is what actually decides whether either
+    // one is legible enough to use on the odds bar (some teams' own
+    // primary color is near-black/near-white and unreadable on this app's
+    // background - live-verified real example: Inter Miami CF's primary
+    // is "231f20", almost invisible on this app's dark theme).
+    color: c.team?.color || '',
+    altColor: c.team?.alternateColor || '',
     record: parseOverallRecord(c),
     // Only meaningful once the fixture is live or finished ('pre' fixtures
     // report "0" same as a real scoreless one) - the client only ever reads
@@ -349,12 +364,9 @@ export function parseOddsSignal(competition) {
   const odds = competition.odds?.[0];
   const spread = Number(odds?.spread);
   const overUnder = Number(odds?.overUnder);
-  const winPct = parseMoneylineWinPct(odds?.moneyline);
   return {
     spread: Number.isFinite(spread) ? spread : null,
-    overUnder: Number.isFinite(overUnder) ? overUnder : null,
-    winPctAway: winPct?.away ?? null,
-    winPctHome: winPct?.home ?? null
+    overUnder: Number.isFinite(overUnder) ? overUnder : null
   };
 }
 
@@ -463,8 +475,12 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         isPostseason,
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
-        oddsWinPctAway: oddsSignal.winPctAway,
-        oddsWinPctHome: oddsSignal.winPctHome,
+        // Filled in afterward, once per build, by enrichWithPolymarketOdds
+        // below - never from ESPN.
+        oddsWinPctAway: null,
+        oddsWinPctHome: null,
+        oddsWinPctDraw: null,
+        oddsFavorites: null,
         durationMinutes: isFinished
           ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label)
           : computeDurationMinutes(
@@ -556,8 +572,13 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
         isPostseason: false,
         oddsSpread: null,
         oddsOverUnder: null,
+        // No away/home concept for a multi-driver race - see
+        // oddsFavorites below (filled in for the Race session only, by
+        // enrichWithPolymarketOdds) for F1's own real odds instead.
         oddsWinPctAway: null,
         oddsWinPctHome: null,
+        oddsWinPctDraw: null,
+        oddsFavorites: null,
         durationMinutes,
         venue,
         broadcast: broadcast || '',
@@ -701,6 +722,66 @@ export function buildObjectiveReasonZh(factors) {
   return `依${labels.slice(0, 3).join('、')}計算。`;
 }
 
+// One request per sport that actually has an unfinished fixture this build
+// - not once per fixture, same "one batch request, shared across every
+// fixture that needs it" shape as fetchMlbStandings/fetchF1TitleRaceIntensity
+// just below main(). A finished match keeps null odds (see main's own
+// comment on why finished matches still get scored - odds is different: a
+// game that's already over has no "will they win" left to ask a market).
+// Best-effort per sport: one league's Polymarket fetch failing (rate limit,
+// a transient 5xx) never blocks the rest of the build - those matches just
+// keep their default null odds, same as a fixture no market has posted a
+// line for yet.
+async function enrichWithPolymarketOdds(matches) {
+  const sportsNeeded = new Set();
+  matches.forEach(m => {
+    if (!m.isFinished && POLYMARKET_TAG_ID[m.sport] != null) sportsNeeded.add(m.sport);
+  });
+  const eventsBySport = {};
+  await Promise.all(
+    [...sportsNeeded].map(async sport => {
+      try {
+        eventsBySport[sport] = (await fetchJson(polymarketEventsByTagUrl(POLYMARKET_TAG_ID[sport]))) || [];
+      } catch (error) {
+        console.warn(`Failed to fetch Polymarket odds for ${sport}: ${error.message}`);
+        eventsBySport[sport] = [];
+      }
+    })
+  );
+
+  for (const match of matches) {
+    if (match.isFinished) continue;
+    const events = eventsBySport[match.sport];
+    if (!events) continue;
+
+    if (match.sport === 'F1') {
+      // Only the Race session gets an outright-winner odds display (see
+      // build-data.mjs's own F1_SESSION_TYPES/match id convention -
+      // `-race` is this session's own stable suffix) - a practice/
+      // qualifying session isn't "who wins the Grand Prix" itself.
+      if (!match.id.endsWith('-race')) continue;
+      const raceDateUtc = match.startTimeUtc.slice(0, 10);
+      const favorites = resolveF1WinnerOdds(events, raceDateUtc);
+      if (favorites) match.oddsFavorites = favorites.slice(0, 3);
+      continue;
+    }
+
+    if (!Array.isArray(match.competitors) || match.competitors.length !== 2) continue;
+    const [away, home] = match.competitors;
+    const result = resolveTeamOdds(events, {
+      awayName: away.name,
+      homeName: home.name,
+      startTimeUtc: match.startTimeUtc,
+      hasDraw: match.sport === 'Premier League'
+    });
+    if (result) {
+      match.oddsWinPctAway = result.away;
+      match.oddsWinPctHome = result.home;
+      match.oddsWinPctDraw = result.draw;
+    }
+  }
+}
+
 async function main() {
   const now = new Date();
   const windowEndMs = now.getTime() + DAYS_AHEAD * 24 * 60 * 60 * 1000;
@@ -717,6 +798,8 @@ async function main() {
   });
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
+
+  await enrichWithPolymarketOdds(matches);
 
   // The extra, dedicated-API signals the objective scoring engine needs -
   // fetched ONCE per build, not once per fixture (every MLB game that day

@@ -1984,3 +1984,111 @@ present) and after (bug confirmed gone) the fix, as documented above.
   9 new tests added (public/lib/odds.mjs's own conversion/devig/parse
   logic, plus updated + one new build-data.mjs parseOddsSignal case for
   the added moneyline parsing) - 295/295 tests pass (up from 283).
+
+## Round 16 (2026-09-20): odds moved to Polymarket entirely, EPL/F1 coverage, real team colors, continuous polling
+
+- **Live-requested, four items in one message**: "Make sure data is
+  updated live and constantly", "Add EPL and F1 odds as well", "odds color
+  on UI should reflect team color rather than fixed color", then (after
+  the EPL/F1/color work below was already built on ESPN's own odds feed)
+  "Drop ESPN odds completely, let's use polymarket for odds completely...
+  make sure it not only support team game but also F1."
+
+- **Continuous polling**: the live-poll (see app.js's pollLiveMatches) used
+  to only run while a match was LIVE/ENDING_SOON. Widened to also poll any
+  STARTING_SOON match and any still-PRE fixture within 48 hours of its own
+  kickoff (`PREGAME_ODDS_POLL_WINDOW_MS`) - live-verified a real MLS
+  moneyline was already posted ~3.3 hours before its own kickoff, so lines
+  can move well before a match is anywhere near "starting soon". Polling a
+  fixture that in fact has no market open yet is a harmless no-op, not a
+  wasted or incorrect request.
+
+- **EPL (3-way) and F1, investigated against real ESPN data first**: ESPN's
+  own scoreboard `competition.odds[0].moneyline` shape turned out to
+  generalize cleanly to soccer's real three-outcome market - confirmed
+  live against a real pregame MLS fixture (San Diego FC @ Inter Miami CF):
+  the exact same `{away,home}.{close,open}.odds` shape, just with an added
+  `draw` leg. F1 was confirmed to have ZERO `odds` field anywhere on any
+  session (practice/qualifying/race) via ESPN - a multi-driver race has no
+  head-to-head market for that API to carry at all.
+
+- **Team colors**: added `color`/`altColor` (ESPN's own bare-hex brand
+  colors) to each competitor, plus a new pure module
+  (public/lib/color.mjs) implementing WCAG relative luminance/contrast and
+  `pickReadableTeamColor` - each odds-bar segment uses that TEAM's own
+  color instead of one fixed color for both sides. Found and fixed a real
+  design bug before shipping: an early version ranked primary vs alternate
+  color purely by "whichever wins outright" on contrast, which picked the
+  Baltimore Orioles' own alternate (pure black, ~21:1 on a white
+  background) over their clearly-legible primary orange (~4.3:1) just
+  because black scored higher - fixed by using the primary whenever it
+  clears a minimum floor at all, falling back to the alternate only when
+  the primary genuinely fails to read.
+
+- **Then, per the user's own explicit follow-up correction, ESPN was
+  dropped as the odds source ENTIRELY**, replaced by Polymarket
+  (gamma-api.polymarket.com) - investigated live before writing any code:
+  - MLB/NBA: one combined two-outcome market per game
+    (`outcomes: ["Away Team","Home Team"], outcomePrices: ["0.015","0.985"]`)
+    - already a real market-implied probability, no American-odds
+    conversion needed at all (unlike the ESPN version this replaced).
+  - EPL: THREE separate binary Yes/No markets per fixture ("Will {home}
+    win on {date}?", "Will {home} vs. {away} end in a draw?", "Will
+    {away} win on {date}?") - matched by question text + team name, then
+    devigged together (N-way, not just two).
+  - F1: an outright-winner event per Grand Prix (`*-winner-YYYY-MM-DD`),
+    ~20-30 separate per-driver binary markets sharing one question
+    template - something ESPN never had at all for F1. Matched by the
+    Race session's own UTC date (confirmed live: a real Azerbaijan GP
+    Race's ESPN start time lands on the exact same UTC calendar date as
+    Polymarket's own winner-market slug/eventDate for that race), devigged
+    across every named driver found, shown as the top 3 favorites
+    ("奪冠機率 Verstappen 34% · Norris 28% · Piastri 19%") rather than a
+    two-sided bar, which makes no sense for a 20-entrant field.
+  - Event-to-fixture matching uses Polymarket's own structured
+    `event.teams[]` (name + ordering) and `event.startTime` (the real
+    kickoff, confirmed live to differ from `event.startDate`, which is
+    just when Polymarket created the listing) within a 6-hour tolerance -
+    robust against a doubleheader day without needing to guess
+    Polymarket's own slug/abbreviation conventions.
+  - `public/lib/odds.mjs` (the ESPN-American-odds-devig module) and its
+    tests were deleted outright as dead code, not left disabled -
+    `public/lib/polymarket.mjs` is now the only odds source, used
+    identically by both scripts/build-data.mjs (via a new
+    `enrichWithPolymarketOdds` pass, one Polymarket fetch per sport, run
+    once after all matches are built) and the browser's own live poll (a
+    second, separate Polymarket fetch alongside the existing ESPN
+    score/status fetch - not every sport has both, F1 has real live odds
+    but no ESPN score to poll at all).
+  - The scoring engine's own spread/over-under signal
+    (scripts/build-data.mjs's parseOddsSignal, feeding
+    objective-score.mjs's closenessFromSpread) still comes from ESPN,
+    unchanged - "drop ESPN odds" was read as scoped to the win% DISPLAY
+    feature this whole session's been building, not that unrelated
+    long-standing scoring signal.
+
+- **A real regression caught before shipping**: an earlier edit widening
+  the poll trigger (the "continuous polling" item above) accidentally
+  deleted the `let livePollTimer = null;` declaration entirely, which
+  would have thrown `ReferenceError: livePollTimer is not defined` and
+  silently killed the ENTIRE live-poll loop on every single page load -
+  caught via a real Playwright browser console-error check before
+  pushing, not left for a viewer to discover.
+
+- Verified end to end with a real `node scripts/build-data.mjs` run
+  against live ESPN + Polymarket data (real MLB odds flowed through
+  correctly for ~37 unfinished fixtures; EPL showed correctly-empty odds
+  because every fixture in the fetched window had already finished - the
+  real 2026-27 EPL calendar has a September international break, confirmed
+  live, so there was no genuinely upcoming EPL fixture to test against
+  this round; F1's Azerbaijan GP Race session showed real top-3 favorites)
+  and a live-browser screenshot (Brewers/Orioles bar in each team's own
+  real color, Tigers/White Sox bar, the Azerbaijan GP's outright-favorites
+  chips - the last two confirmed by temporarily moving a copy of the
+  race's own start time into today's window, then reverting it, since
+  matches.json is never committed anyway).
+
+  32 new tests added between public/lib/polymarket.mjs's own
+  matching/parsing/devig logic and public/lib/color.mjs's contrast math -
+  the ESPN-odds-specific tests from Round 15 were deleted along with the
+  module they tested - 315/315 tests pass overall.

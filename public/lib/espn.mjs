@@ -13,11 +13,12 @@
 // Every fetch this module builds a URL for goes through the shared proxy's
 // /sports-proxy route (see app.js), never straight to ESPN - browsers can't
 // read a cross-origin response ESPN itself sends no CORS headers for.
-
-// The same devigged-moneyline-to-win% math scripts/build-data.mjs's own
-// pregame build uses - see that shared module's top-of-file comment for
-// why this is a single shared implementation rather than two copies.
-import { parseMoneylineWinPct } from './odds.mjs';
+//
+// This module no longer reads win% odds at all - see ./polymarket.mjs for
+// that (ESPN's own sportsbook feed doesn't cover every sport this app
+// tracks, F1 in particular). Score/status and the spread/over-under
+// signal the scoring engine (not this odds display) uses still come from
+// here, unaffected.
 
 export function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
   const base = `https://site.api.espn.com/apis/site/v2/sports/${sportKey}/${leagueKey}/scoreboard`;
@@ -57,8 +58,7 @@ export function liveScoreboardUrl(sport, now = new Date()) {
 }
 
 // Extracts {id -> {isLive, isFinished, scores: [awayScore, homeScore],
-// oddsSpread, oddsOverUnder, oddsWinPctAway, oddsWinPctHome}} from one
-// league's scoreboard response - `id` matches Match Find's own fixture id
+// oddsSpread, oddsOverUnder}} from one league's scoreboard response - `id` matches Match Find's own fixture id
 // convention exactly
 // (`${league.id}-${event.id}`) so app.js can merge this straight into
 // state.allRawMatches by id with no extra lookup table. Scores are read as
@@ -83,7 +83,6 @@ export function extractLiveUpdates(sport, scoreboardJson) {
     const odds = competition.odds?.[0];
     const spread = Number(odds?.spread);
     const overUnder = Number(odds?.overUnder);
-    const winPct = parseMoneylineWinPct(odds?.moneyline);
     updates.set(`${league.id}-${event.id}`, {
       isLive: statusType.state === 'in',
       isFinished: statusType.state === 'post',
@@ -92,9 +91,7 @@ export function extractLiveUpdates(sport, scoreboardJson) {
       displayClock: typeof competition.status?.displayClock === 'string' ? competition.status.displayClock : '',
       shortDetail: statusType.shortDetail || '',
       oddsSpread: Number.isFinite(spread) ? spread : null,
-      oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null,
-      oddsWinPctAway: winPct?.away ?? null,
-      oddsWinPctHome: winPct?.home ?? null
+      oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null
     });
   }
   return updates;

@@ -68,6 +68,13 @@ import {
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 import { TEAM_LEAGUE_ESPN, liveScoreboardUrl, extractLiveUpdates } from './lib/espn.mjs';
+import { pickReadableTeamColor } from './lib/color.mjs';
+import {
+  POLYMARKET_TAG_ID,
+  polymarketEventsByTagUrl,
+  resolveTeamOdds,
+  resolveF1WinnerOdds
+} from './lib/polymarket.mjs';
 
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
@@ -857,6 +864,25 @@ function renderVenue(el, match) {
   el.textContent = match.venue || '';
 }
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// The already-tuned sport accent color this app uses everywhere else (see
+// styles.css's `.sport-badge[data-sport=...]` rules) - the fallback for
+// when NEITHER of a team's own two real colors reads legibly against the
+// card's current background (see pickReadableTeamColor), so the bar always
+// shows something readable rather than the pure-illegible team color as-is.
+const SPORT_ODDS_FALLBACK_VAR = { MLB: '--sport-mlb', NBA: '--sport-nba', 'Premier League': '--sport-epl' };
+
+function teamOddsColor(competitor, sport) {
+  const backgroundHex = cssVar('--bg-elevated') || cssVar('--bg');
+  const readable = pickReadableTeamColor(competitor?.color, competitor?.altColor, backgroundHex);
+  if (readable) return readable;
+  const fallbackVar = SPORT_ODDS_FALLBACK_VAR[sport];
+  return fallbackVar ? `var(${fallbackVar})` : 'var(--accent)';
+}
+
 function buildMatchCard(match) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
   // Lets a later render find and patch THIS exact card by id without
@@ -922,14 +948,14 @@ function buildMatchCard(match) {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
 
-  // A sportsbook's own devigged moneyline (see build-data.mjs's
-  // parseOddsSignal/public/lib/odds.mjs) as a live win-probability bar -
-  // only rendered when a real market has actually posted a two-sided
-  // line, which in practice means MLB/NBA close to game time (see that
-  // module's own comment: soccer/F1 essentially never get one via ESPN's
-  // API, and a US game far enough out won't have one yet either). Never a
+  // A real Polymarket prediction market's own devigged trade price (see
+  // ./lib/polymarket.mjs) as a live win-probability bar - only rendered
+  // when a real market has actually opened for this fixture. Never a
   // guessed/defaulted 50/50 - hidden entirely rather than showing a fake
-  // number when the market itself hasn't weighed in.
+  // number when the market itself hasn't weighed in. EPL's own market is a
+  // real three-outcome one (away/draw/home) rather than MLB/NBA's two, so
+  // this renders a middle draw segment whenever oddsWinPctDraw is real,
+  // and otherwise falls back to the plain two-segment bar.
   const oddsEl = node.querySelector('.match-odds');
   if (
     match.competitors &&
@@ -937,13 +963,51 @@ function buildMatchCard(match) {
     Number.isFinite(match.oddsWinPctAway) &&
     Number.isFinite(match.oddsWinPctHome)
   ) {
+    const [away, home] = match.competitors;
+    const hasDraw = Number.isFinite(match.oddsWinPctDraw);
     oddsEl.hidden = false;
     oddsEl.querySelector('.match-odds-away').textContent = `${Math.round(match.oddsWinPctAway)}%`;
     oddsEl.querySelector('.match-odds-home').textContent = `${Math.round(match.oddsWinPctHome)}%`;
-    oddsEl.querySelector('.match-odds-bar-fill').style.width = `${match.oddsWinPctAway}%`;
+    const awaySeg = oddsEl.querySelector('.match-odds-seg-away');
+    const drawSeg = oddsEl.querySelector('.match-odds-seg-draw');
+    const homeSeg = oddsEl.querySelector('.match-odds-seg-home');
+    // Each segment gets ITS OWN team's real color (see ./lib/color.mjs) -
+    // never one fixed color for both sides, which read as arbitrary rather
+    // than "which team is this" at a glance.
+    awaySeg.style.width = `${match.oddsWinPctAway}%`;
+    awaySeg.style.background = teamOddsColor(away, match.sport);
+    homeSeg.style.width = `${match.oddsWinPctHome}%`;
+    homeSeg.style.background = teamOddsColor(home, match.sport);
+    drawSeg.hidden = !hasDraw;
+    if (hasDraw) {
+      drawSeg.style.width = `${match.oddsWinPctDraw}%`;
+      drawSeg.querySelector('.match-odds-seg-label').textContent = `${Math.round(match.oddsWinPctDraw)}%`;
+    }
     oddsEl.setAttribute(
       'aria-label',
-      `獲勝機率：${match.competitors[0].name} ${Math.round(match.oddsWinPctAway)}%，${match.competitors[1].name} ${Math.round(match.oddsWinPctHome)}%`
+      hasDraw
+        ? `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，和局 ${Math.round(match.oddsWinPctDraw)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
+        : `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
+    );
+  }
+
+  // F1's own real Polymarket odds - an outright winner market across the
+  // whole grid, not a two-sided bar (see ./lib/polymarket.mjs and this
+  // element's own CSS comment for why this needs an entirely different
+  // shape) - just the top few favorites, each already a real devigged
+  // win% for that specific driver.
+  const outrightEl = node.querySelector('.match-odds-outright');
+  if (Array.isArray(match.oddsFavorites) && match.oddsFavorites.length) {
+    outrightEl.hidden = false;
+    const items = outrightEl.querySelectorAll('.match-odds-outright-item');
+    items.forEach((item, i) => {
+      const favorite = match.oddsFavorites[i];
+      item.hidden = !favorite;
+      if (favorite) item.textContent = `${favorite.name} ${Math.round(favorite.pct)}%`;
+    });
+    outrightEl.setAttribute(
+      'aria-label',
+      `奪冠機率：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
     );
   }
 
@@ -2015,50 +2079,69 @@ refreshDataBtn.addEventListener('click', () => {
   });
 });
 
-// ---- Live score/odds polling (see ./lib/espn.mjs) --------------------------
+// ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -
 //
 // Everything ELSE on this page only ever refreshes on the event-driven
 // schedule described above (on load, and exactly when a match starts/ends) -
 // deliberately no blind polling, per this file's own long-standing design.
-// A genuinely LIVE match's actual current score is the one thing that
-// design can't provide on its own (matches.json is only ever as fresh as
-// the last build, at most every 15 minutes) - item 5's "live stats,
-// refreshed every few seconds/minutes" needs a real, if narrowly-scoped,
-// exception: while at least one currently-loaded match is actually LIVE,
-// poll the shared proxy's /sports-proxy (a thin CORS passthrough to ESPN's
-// own public scoreboard - see that module) for just that match's own
-// league, on a fixed short interval, and merge the real score/status back
-// into state.allRawMatches in place. This never re-runs the AI validation
-// pass or recomputes competitiveness/watchability/reason - only the same
-// live facts ESPN itself already reports (score, finished status), plus
-// letting recommendation.mjs's own liveExcitementBonus react to them so a
-// live match that turns out to be a genuine nail-biter can bump the day's
-// plan (item 6) - see applyRecentRepeatPenalties's own comment for where
-// that bonus is actually applied.
+// Two things that design can't provide on its own (matches.json is only
+// ever as fresh as the last build, at most every 15 minutes): a genuinely
+// LIVE match's actual current score, AND a market's odds actually moving
+// throughout the day rather than only refreshing on the next 15-minute
+// build. Both need a real, if narrowly-scoped, exception: poll the shared
+// proxy's /sports-proxy (a thin CORS passthrough - see that module) on a
+// fixed short interval, and merge the real score/status/odds back into
+// state.allRawMatches in place. Score/status still comes from ESPN's own
+// public scoreboard; odds comes from Polymarket instead (see
+// ./lib/polymarket.mjs for why) - two separate fetches below, since not
+// every sport this tracks has both (F1 has real, live Polymarket odds but
+// no ESPN score to poll at all). This never re-runs the AI validation pass
+// or recomputes competitiveness/watchability/reason - only the same live
+// facts already reported (score, finished status, odds), plus letting
+// recommendation.mjs's own liveExcitementBonus react to a live score change
+// so a live match that turns out to be a genuine nail-biter can bump the
+// day's plan (item 6) - see applyRecentRepeatPenalties's own comment for
+// where that bonus is actually applied.
 const LIVE_POLL_INTERVAL_MS = 30_000;
 let livePollTimer = null;
+// How far before kickoff this starts polling a still-PRE fixture purely for
+// odds movement (never score, which doesn't exist yet) - live-verified a
+// real MLS moneyline already posted ~3.3 hours before kickoff, so this errs
+// wide: polling a match that in fact has no market open yet is a harmless
+// no-op (resolveTeamOdds/resolveF1WinnerOdds just report null again), not a
+// wasted or incorrect request.
+const PREGAME_ODDS_POLL_WINDOW_MS = 48 * 60 * 60 * 1000;
 
-function anyMatchLiveNow() {
-  return state.allRawMatches.some(m => {
-    if (m.timeTbd || m.isFinished || !TEAM_LEAGUE_ESPN[m.sport]) return false;
-    const lifecycle = matchLifecycleState(m);
-    return lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
-  });
+function matchWorthPollingNow(m, now = Date.now()) {
+  // Worth polling if EITHER a live score (ESPN, team sports only) OR live
+  // odds (Polymarket, every sport this app tracks including F1 - see
+  // ./lib/polymarket.mjs) could come from it - a plain F1 race has no
+  // ESPN-reported score to poll at all, but it still has real, moving
+  // Polymarket odds worth refreshing.
+  if (m.timeTbd || m.isFinished) return false;
+  if (!TEAM_LEAGUE_ESPN[m.sport] && POLYMARKET_TAG_ID[m.sport] == null) return false;
+  const lifecycle = matchLifecycleState(m, now);
+  if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) return true;
+  if (lifecycle === LIFECYCLE_STATES.STARTING_SOON) return true;
+  const msToStart = Date.parse(m.startTimeUtc) - now;
+  return msToStart > 0 && msToStart <= PREGAME_ODDS_POLL_WINDOW_MS;
 }
 
-function liveSportsNow() {
+function anyMatchWorthPollingNow() {
+  return state.allRawMatches.some(m => matchWorthPollingNow(m));
+}
+
+function sportsWorthPollingNow() {
   const sports = new Set();
   state.allRawMatches.forEach(m => {
-    if (m.timeTbd || m.isFinished || !TEAM_LEAGUE_ESPN[m.sport]) return;
-    const lifecycle = matchLifecycleState(m);
-    if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) sports.add(m.sport);
+    if (matchWorthPollingNow(m)) sports.add(m.sport);
   });
   return sports;
 }
 
 async function pollLiveMatches() {
   if (!state.proxyUrl) return;
-  const sports = liveSportsNow();
+  const sports = sportsWorthPollingNow();
   if (!sports.size) return;
 
   const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
@@ -2088,21 +2171,6 @@ async function pollLiveMatches() {
         }
         if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
         if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
-        // The devigged win% is what the odds badge on the card actually
-        // shows (see buildMatchCard) - unlike spread/overUnder (which only
-        // ever feed the scoring engine, never a raw on-card number), a
-        // moving line here is directly visible, so this has to flip
-        // `changed` itself or the market could move for several poll
-        // ticks in a row with the card silently still showing the last
-        // build's number.
-        if (update.oddsWinPctAway != null && match.oddsWinPctAway !== update.oddsWinPctAway) {
-          match.oddsWinPctAway = update.oddsWinPctAway;
-          changed = true;
-        }
-        if (update.oddsWinPctHome != null && match.oddsWinPctHome !== update.oddsWinPctHome) {
-          match.oddsWinPctHome = update.oddsWinPctHome;
-          changed = true;
-        }
         if (update.isFinished && !match.isFinished) {
           match.isFinished = true;
           changed = true;
@@ -2125,6 +2193,66 @@ async function pollLiveMatches() {
     })
   ).catch(() => {}); // best-effort - a failed poll just tries again next tick
 
+  // The win% odds refresh - Polymarket, not ESPN (see ./lib/polymarket.mjs
+  // for why), and covering every sport this app tracks including F1 -
+  // ESPN's own scoreboard fetch above never carried F1 at all. One request
+  // per sport (same "one batch request, not one per fixture" shape as the
+  // ESPN pass above), then the SAME event-matching/parsing this app's own
+  // build already used for that sport's initial number.
+  await Promise.allSettled(
+    [...sports]
+      .filter(sport => POLYMARKET_TAG_ID[sport] != null)
+      .map(async sport => {
+        const target = polymarketEventsByTagUrl(POLYMARKET_TAG_ID[sport]);
+        const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
+          cache: 'no-store'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const events = await response.json();
+        state.allRawMatches.forEach(match => {
+          if (match.sport !== sport || match.isFinished) return;
+          if (sport === 'F1') {
+            // Only the Race session shows odds - see build-data.mjs's own
+            // enrichWithPolymarketOdds comment for why `-race` is this
+            // session's own stable id suffix.
+            if (!match.id.endsWith('-race')) return;
+            const favorites = resolveF1WinnerOdds(events, match.startTimeUtc.slice(0, 10));
+            if (!favorites) return;
+            const top3 = favorites.slice(0, 3);
+            // A plain array-of-objects compare - cheap for a 3-entry list,
+            // and avoids forcing a render every quiet poll tick where the
+            // market hasn't actually moved.
+            if (JSON.stringify(top3) !== JSON.stringify(match.oddsFavorites)) {
+              match.oddsFavorites = top3;
+              changed = true;
+            }
+            return;
+          }
+          if (!Array.isArray(match.competitors) || match.competitors.length !== 2) return;
+          const [away, home] = match.competitors;
+          const result = resolveTeamOdds(events, {
+            awayName: away.name,
+            homeName: home.name,
+            startTimeUtc: match.startTimeUtc,
+            hasDraw: sport === 'Premier League'
+          });
+          if (!result) return;
+          if (match.oddsWinPctAway !== result.away) {
+            match.oddsWinPctAway = result.away;
+            changed = true;
+          }
+          if (match.oddsWinPctHome !== result.home) {
+            match.oddsWinPctHome = result.home;
+            changed = true;
+          }
+          if (match.oddsWinPctDraw !== result.draw) {
+            match.oddsWinPctDraw = result.draw;
+            changed = true;
+          }
+        });
+      })
+  ).catch(() => {});
+
   // Re-derives effectiveScore/the day's plan from the freshly-updated raw
   // matches (liveExcitementBonus reads match.competitors[].score directly,
   // see recommendation.mjs) - skipped entirely when nothing actually
@@ -2138,8 +2266,9 @@ function scheduleLivePoll() {
   livePollTimer = setTimeout(async () => {
     // A backgrounded tab still gets rescheduled (so it picks back up the
     // moment it's visible again) but skips the actual network request -
-    // no point spending battery/quota polling scores nobody's looking at.
-    if (document.visibilityState !== 'hidden' && anyMatchLiveNow()) {
+    // no point spending battery/quota polling scores/odds nobody's looking
+    // at.
+    if (document.visibilityState !== 'hidden' && anyMatchWorthPollingNow()) {
       await pollLiveMatches();
     }
     scheduleLivePoll();
