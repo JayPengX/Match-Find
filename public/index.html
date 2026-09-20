@@ -2,7 +2,23 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- maximum-scale=1/user-scalable=no: this page is built entirely around
+     custom touch-driven gestures (the swipeable match stack, see
+     buildMatchStack in app.js) that assume touch coordinates map 1:1 to
+     layout pixels - a mid-gesture pinch/double-tap zoom (iOS Safari's own
+     default, otherwise on by default even with touch-action: pan-y set on
+     the swipe surface itself, since that only constrains the ELEMENT the
+     gesture starts on, not a zoom that begins to intersects the page
+     shell around it) throws that mapping off entirely: reported live as
+     the page rendering "bigger" mid-swipe and every following interaction
+     reading as "stuck", both consistent with the page having silently
+     zoomed rather than the swipe itself failing. Blocking zoom at the
+     viewport level is the one fix that can't depend on a touch-action
+     value being honored correctly on every element in the swipe's own
+     ancestor chain, on a browser this sandbox has no way to verify
+     directly (no real Safari/WebKit available here - see app.js's own
+     comment on buildMatchStack for the fuller context). -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Match Find — 今晚看什麼</title>
 <meta name="description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
@@ -54,14 +70,6 @@
       </div>
     </section>
 
-    <section class="settings-section">
-      <h3>AI 評分</h3>
-      <p id="ai-reevaluate-status-text" class="settings-hint"></p>
-      <div class="settings-btn-row">
-        <button id="ai-reevaluate-btn" type="button" class="settings-action-btn is-secondary">AI 重新評估</button>
-      </div>
-    </section>
-
   </div>
 
   <main id="app" hidden>
@@ -107,10 +115,6 @@
 
   <footer class="page-footer">
     <p id="generated-note"></p>
-    <p id="ai-status-note">
-      <span id="ai-status-text"></span>
-      <a id="ai-refetch-link" href="#" target="_blank" rel="noopener">重新查詢</a>
-    </p>
   </footer>
 
   <template id="match-card-template">

@@ -1276,3 +1276,121 @@ already had gaps ≤ 2.5 and needed no changes - 285/285 assertions pass.
   existing "close call" scale, not independently tuned against real
   viewer swipe behavior (no analytics pipeline exists to measure that) -
   it may need adjusting once real usage data on stack engagement exists.
+
+## Round 11 - Gemini removed entirely, and a live-discovered ESPN blocking bug
+
+A direct instruction: remove Gemini from this pipeline completely, on the
+grounds that free-tier quota has proven unable to sustain the workload
+(confirmed in Round 9 - Google Search grounding failing 429
+RESOURCE_EXHAUSTED on 100% of requests, a billing-tier wall), with the
+explicit condition that the engine still has to perform well without it.
+
+### 1. Gemini scoring/validation removed from both repos
+
+**Match-Find** (`scripts/build-data.mjs`): deleted the entire AI-validation
+section - `fetchAiScores`, `refineContestedClusters`/
+`findContestedClusters`, `applyCachedAdjustments`, `sanitizeCachedEvidenceItem`,
+the `data/ai-meta.json` cache/throttle mechanism, and every constant
+governing them (`AI_ADJUSTMENT_BOUND`, `AI_FETCH_MIN_INTERVAL_HOURS`,
+`CONTESTED_*`, etc.). `main()` now sets every fixture's
+competitiveness/watchability/enduranceScore/broadcastQuality/skill/reason
+directly from `computeMatchObjectiveScore`'s own output - no adjustment
+layer on top at all. `data/ai-meta.json` itself is deleted from the repo
+(nothing reads or writes it anymore), and the deploy workflow's "Commit AI
+fetch timestamp" step is gone along with the `contents: write` permission
+it was the only user of.
+
+**Shared-Proxy** (`worker.js`): removed the entire `/match-recommend` +
+`/match-recommend-refine` section (~885 lines - `fetchGroundedMatchInfo`,
+`buildMatchRecommendPrompt`/`buildMatchRefinePrompt`, the grounding
+cooldown KV mechanism added in Round 9, both route handlers) and their two
+router entries. `/sports-proxy` and `/match-dispatch` (Match Find's other
+two routes - live score polling and the manual refresh trigger, neither
+ever Gemini-related) are untouched, and so is every route serving Orbit/
+Orbit Vocab (`/gemini`, `/nl-edit`, `/vocab-ai`, `/sync`, `/vocab-sync`) -
+this repo is shared infrastructure for three sites, and only Match Find's
+own Gemini usage was in scope here.
+
+**Client (`public/app.js`)**: removed the "AI 重新評估" Settings button/
+status text and the silent page-load re-evaluation ping (both meaningless
+with no Gemini to re-evaluate anything), the footer's "AI 最後查詢於..."
+status line and its GitHub Actions "重新查詢" link, and the permanent
+"（API 數據估計，尚未經 AI 驗證）" caveat that would otherwise now render
+on literally every single card (since every fixture is "not yet
+AI-validated" forever) - a caveat implying a validation that will never
+come is worse than no caveat at all. `renderVenue`'s `venueZh` branch
+(always empty now - venueZh was only ever AI-sourced) simplified to just
+show `match.venue`. "重新整理資料" (plain data refresh) is unaffected -
+it never depended on Gemini either.
+
+**`computeConfidence`** (`public/lib/recommendation.mjs`): collapsed from
+a 5-tier scheme keyed on `match.source`/`match.refined` (`ai`/`aiRefined`/
+`api-objective`/`heuristic`/`finished`) to two states -
+`CONFIDENCE_OBJECTIVE` (0.7) for any match with a real computed score,
+`null` for one without. There is no longer a per-fixture "how was THIS one
+scored" question to answer - every fixture goes through the exact same
+deterministic path now, so a 5-tier distinction that used to reflect real
+variance (did Gemini see this one, did it survive the refine pass) would
+now just be theater. The dead "structured evidence" subsystem
+(`describeEvidence`/`isEvidenceFresh`/`EVIDENCE_CATEGORY_LABELS`) is also
+gone - confirmed via grep that `public/app.js` never actually rendered it
+anywhere, even before this round (Round 9's grounding-quota-wall finding
+meant it had been silently producing empty arrays this whole time anyway).
+
+### 2. A real, live bug found by running the build without a proxy: ESPN blocks Node's default User-Agent
+
+Running `scripts/build-data.mjs` for real (this session's own environment
+has live network access) initially wrote **0 matches** with no error -
+every league's fetch silently returned an empty list. Root-caused by
+hand: `fetch('https://site.api.espn.com/...')` with no headers returns a
+403 from Akamai (`server: AkamaiGHost`), specifically when the request's
+`User-Agent` is Node's own unmodified default (the literal string
+`"node"`). Confirmed by direct comparison, holding the proxy/IP/every
+other header constant and varying only `User-Agent`:
+
+- No UA / `"node"` (Node's fetch default) → **403**
+- A fabricated real-Chrome UA string → **403** (this isn't "block anything
+  that isn't a browser" - a convincing browser impersonation is blocked
+  too)
+- `curl`'s own unmodified default (`curl/8.5.0`) → **200**
+- `python-requests/2.31.0`, `okhttp/4.9.0` → **200**
+- `PostmanRuntime/...`, `Wget/...` → **403**
+
+This reads as an Akamai Bot Manager rule blocklisting a specific set of
+known automation-tool UA tokens (which happens to include Node's own
+default and a couple of others) rather than anything resembling real bot
+behavior - genuinely surprising that node's DEFAULT is on that list, but
+directly, repeatably confirmed. **Fix**: every ESPN fetch in
+`scripts/build-data.mjs` (`fetchJson`, the one shared helper every league
+fetch goes through) and, for defense in depth, every fetch in
+`scripts/sport-signals.mjs` (MLB Stats API, Jolpica F1 - not currently
+affected, but free to fix preemptively) now sends an honest,
+self-identifying `User-Agent: Match-Find-Bot/1.0 (+https://github.com/
+jaypengx-collab/Match-Find)` - confirmed live to return a normal 200 with
+real fixture data. Verified end to end after the fix: a real run wrote
+**135 matches** with a real score spread (min 1, max 10, avg 7.24) and
+legible, factor-grounded reason text for every one, entirely without
+Gemini.
+
+Whether this exact block is active in GitHub Actions' own runner pool at
+any given moment is unknown from here - this fixes it either way, at zero
+cost, rather than leaving a silently-empty `matches.json` (this pipeline's
+worst possible failure mode - not a bad recommendation, no recommendations
+at all) as a real, undetected possible outcome of nothing more than which
+default string a fetch call happens to send.
+
+### Known limitations after Round 11
+
+- The `Match-Find-Bot/1.0` UA fix was verified against a live 403 in THIS
+  session's own environment - it is not confirmed whether GitHub Actions'
+  own runners were ever actually hitting this block in production (the
+  site's own history of real recommended fixtures suggests they likely
+  weren't, at least not consistently), so the practical impact of this fix
+  going forward is unconfirmed, even though the bug itself and the fix
+  are both directly, repeatably verified.
+- The one variety Gemini's validation pass added - occasionally writing a
+  fixture's `reason` in its own prose instead of the deterministic
+  template - is gone; every reason is now built from the same
+  `buildObjectiveReasonZh` template. This is a presentation-only loss, not
+  a scoring one (Round 9 already established the validation pass's own
+  adjustment was bounded to ±2 and quota-starved besides).

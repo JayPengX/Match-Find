@@ -629,11 +629,6 @@ main#app {
   font-size: 0.87rem;
   color: var(--text-muted);
 }
-.match-reason.is-api-objective::after {
-  content: "（API 數據估計，尚未經 AI 驗證）";
-  font-style: italic;
-  color: var(--text-faint);
-}
 
 /* Bold + a saturated color (not the muted/faint text tones used elsewhere)
    so this never reads as "did that text even render" the way a thinner,

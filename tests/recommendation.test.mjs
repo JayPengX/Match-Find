@@ -17,6 +17,7 @@ import {
   computeEffectiveScore,
   computeRecommendationScore,
   computeConfidence,
+  CONFIDENCE_OBJECTIVE,
   computeOverlapRange,
   overlapMinutes,
   isNearTotalOverlap,
@@ -44,10 +45,6 @@ import {
   recentRepeatPenalty,
   applyRecentRepeatPenalties,
   computeWindowPlan,
-  describeEvidence,
-  isEvidenceFresh,
-  EVIDENCE_CATEGORY_LABELS,
-  EVIDENCE_FRESH_MAX_AGE_HOURS,
   computeSportConcentration,
   SPORT_CONCENTRATION_PENALTY,
   naturalSlotChoice,
@@ -79,8 +76,6 @@ function makeMatch(overrides = {}) {
     enduranceScore: 5,
     score: 6,
     whereToWatchTw: '',
-    source: 'ai',
-    refined: false,
     ...overrides
   };
 }
@@ -190,33 +185,24 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
   });
 
   test('computeRecommendationScore composes the score breakdown with confidence', () => {
-    const match = makeMatch({ source: 'ai', refined: true });
+    const match = makeMatch();
     const result = computeRecommendationScore(match, {});
     assert.equal(result.finalScore, computeEffectiveScore(match, {}).effectiveScore);
-    assert.equal(result.confidence, 0.9);
+    assert.equal(result.confidence, CONFIDENCE_OBJECTIVE);
     assert.ok(result.adjustments);
     assert.equal(typeof result.baseScore, 'number');
   });
 });
 
 describe('computeConfidence', () => {
-  test('a finished match (no score at all) has null confidence', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'finished' })), null);
+  test('a match with a real computed score gets the one objective confidence value', () => {
+    assert.equal(computeConfidence(makeMatch({ score: 7 })), CONFIDENCE_OBJECTIVE);
   });
-  test('an AI-scored match that survived the comparative refine pass is most confident', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'ai', refined: true })), 0.9);
+  test('a match with no score at all (never scored) has null confidence', () => {
+    assert.equal(computeConfidence(makeMatch({ score: undefined })), null);
   });
-  test('a base-pass-only AI validation is confident but less so', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'ai', refined: false })), 0.75);
-  });
-  test('the objective (API-data) score alone, not yet AI-validated, sits in the middle', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'api-objective' })), 0.55);
-  });
-  test('the old heuristic fallback source (no build produces this anymore) is the least confident', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'heuristic' })), 0.35);
-  });
-  test('an unrecognized/missing source is treated the same as finished (null), not fabricated', () => {
-    assert.equal(computeConfidence(makeMatch({ source: undefined })), null);
+  test('a missing match object is never confident', () => {
+    assert.equal(computeConfidence(null), null);
   });
 });
 
@@ -449,9 +435,9 @@ describe('resolveViewingPlan', () => {
   });
 
   test('every match comes out with an explicit scoreBreakdown and confidence, not just a bare number', () => {
-    const [out] = resolveViewingPlan([makeMatch({ source: 'ai', refined: true })]);
+    const [out] = resolveViewingPlan([makeMatch()]);
     assert.ok(out.scoreBreakdown);
-    assert.equal(out.confidence, 0.9);
+    assert.equal(out.confidence, CONFIDENCE_OBJECTIVE);
     assert.equal(out.effectiveScore, out.scoreBreakdown.effectiveScore);
   });
 
@@ -1122,51 +1108,6 @@ describe('§27 explainWhyNotRecommended', () => {
     const beforeA = { ...a };
     explainWhyNotRecommended('a', '2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
     assert.deepEqual(a, beforeA); // untouched by the speculative re-runs
-  });
-});
-
-describe('describeEvidence / isEvidenceFresh (structured evidence)', () => {
-  function evidenceMatch(overrides = {}) {
-    return makeMatch({
-      evidence: [
-        { category: 'eventImportance', finding: 'This decides the division.', source: 'current standings', retrievedAt: '2026-09-19T06:00:00.000Z' },
-        { category: 'bogus', finding: 'mislabeled but real', source: 'x', retrievedAt: '2026-09-19T00:00:00.000Z' }
-      ],
-      evidenceRetrievedAt: '2026-09-19T06:00:00.000Z',
-      ...overrides
-    });
-  }
-
-  test('describeEvidence attaches the Traditional Chinese label for each category', () => {
-    const items = describeEvidence(evidenceMatch());
-    assert.equal(items.length, 2);
-    assert.equal(items[0].label, EVIDENCE_CATEGORY_LABELS.eventImportance);
-    assert.equal(items[0].finding, 'This decides the division.');
-  });
-
-  test('an unrecognized category still gets labeled (falls back to the recentContext label), never dropped', () => {
-    const items = describeEvidence(evidenceMatch());
-    assert.equal(items[1].category, 'bogus'); // the raw category is passed through as-is
-    assert.equal(items[1].label, EVIDENCE_CATEGORY_LABELS.recentContext);
-  });
-
-  test('a match with no evidence returns an empty array, not null/undefined', () => {
-    assert.deepEqual(describeEvidence(makeMatch({ evidence: [] })), []);
-    assert.deepEqual(describeEvidence(makeMatch({ evidence: undefined })), []);
-    assert.deepEqual(describeEvidence(null), []);
-  });
-
-  test('isEvidenceFresh is true within the freshness window, false once past it', () => {
-    const recent = evidenceMatch({ evidenceRetrievedAt: new Date(Date.now() - 60_000).toISOString() });
-    assert.equal(isEvidenceFresh(recent), true);
-
-    const stale = evidenceMatch({ evidenceRetrievedAt: new Date(Date.now() - (EVIDENCE_FRESH_MAX_AGE_HOURS + 1) * 3_600_000).toISOString() });
-    assert.equal(isEvidenceFresh(stale), false);
-  });
-
-  test('isEvidenceFresh is false when there is no evidenceRetrievedAt at all', () => {
-    assert.equal(isEvidenceFresh(makeMatch({ evidenceRetrievedAt: null })), false);
-    assert.equal(isEvidenceFresh(makeMatch({})), false);
   });
 });
 

@@ -7,12 +7,11 @@ name: Build match data and deploy to Pages
 on:
   schedule:
     # Every 15 minutes - this only costs an ESPN fetch (a free, unauthenticated
-    # public API) on most runs: build-data.mjs's own AI_FETCH_MIN_INTERVAL_HOURS
-    # throttle is what actually keeps Gemini calls down to a few times a day
-    # regardless of how often this workflow itself fires, so running the
-    # workflow often is exactly what lets match/live-status data stay fresh
-    # without spending any extra AI quota. GitHub Pages is a public repo, so
-    # Actions minutes on GitHub-hosted runners aren't metered here either.
+    # public API); the objective-score recompute itself is free and local
+    # (see scripts/objective-score.mjs - no AI/external scoring call of any
+    # kind since docs/recommendation-engine-audit.md's Round 11). GitHub
+    # Pages is a public repo, so Actions minutes on GitHub-hosted runners
+    # aren't metered here either.
     - cron: '*/15 * * * *'
   push:
     branches: ['main']
@@ -34,7 +33,7 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -64,12 +63,15 @@ jobs:
         run: npm test
       - name: Fetch fixtures and build match recommendations
         env:
-          # Base URL of Orbit's shared Cloudflare Worker (no path suffix) -
-          # see README's "AI recommendations" section. A repo *variable*,
-          # not a secret: it ends up as a plain fetch target in this build
-          # step and holds no credential itself (the real Gemini key lives
-          # server-side in that Worker, never here). Left unset, the build
-          # still runs - see scripts/build-data.mjs's heuristic fallback.
+          # Base URL of the shared Cloudflare Worker (no path suffix) - see
+          # README's "Live score/odds polling and manual refresh" section.
+          # A repo *variable*, not a secret: it ends up as a plain value in
+          # the output matches.json for the BROWSER to build its own
+          # /sports-proxy and /match-dispatch requests from - this build
+          # step itself doesn't call the proxy for anything (no AI/external
+          # scoring call of any kind - see build-data.mjs's own top
+          # comment). Left unset, the build still runs, just without those
+          # two browser-side features.
           PROXY_URL: ${{ vars.PROXY_URL }}
           # Lets a tab left open across a deploy tell "the code actually
           # changed" apart from "just a routine scheduled data refresh" -
@@ -77,13 +79,6 @@ jobs:
           # polling. A scheduled rerun with no new commit reuses this same
           # sha every time, which is exactly the distinction that matters.
           BUILD_ID: ${{ github.sha }}
-          # Lets the build tell a routine scheduled rerun apart from a real
-          # code push or a manually-requested run - see build-data.mjs's
-          # "throttling how often Gemini gets called" section. A schedule
-          # run skips calling the proxy at all when the last real call was
-          # recent; a push or workflow_dispatch always calls it, since
-          # either means someone specifically wants fresh data now.
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: node scripts/build-data.mjs
       - name: 'Debug: dump computed day plan'
         # Opt-in only (see the workflow_dispatch input's own comment) - never
@@ -96,35 +91,6 @@ jobs:
         run: |
           IFS=',' read -r FROM TO SPORT <<< "$DEBUG_DAY_PLAN"
           node scripts/dump-day-plan.mjs "$FROM" "$TO" "$SPORT"
-      - name: Commit AI fetch timestamp
-        # data/ai-meta.json (unlike public/data/matches.json, which is fully
-        # regenerated every run and never committed) is the persistent
-        # record of when Gemini was last actually called, PLUS (see
-        # build-data.mjs's AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS) each currently
-        # relevant fixture's own last real validation - not just a
-        # timestamp any more. That per-match cache is what lets a routine
-        # THROTTLED run (the schedule fires 4x more often than Gemini is
-        # actually allowed to be called) keep showing a fixture's real
-        # validated reason/evidence instead of resetting it to the generic
-        # objective-score reason until the next unthrottled run - without
-        # it, "AI validated" status flickered on and off roughly every 15
-        # minutes on the deployed site. Only commits when this file actually
-        # changed, so this doesn't add a commit every single run. contents:
-        # write (see permissions above) is what lets this push succeed; a
-        # commit made with the default GITHUB_TOKEN never re-triggers this
-        # same workflow, so this can't loop.
-        run: |
-          if ! git diff --quiet -- data/ai-meta.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data/ai-meta.json
-            git commit -m "Update AI fetch timestamp"
-            git fetch origin "${{ github.ref_name }}"
-            git rebase "origin/${{ github.ref_name }}"
-            git push origin "HEAD:${{ github.ref_name }}"
-          else
-            echo "AI fetch timestamp unchanged - nothing to commit."
-          fi
       - name: Cache-bust index.html's own script/stylesheet references
         # GitHub Pages serves every static file (including app.js/
         # styles.css themselves) with Cache-Control: max-age=600 - not

@@ -1,8 +1,8 @@
 // ---- public/app.js ----
 // Reads ./data/matches.json (written at build time by scripts/build-data.mjs,
-// which only ever fetches fixtures and asks Gemini to score them - see that
-// script's own top comment) and does everything that has to happen per
-// viewer instead of once at build time:
+// which fetches fixtures and scores them deterministically from real
+// sports-data APIs - see that script's own top comment) and does everything
+// that has to happen per viewer instead of once at build time:
 //
 //   - Converting every UTC kickoff to THIS viewer's own local time.
 //   - Deciding which matches form "today's recommended lineup" - this has
@@ -11,29 +11,30 @@
 //     both relative to the viewer's own clock, and one static build serves
 //     every viewer in every timezone at once.
 //
-// The AI scoring itself (competitiveness/watchability/reason/venueZh)
-// already happened automatically in the background, on a schedule, well
-// before this page ever loaded - see build-data.mjs. `whereToWatchTw` is
-// NOT one of those AI answers anymore - it's a hardcoded rule
-// (`resolveWhereToWatchTw`, also in build-data.mjs): 愛爾達體育台 for
-// everything except an MLB fixture ESPN itself reports as Apple TV.
-// Nothing here ever calls Gemini directly, and the only OTHER network
-// endpoints this page ever talks to are the shared proxy's own read-only
-// `/sports-proxy` (live score/odds polling, see pollLiveMatches) and
-// `/match-dispatch` (the manual "重新整理資料"/"AI 重新評估" buttons, see
-// requestMatchDispatch) - both entirely optional (see state.proxyUrl,
-// sourced from matches.json's own `proxyUrl` field, null and both features
-// silently unavailable when PROXY_URL isn't configured at build time, same
-// graceful-degradation posture as the AI validation pass itself).
-// Everything else - sport priority, enabled sports, and which swiped match
-// a viewer prefers - is local-only, in this browser's own localStorage,
-// with no server-side sync of any kind (see README's "Local-only, no
-// accounts").
+// The scoring itself (competitiveness/watchability/reason) already happened
+// automatically in the background, on a schedule, well before this page
+// ever loaded - see build-data.mjs. There is no AI anywhere in this
+// pipeline as of docs/recommendation-engine-audit.md's Round 11 (removed
+// entirely - free-tier Gemini quota couldn't sustain the workload, and its
+// own bounded ±2 validation nudge was never more than a small adjustment on
+// top of this same deterministic score anyway). `whereToWatchTw` was never
+// an AI answer either - it's a hardcoded rule (`resolveWhereToWatchTw`, in
+// build-data.mjs): 愛爾達體育台 for everything except an MLB fixture ESPN
+// itself reports as Apple TV. The only network endpoints this page ever
+// talks to are the shared proxy's own read-only `/sports-proxy` (live
+// score/odds polling, see pollLiveMatches) and `/match-dispatch` (the
+// manual "重新整理資料" refresh button, see requestMatchDispatch) - both
+// entirely optional (see state.proxyUrl, sourced from matches.json's own
+// `proxyUrl` field, null and both features silently unavailable when
+// PROXY_URL isn't configured at build time). Everything else - sport
+// priority, enabled sports, and which swiped match a viewer prefers - is
+// local-only, in this browser's own localStorage, with no server-side sync
+// of any kind (see README's "Local-only, no accounts").
 //
-// UI copy is Traditional Chinese throughout; team names, venues, and the
-// AI's reasoning stay bilingual (see buildTeamRow/renderVenue) since an
-// English team/venue name is often the more recognizable half for a fixture
-// nobody has a settled Chinese name for yet.
+// UI copy is Traditional Chinese throughout; team names and venues stay
+// bilingual (see buildTeamRow/renderVenue) since an English team/venue name
+// is often the more recognizable half for a fixture nobody has a settled
+// Chinese name for yet.
 //
 // The pure scoring/viewing-plan math (overlap/slot/weighted-interval-
 // scheduling helpers, computeDayPlan, resolveViewingPlan, confidence, the
@@ -255,12 +256,12 @@ function buildSportIcon(sport) {
 // on a load failure (same onerror pattern as team logos) or when `logo`
 // is absent.
 //
-// Deliberately just these three: every OTHER service Gemini might name in
-// whereToWatchTw (see the shared proxy's buildMatchRecommendPrompt) still
-// shows up as plain text on the card either way (see buildMatchCard's
-// watch-text) - this registry only controls which ones additionally get a
-// recognizable logo/color badge, scoped down to the services this site's
-// own viewer actually cares about tracking.
+// Deliberately just these three, even though resolveWhereToWatchTw only
+// ever actually produces two of them (愛爾達體育台/Apple TV) - kept
+// text-matched rather than collapsed to those two exact values so a third
+// service (Netflix) already has a ready slot the day this site covers a
+// league that airs on it, with nothing else in this file needing to
+// change (same reasoning as SPORT_LABELS_ZH above for sports).
 // `logoBg` is a two-stop gradient, not a flat fill (an earlier version used
 // a flat fill, which read as a plain colored sticker sitting behind the
 // logo rather than a designed icon) - the logo itself stays each service's
@@ -302,20 +303,10 @@ const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
-const aiStatusText = document.getElementById('ai-status-text');
-const aiRefetchLink = document.getElementById('ai-refetch-link');
 const tbdSection = document.getElementById('tbd-section');
 const tbdListEl = document.getElementById('tbd-list');
 const cardTemplate = document.getElementById('match-card-template');
 const teamRowTemplate = document.getElementById('team-row-template');
-
-// The manual "fetch again" affordance from the footer (see "Gemini usage
-// status" below) - only the repo owner can actually run this (GitHub asks
-// for sign-in and repo write access), but that matches who's ever going to
-// click it: this is a personal site, not a public tool, and there's no
-// client-safe way for a static page to trigger a GitHub Actions run
-// itself without embedding a credential in it.
-aiRefetchLink.href = 'https://github.com/jaypengx-collab/Match-Find/actions/workflows/deploy.yml';
 
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
@@ -327,8 +318,6 @@ const settingsEnabledSports = document.getElementById('settings-enabled-sports')
 const updateStatusText = document.getElementById('update-status-text');
 const checkUpdateBtn = document.getElementById('check-update-btn');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
-const aiReevaluateStatusText = document.getElementById('ai-reevaluate-status-text');
-const aiReevaluateBtn = document.getElementById('ai-reevaluate-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -567,7 +556,6 @@ function renderEnabledSportsPanel() {
 
 function openSettingsPanel() {
   renderSettingsPanel();
-  renderAiReevaluateStatus();
   settingsPanel.hidden = false;
   settingsBackdrop.hidden = false;
 }
@@ -812,15 +800,8 @@ function buildTeamRow({ logo, name, nameZh, homeAway }) {
   return node;
 }
 
-// English + Chinese together, same reasoning as team names (see README) -
-// an obscure US ballpark's English name is often more recognizable than a
-// guessed Chinese transliteration, so neither is dropped when both exist.
 function renderVenue(el, match) {
-  if (!match.venue) {
-    el.textContent = '';
-    return;
-  }
-  el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
+  el.textContent = match.venue || '';
 }
 
 function buildMatchCard(match) {
@@ -938,13 +919,6 @@ function buildMatchCard(match) {
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
-  // 'api-objective' means the deterministic, real-data score (see
-  // build-data.mjs's computeMatchObjectiveScore) hasn't been validated by
-  // Gemini yet - still real, current data, just missing that one extra
-  // layer of judgment, hence a lighter caveat than the old 'heuristic'
-  // source this replaced ever showed (see styles.css's own .is-api-objective
-  // rule for the actual wording).
-  if (match.source === 'api-objective') reasonEl.classList.add('is-api-objective');
 
   // A plain fact, independent of recommendation state entirely (see
   // resolveViewingPlan's own top comment on why overlap no longer decides
@@ -1353,28 +1327,37 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // own comment.
       interactedStack = { dayKey, slotKey, memberOrderKey: wrapper.dataset.memberOrderKey, node: wrapper };
       wrapper.dataset.primaryId = chosen.id;
-      // Double rAF, not a direct call: render(0, true) just above set this
-      // track's `transform` to its committed value with the CSS transition
-      // enabled (see that function's own comment) - but pinSlotChoice's own
-      // renderSections() detaches and reappends this exact node
-      // synchronously (the reuse path a few lines down in
-      // renderRecommendedSection), in the SAME tick, before the browser has
-      // painted a single frame of that transition. Confirmed live-reported:
-      // this reads fine on Chromium (this repo's only real browser-
-      // automation target, see this function's own history/comment on why)
-      // but reliably freezes the slide animation mid-flight on real Safari,
-      // leaving the card stuck part-way between cards - reparenting an
-      // element mid-transition, before its first paint, is exactly the kind
-      // of WebKit-vs-Chromium timing gap a Chromium-only sandbox can't
-      // catch. The first rAF fires before the NEXT paint (too early - that
-      // paint hasn't happened yet); the second one runs in the frame AFTER
-      // it, once the transition has genuinely started rendering, so the
-      // reparent below only ever interrupts an ALREADY-PLAYING transition
-      // (which every tested browser, WebKit included, carries through
-      // correctly) instead of one that never got a chance to start.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => pinSlotChoice(dayKey, slotKey, chosen.id));
-      });
+      // Wait for the transition to ACTUALLY finish, not a guessed frame
+      // count. A prior version deferred this two requestAnimationFrame
+      // callbacks, reasoning that render(0, true) just above needed one
+      // frame to paint before pinSlotChoice's own renderSections() could
+      // safely reparent this node without interrupting the transition -
+      // live-reported as still freezing on real Safari after that fix
+      // shipped, so whatever the actual timing gap is, a fixed frame count
+      // guessed against a browser this sandbox can't run (no WebKit here)
+      // isn't it. transitionend is the browser's own "this specific
+      // transition is done" signal - reparenting after it fires can no
+      // longer interrupt anything, on any engine, by construction, not by
+      // timing luck. transitioncancel covers the one case transitionend
+      // doesn't: the viewer starting a NEW drag before this one settled,
+      // which forces `transition: none` in move() above and cancels this
+      // transition outright - still "done" as far as this commit cares.
+      // The setTimeout fallback (250ms's own CSS duration, +150ms margin)
+      // guards against either event simply not firing at all - WebKit has
+      // a real history of dropping transitionend in edge cases (e.g. the
+      // element becoming hidden mid-transition), and this is exactly the
+      // one commit that must never be left permanently stuck waiting for
+      // an event that might not come.
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallbackTimer);
+        pinSlotChoice(dayKey, slotKey, chosen.id);
+      };
+      track.addEventListener('transitionend', settle, { once: true });
+      track.addEventListener('transitioncancel', settle, { once: true });
+      const fallbackTimer = setTimeout(settle, 400);
     }
   }
 
@@ -1719,23 +1702,6 @@ function pickInitialDay(days, matches) {
   return todayKey;
 }
 
-// "Gemini last used" (see build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS) -
-// purely informational, so a viewer curious why a brand new fixture still
-// shows an "(API 數據估計，尚未經 AI 驗證)" caveat can see this isn't stuck,
-// just waiting for the next batched Gemini call. The "重新查詢" link next
-// to it (see its href, set once above) only opens the GitHub Actions run
-// page - actually triggering a rebuild needs repo write access, which only
-// this site's own owner has, so that's as far as a static page can safely
-// take it.
-function renderAiStatus(lastAiFetchAt) {
-  if (!lastAiFetchAt) {
-    aiStatusText.textContent = 'AI 尚未查詢過，將於下次建置時查詢。';
-    return;
-  }
-  const fetched = new Date(lastAiFetchAt);
-  aiStatusText.textContent = `AI 最後查詢於 ${localDayFormatter().format(fetched)} ${localTimeFormatter().format(fetched)}。`;
-}
-
 // Applies a freshly-fetched matches.json payload to the page. Used both by
 // the initial load and by checkForUpdate() below, so "how a payload turns
 // into what's on screen" only exists in one place.
@@ -1759,8 +1725,6 @@ function applyMatchData(data) {
     generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
   }
   state.proxyUrl = data.proxyUrl || null;
-  state.lastAiFetchAt = data.lastAiFetchAt || null;
-  renderAiStatus(data.lastAiFetchAt);
   renderTbdSection();
 
   if (!rawMatches.length) {
@@ -1978,27 +1942,16 @@ async function checkForUpdate({ silent = false } = {}) {
 }
 checkUpdateBtn.addEventListener('click', () => checkForUpdate());
 
-// ---- On-demand refresh / AI reevaluation (shared proxy's /match-dispatch) --
+// ---- On-demand refresh (shared proxy's /match-dispatch) --------------------
 //
-// "重新整理資料" and "AI 重新評估" both fire the exact same GitHub Actions
-// workflow_dispatch (see the shared proxy's own worker.js /match-dispatch
-// route) - there is still no separate "just the ESPN half" endpoint to
-// trigger, same reasoning checkForUpdate's own comment already gives for
-// why checkUpdateBtn/refreshDataBtn share one function. Which one actually
-// happens (a fresh ESPN pull always; a fresh Gemini validation pass only if
-// it's been at least AI_REEVALUATE_MIN_INTERVAL_MS - see build-data.mjs's
-// own AI_FETCH_MIN_INTERVAL_HOURS) is decided entirely SERVER-SIDE by
-// data/ai-meta.json's one shared clock, the same clock every trigger (this
-// page's two buttons, the page-load ping below, this site's own owner
-// manually running the workflow, the 15-minute cron) reads - never by which
-// button was clicked. The two buttons exist only because "get me fresh
-// scores now" and "ask AI to re-check everything now" read as different
-// REQUESTS to a viewer, not because they do different things once they
-// reach GitHub.
-const AI_REEVALUATE_MIN_INTERVAL_MS = 60 * 60_000; // mirrors build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS (1)
-// A plain client-side courtesy debounce (this page's own two buttons, and
-// the page-load ping, all share it) - the shared proxy enforces the REAL
-// global cooldown/rate limits server-side regardless; this only avoids an
+// "重新整理資料" fires a GitHub Actions workflow_dispatch (see the shared
+// proxy's own worker.js /match-dispatch route) that re-pulls ESPN's live
+// data and recomputes every fixture's objective score fresh - there is no
+// separate "just the ESPN half" endpoint to trigger, same reasoning
+// checkForUpdate's own comment already gives for why checkUpdateBtn/
+// refreshDataBtn share one function.
+// A plain client-side courtesy debounce - the shared proxy enforces the
+// REAL global rate limit server-side regardless; this only avoids an
 // obviously-redundant second request while the first is still in flight or
 // was just sent.
 const MATCH_DISPATCH_CLIENT_COOLDOWN_MS = 60_000;
@@ -2052,54 +2005,6 @@ refreshDataBtn.addEventListener('click', () => {
     failureText: '請求失敗，請稍後再試。'
   });
 });
-
-// Answered CLIENT-SIDE from matches.json's own lastAiFetchAt whenever
-// possible (no network call needed just to tell a viewer "you already have
-// the latest, wait N more minutes") - the actual throttle enforcement stays
-// entirely server-side in build-data.mjs regardless; this is purely an
-// honest, immediate status line so mashing the button isn't the only way
-// to find out it wouldn't do anything new yet.
-function renderAiReevaluateStatus() {
-  if (!state.proxyUrl) {
-    aiReevaluateStatusText.textContent = '此站台尚未設定共用 Worker，AI 重新評估功能無法使用。';
-    aiReevaluateBtn.disabled = true;
-    return;
-  }
-  aiReevaluateBtn.disabled = false;
-  if (!state.lastAiFetchAt) {
-    aiReevaluateStatusText.textContent = 'AI 尚未評估過，按下即可觸發第一次評估。';
-    return;
-  }
-  const remainingMs = AI_REEVALUATE_MIN_INTERVAL_MS - (Date.now() - Date.parse(state.lastAiFetchAt));
-  aiReevaluateStatusText.textContent =
-    remainingMs > 0
-      ? `AI 每小時最多重新評估一次，還要等約 ${Math.max(1, Math.ceil(remainingMs / 60_000))} 分鐘。`
-      : '距離上次 AI 評估已超過一小時，現在按下就會觸發新的評估。';
-}
-
-aiReevaluateBtn.addEventListener('click', () => {
-  requestMatchDispatch({
-    statusEl: aiReevaluateStatusText,
-    button: aiReevaluateBtn,
-    pendingText: '請求中…',
-    successText: '已送出重新評估請求，若已超過一小時的間隔，結果會在建置完成後自動套用。',
-    failureText: '請求失敗，請稍後再試。'
-  });
-});
-
-// A best-effort, silent ping on page load - if it's genuinely been over an
-// hour since the last real Gemini call, this lets ordinary TRAFFIC trigger
-// the next reevaluation automatically in the background, rather than only
-// ever waiting for GitHub's own 15-minute cron tick to happen to notice.
-// Never shown to the viewer either way (no statusEl/button passed) - a
-// visitor did nothing wrong by simply opening the page while this happens
-// to be due, and nothing goes wrong if this silently no-ops (proxy
-// unconfigured, still on cooldown, a network hiccup) either.
-function maybePingAiReevaluate() {
-  if (!state.proxyUrl) return;
-  const due = !state.lastAiFetchAt || Date.now() - Date.parse(state.lastAiFetchAt) >= AI_REEVALUATE_MIN_INTERVAL_MS;
-  if (due) requestMatchDispatch();
-}
 
 // ---- Live score/odds polling (see ./lib/espn.mjs) --------------------------
 //
@@ -2231,7 +2136,6 @@ async function init() {
     applyMatchData(data);
     scheduleNextUpdate();
     scheduleLivePoll();
-    maybePingAiReevaluate();
   } catch (error) {
     console.error(error);
     errorState.hidden = false;

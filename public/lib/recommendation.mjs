@@ -1,41 +1,43 @@
 // ---- public/lib/recommendation.mjs ----
 //
 // The pure, viewer-relative-clock-aside, DOM-free half of "what's worth
-// watching": turning a fixture's AI scores (competitiveness/watchability/
-// broadcastQuality/enduranceScore - all decided once at build time, see
-// scripts/build-data.mjs) into a day's back-to-back viewing plan, plus the
-// score/confidence bookkeeping that decision is built from.
+// watching": turning a fixture's deterministic, real-data scores
+// (competitiveness/watchability/broadcastQuality/enduranceScore - all
+// decided once at build time, entirely from real sports-data APIs, see
+// scripts/objective-score.mjs - no AI involved anywhere in this pipeline
+// as of docs/recommendation-engine-audit.md's Round 11) into a day's
+// back-to-back viewing plan, plus the score/confidence bookkeeping that
+// decision is built from.
 //
 // Extracted out of public/app.js (which still owns everything DOM/
 // localStorage/render-related) so this logic can be:
 //   - imported by scripts/build-data.mjs too (confidence is computed once,
-//     at build time, from the same source/refined signals the cache already
-//     tracks - see computeConfidence below), and
+//     at build time - see computeConfidence below), and
 //   - unit-tested directly with Node's built-in test runner (see
 //     tests/recommendation.test.mjs) without needing a DOM.
 //
 // Nothing in this file reads or writes localStorage, the network, or the
 // DOM - every function here is a pure function of its arguments (aside from
-// isQuietHours/effectiveInterval/isEvidenceFresh's own use of the current
-// wall clock via `new Date`, which is inherent to "is this match on right
-// now"/"is this evidence still current", not a hidden dependency on
-// outside state).
+// isQuietHours/effectiveInterval's own use of the current wall clock via
+// `new Date`, which is inherent to "is this match on right now", not a
+// hidden dependency on outside state).
 //
 // The viewing-plan pipeline (see docs/recommendation-engine-audit.md for
 // the fuller writeup this follows) is deliberately one straight line:
-//   raw AI scores -> effectiveScore (viewer preference) -> planningScore
-//   (+ cross-day repeat penalty) -> schedulingInterval (duration
-//   uncertainty + transition buffer) -> computeDayPlan's scheduler -> the
-//   day's picks -> conflict clusters (presentation only, computed AFTER
-//   scheduling, never before it)
+//   raw objective scores -> effectiveScore (viewer preference) ->
+//   planningScore (+ cross-day repeat penalty) -> schedulingInterval
+//   (duration uncertainty + transition buffer) -> computeDayPlan's
+//   scheduler -> the day's picks -> conflict clusters (presentation only,
+//   computed AFTER scheduling, never before it)
 // No step secretly does another step's job: scoring never decides
 // timing, and the scheduler never re-judges how good a match is.
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` (see the shared proxy's /match-recommend) is free-form
-// text written by Gemini, not a fixed enum - this registry is what turns
-// that text back into a stable id, both for app.js's badge rendering and
+// `whereToWatchTw` (see build-data.mjs's resolveWhereToWatchTw - a
+// hardcoded rule, not an AI guess) is free-form text, not a fixed enum -
+// this registry is what turns that text back into a stable id, both for
+// app.js's badge rendering and
 // for the OWNED_SERVICE_SCORE_BONUS nudge below. See app.js's own (larger)
 // comment on this same registry for the full reasoning; this module only
 // needs the matching/scoring half of it, but keeps the full display data
@@ -87,11 +89,10 @@ export function resolveService(whereToWatchTw) {
 // COMPETITIVENESS (how CLOSE tonight's specific pairing is - competitiveness
 // - plus whether those stakes actually stay meaningful all the way through
 // rather than just at kickoff - enduranceScore), and broad ENTERTAINMENT/
-// public attention (watchability - itself already folded together from the
-// deterministic objective score AND Gemini's own real-world-knowledge/
-// search-grounded validation pass, see build-data.mjs's fetchAiScores and
-// the shared proxy's own mediaAttention evidence category - plus
-// broadcastQuality's production-quality signal) - never a match that only
+// public attention (watchability - itself the deterministic objective
+// score's own national-broadcast/rivalry/derby detectors and betting-market
+// signal, see scripts/objective-score.mjs - plus broadcastQuality's
+// production-quality signal) - never a match that only
 // wins because it's exceptional on one of those axes while being mediocre
 // on the others. A viewer explicitly asked for this distinction: two elite
 // teams playing a close, well-covered game is a different (better)
@@ -194,54 +195,21 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
 //
 // How much a match's score should actually be trusted - NOT a second
 // opinion on whether the match itself is good, just on how solid the
-// evidence behind that judgment is. Deliberately coarse and grounded in
-// exactly what scripts/build-data.mjs's AI score cache already tracks
-// (`source`, `refined`) rather than fabricating precision the pipeline has
-// no actual data for - see docs/recommendation-engine-audit.md's "known
-// limitations" for why this isn't the fuller freshness-decay/feature-
-// completeness model a from-scratch design might use (there's no per-
-// feature fetchedAt timestamp anywhere in this pipeline to decay against
-// yet, so pretending otherwise would just be a more precise-looking guess).
-//
-//   - 'finished': no score was ever computed (see build-data.mjs) - null,
-//     not a number, since "how confident is this score" is meaningless
-//     when there isn't one.
-//   - 'ai' + refined: a deterministic, real-data objective score (see
-//     build-data.mjs's computeMatchObjectiveScore/scripts/objective-score.mjs)
-//     validated by Gemini PLUS a second, comparative pass against its
-//     specific contested neighbors (see build-data.mjs's
-//     refineContestedClusters) - the strongest evidence this pipeline ever
-//     produces for a match.
-//   - 'ai', not refined: the same objective score, validated by one
-//     independent Gemini pass, but never cross-checked against its own
-//     neighbors.
-//   - 'api-objective': the objective score on its own, with a zero
-//     adjustment - PROXY_URL was unset, the call failed, or this fixture is
-//     still waiting its turn (see build-data.mjs's needsScoring/throttling).
-//     Real, current, statistically-grounded data (season record, recent
-//     form, standings proximity, betting odds - see
-//     scripts/objective-score.mjs), just without Gemini's own validation
-//     pass on top yet - meaningfully more trustworthy than the OLD
-//     win-loss-only 'heuristic' fallback this replaced (see below), but
-//     still a notch below anything Gemini has actually looked at.
-//   - 'heuristic': retained only so an OLDER cached/exported match (from
-//     before this pipeline's API-data rewrite) still maps to a sensible
-//     confidence value rather than falling through to null - no build
-//     produces this source value anymore.
-export const CONFIDENCE_BY_SOURCE = {
-  finished: null,
-  aiRefined: 0.9,
-  ai: 0.75,
-  apiObjective: 0.55,
-  heuristic: 0.35
-};
+// judgment behind it is. Used to key off `match.source` (was this
+// particular fixture validated by Gemini, and if so how thoroughly) back
+// when that varied per fixture depending on quota/throttling - see this
+// file's own git history. Gemini validation is gone entirely now (see
+// docs/recommendation-engine-audit.md's Round 11): every non-finished
+// fixture gets the exact same deterministic, real-data objective score
+// (scripts/objective-score.mjs) computed the exact same way, so there is
+// no longer a per-fixture "how was THIS one scored" question to answer -
+// only "was a score computed for it at all" (a finished/never-scored
+// fixture has none, hence null - "how confident is this score" is
+// meaningless when there isn't one).
+export const CONFIDENCE_OBJECTIVE = 0.7;
 
 export function computeConfidence(match) {
-  if (!match || match.source === 'finished' || match.source == null) return CONFIDENCE_BY_SOURCE.finished;
-  if (match.source === 'ai') return match.refined ? CONFIDENCE_BY_SOURCE.aiRefined : CONFIDENCE_BY_SOURCE.ai;
-  if (match.source === 'api-objective') return CONFIDENCE_BY_SOURCE.apiObjective;
-  if (match.source === 'heuristic') return CONFIDENCE_BY_SOURCE.heuristic;
-  return null;
+  return Number.isFinite(match?.score) ? CONFIDENCE_OBJECTIVE : null;
 }
 
 // The single entry point docs/recommendation-engine-audit.md points to for
@@ -268,66 +236,6 @@ export function computeRecommendationScore(match, context = {}) {
     eventScore: breakdown.baseScore,
     viewerScore: breakdown.effectiveScore
   };
-}
-
-// ---- Structured evidence -----------------------------------------------
-//
-// scripts/build-data.mjs's cache stores each match's `evidence` (a small
-// array of {category, finding, source, retrievedAt} - see that script's
-// EVIDENCE_CATEGORIES/sanitizeCachedEvidenceItem, and the shared proxy's
-// own worker.js for where it's actually produced) and surfaces it, along
-// with `evidenceRetrievedAt` (the most recent item's own timestamp), onto
-// every match this module's resolveViewingPlan hands back - both fields
-// pass straight through resolveViewingPlan's own `{...match, ...}` spread
-// with no extra work needed there. This section is what turns that raw
-// array into something a caller (app.js's buildMatchCard, or a future UI)
-// can render without re-deriving the same grouping/labels itself, and
-// gives "how current is this" its own explicit signal - separate from
-// confidence (which is about how much the SCORE should be trusted, not how
-// current the evidence behind it is; see computeConfidence's own "refined
-// does not mean current" comment above).
-export const EVIDENCE_CATEGORY_LABELS = {
-  competitiveness: '競爭力',
-  mediaAttention: '媒體關注度',
-  eventImportance: '重要性',
-  recentContext: '近況'
-};
-
-// A display-ready form of match.evidence - never mutates or re-validates
-// the array itself (scripts/build-data.mjs already did that before it ever
-// reached matches.json), just attaches the Traditional Chinese label a
-// caller would otherwise have to look up in EVIDENCE_CATEGORY_LABELS
-// itself. Returns [] for a match with no evidence, same "explicit empty,
-// not absent" convention the rest of this pipeline uses.
-export function describeEvidence(match) {
-  if (!Array.isArray(match?.evidence) || !match.evidence.length) return [];
-  return match.evidence.map(item => ({
-    category: item.category,
-    label: EVIDENCE_CATEGORY_LABELS[item.category] || EVIDENCE_CATEGORY_LABELS.recentContext,
-    finding: item.finding,
-    source: item.source,
-    retrievedAt: item.retrievedAt
-  }));
-}
-
-// How long a match's own evidence stays "fresh" for display purposes -
-// intentionally the same threshold build-data.mjs's own
-// EVIDENCE_MAX_AGE_HOURS uses to decide when to actually re-fetch, so a
-// viewer is never shown a "current as of..." claim that the build pipeline
-// itself would already consider stale enough to be retrying.
-export const EVIDENCE_FRESH_MAX_AGE_HOURS = 24;
-
-// True when match.evidenceRetrievedAt exists and is within
-// EVIDENCE_FRESH_MAX_AGE_HOURS of right now - reads the wall clock via
-// `new Date`, the same documented exception this file's own top comment
-// already carves out for isQuietHours/effectiveInterval ("is this current
-// right now" is inherently relative to the current moment, not a hidden
-// dependency on outside state). A match with no evidence at all is never
-// "fresh" - there's nothing to be fresh.
-export function isEvidenceFresh(match, maxAgeHours = EVIDENCE_FRESH_MAX_AGE_HOURS) {
-  if (!match?.evidenceRetrievedAt) return false;
-  const ageMs = Date.now() - Date.parse(match.evidenceRetrievedAt);
-  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeHours * 60 * 60 * 1000;
 }
 
 // ---- Overlap / duration helpers --------------------------------------------

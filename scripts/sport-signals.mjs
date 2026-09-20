@@ -39,6 +39,12 @@
 // someone can see a live response.
 
 const FETCH_TIMEOUT_MS = 15_000;
+// Same reasoning as build-data.mjs's own FETCH_USER_AGENT (a live-confirmed
+// Akamai bot-manager block on ESPN's scoreboard API, keyed on the UA
+// string) - neither MLB Stats API nor Jolpica has shown the same behavior,
+// but sending an honest, self-identifying UA here too costs nothing and
+// closes off the same failure mode before it's ever actually hit here.
+const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/jaypengx-collab/Match-Find)';
 
 // ---- MLB: statsapi.mlb.com -----------------------------------------------
 //
@@ -146,7 +152,7 @@ export async function fetchMlbStandings(season) {
   try {
     const response = await fetch(
       `https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=${encodeURIComponent(season)}&standingsTypes=regularSeason`,
-      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+      { headers: { 'User-Agent': FETCH_USER_AGENT }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
     );
     if (!response.ok) return byName;
     const byTeamId = parseMlbStandingsResponse(await response.json());
@@ -204,6 +210,7 @@ export function parseF1DriverStandingsResponse(json) {
 export async function fetchF1TitleRaceIntensity() {
   try {
     const response = await fetch('https://api.jolpi.ca/ergast/f1/current/driverStandings.json', {
+      headers: { 'User-Agent': FETCH_USER_AGENT },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
     });
     if (!response.ok) return null;

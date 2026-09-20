@@ -10,15 +10,13 @@ import {
   parseOverallRecord,
   oddsContext,
   parseOddsSignal,
-  sanitizeCachedEvidenceItem,
   resolveWhereToWatchTw,
   computeDurationMinutes,
   finishedDurationMinutes,
   MIN_FINISHED_DURATION_MINUTES,
   computeMatchObjectiveScore,
   describeFactorsZh,
-  buildObjectiveReasonZh,
-  applyCachedAdjustments
+  buildObjectiveReasonZh
 } from '../scripts/build-data.mjs';
 
 describe('isTimeTbd', () => {
@@ -182,42 +180,6 @@ describe('buildObjectiveReasonZh', () => {
   });
 });
 
-describe('sanitizeCachedEvidenceItem', () => {
-  test('keeps a well-formed item as-is', () => {
-    const item = sanitizeCachedEvidenceItem({
-      category: 'eventImportance',
-      finding: 'This decides the division.',
-      source: 'current standings',
-      retrievedAt: '2026-09-19T12:00:00.000Z'
-    });
-    assert.deepEqual(item, {
-      category: 'eventImportance',
-      finding: 'This decides the division.',
-      source: 'current standings',
-      retrievedAt: '2026-09-19T12:00:00.000Z'
-    });
-  });
-
-  test('an unrecognized category falls back to recentContext, never dropped', () => {
-    const item = sanitizeCachedEvidenceItem({ category: 'bogus', finding: 'still a real fact', source: 'x', retrievedAt: 'now' });
-    assert.equal(item.category, 'recentContext');
-    assert.equal(item.finding, 'still a real fact');
-  });
-
-  test('non-string fields become empty strings rather than throwing', () => {
-    const item = sanitizeCachedEvidenceItem({ category: null, finding: 42, source: {}, retrievedAt: null });
-    assert.equal(item.finding, '');
-    assert.equal(item.source, '');
-    assert.equal(typeof item.retrievedAt, 'string'); // stamped with a real timestamp, not null
-  });
-
-  test('bounds finding/source length', () => {
-    const item = sanitizeCachedEvidenceItem({ category: 'recentContext', finding: 'x'.repeat(500), source: 'y'.repeat(500) });
-    assert.ok(item.finding.length <= 200);
-    assert.ok(item.source.length <= 80);
-  });
-});
-
 describe('resolveWhereToWatchTw (the hardcoded Taiwan broadcast rule)', () => {
   test('defaults every sport to 愛爾達體育台', () => {
     assert.equal(resolveWhereToWatchTw({ sport: 'Premier League', broadcast: 'Peacock' }), '愛爾達體育台');
@@ -261,44 +223,6 @@ describe('finishedDurationMinutes', () => {
     const start = '2026-09-19T18:00:00.000Z';
     const now = new Date('2026-09-19T18:05:00.000Z');
     assert.equal(finishedDurationMinutes(start, now), MIN_FINISHED_DURATION_MINUTES);
-  });
-});
-
-describe('applyCachedAdjustments (AI validation stays visible across throttled runs)', () => {
-  const NOW_MS = Date.parse('2026-09-20T12:00:00.000Z');
-
-  test('leaves a fresh-this-run adjustment alone (never overwritten by a cache entry)', () => {
-    const adjustments = new Map([['a', { source: 'ai', reason: 'fresh' }]]);
-    const cached = { a: { source: 'ai', reason: 'stale', cachedAt: new Date(NOW_MS - 60_000).toISOString() } };
-    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
-    assert.equal(adjustments.get('a').reason, 'fresh');
-  });
-
-  test('falls back to a cache entry within the max age for a fixture with no fresh pick', () => {
-    const adjustments = new Map();
-    const cached = { a: { source: 'ai', reason: 'from 2 hours ago', cachedAt: new Date(NOW_MS - 2 * 60 * 60 * 1000).toISOString() } };
-    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
-    assert.equal(adjustments.get('a').reason, 'from 2 hours ago');
-  });
-
-  test('ignores a cache entry older than the max age - falls through to the objective-score default', () => {
-    const adjustments = new Map();
-    const cached = { a: { source: 'ai', reason: 'from 7 hours ago', cachedAt: new Date(NOW_MS - 7 * 60 * 60 * 1000).toISOString() } };
-    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
-    assert.equal(adjustments.has('a'), false);
-  });
-
-  test('ignores a missing or malformed cachedAt rather than treating it as infinitely fresh', () => {
-    const adjustments = new Map();
-    const cached = { a: { source: 'ai', reason: 'no timestamp' } };
-    applyCachedAdjustments(adjustments, [{ id: 'a' }], cached, NOW_MS, 6);
-    assert.equal(adjustments.has('a'), false);
-  });
-
-  test('never invents an entry for a fixture with no cache record at all', () => {
-    const adjustments = new Map();
-    applyCachedAdjustments(adjustments, [{ id: 'never-validated' }], {}, NOW_MS, 6);
-    assert.equal(adjustments.has('never-validated'), false);
   });
 });
 

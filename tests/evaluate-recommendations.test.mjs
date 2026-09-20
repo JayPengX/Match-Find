@@ -7,7 +7,7 @@ import {
   computePlannerOracle,
   computeDimensionCorrelations
 } from '../scripts/evaluate-recommendations.mjs';
-import { computeDayPlan } from '../public/lib/recommendation.mjs';
+import { computeDayPlan, CONFIDENCE_OBJECTIVE } from '../public/lib/recommendation.mjs';
 
 function match(overrides = {}) {
   return {
@@ -19,8 +19,6 @@ function match(overrides = {}) {
     recommended: true,
     score: 7,
     effectiveScore: 7,
-    source: 'ai',
-    refined: false,
     competitors: [{ name: 'Away Team' }, { name: 'Home Team' }],
     ...overrides
   };
@@ -92,8 +90,8 @@ describe('summarize', () => {
   });
 
   test('falls back to computeConfidence when a match has no baked-in confidence field', () => {
-    const report = summarize([match({ source: 'ai', refined: true, confidence: undefined })]);
-    assert.equal(report.confidenceDistribution.avg, 0.9);
+    const report = summarize([match({ confidence: undefined })]);
+    assert.equal(report.confidenceDistribution.avg, CONFIDENCE_OBJECTIVE);
   });
 
   test('an empty match list produces a well-formed, non-crashing report', () => {

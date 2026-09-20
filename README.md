@@ -26,8 +26,8 @@ chips instead.
 Scoring and picking are split across two different places, deliberately:
 
 1. **`scripts/build-data.mjs`** (run by the scheduled GitHub Action below,
-   never by a browser — see "AI runs in the background" below) fetches
-   upcoming *and currently-live* fixtures for the next 14 days from
+   never by a browser) fetches upcoming *and currently-live* fixtures for
+   the next 14 days from
    [ESPN's public scoreboard API](https://site.api.espn.com) — no API key
    needed for this part. Only a FINISHED fixture is excluded - this script
    re-fetches ESPN's live feed on every scheduled run and every push, so a
@@ -43,36 +43,19 @@ Scoring and picking are split across two different places, deliberately:
 2. **`scripts/objective-score.mjs` + `scripts/sport-signals.mjs`** compute
    **competitiveness**, **watchability**, **enduranceScore**, and
    **broadcastQuality** for every fixture DETERMINISTICALLY, from real,
-   current sports-data APIs - not from Gemini. See "API-data-driven
-   scoring engine" below for exactly which APIs and formulas; the short
-   version: MLB pulls standings/recent-form/streak data from the official
-   MLB Stats API, F1 pulls championship-standings gap from the
+   current sports-data APIs - this is the WHOLE score, not a baseline
+   something else refines (there is no AI anywhere in this pipeline - see
+   "API-data-driven scoring engine" below and
+   `docs/recommendation-engine-audit.md`'s Round 11 for why Gemini was
+   removed entirely). MLB pulls standings/recent-form/streak data from the
+   official MLB Stats API, F1 pulls championship-standings gap from the
    Ergast-compatible Jolpica API, and every sport folds in season record
    and betting odds already fetched from ESPN, plus the same rivalry/derby/
    national-broadcast detectors `scripts/sport-duration.mjs` uses for
-   duration. This objective score is computed every build, for every
-   fixture, whether or not the shared proxy below is even configured.
-3. It sends every currently non-finished fixture (see "AI validation"
-   below - there is no per-match cache, so this is genuinely everything in
-   the window, every unthrottled run) to a `/match-recommend` endpoint on a
-   shared Cloudflare Worker (see "AI recommendations" below) - along with
-   each fixture's own objective score and the real factors that produced
-   it. Gemini's job here is narrower than it used to be: VALIDATE that
-   score against real-world knowledge no formula has access to (a fresh
-   injury, a rivalry's real history, a player's current form, genuine
-   current media attention) and return a small, bounded *adjustment* (-2 to
-   +2 per dimension) - never a score invented from scratch. Most fixtures
-   get an adjustment of 0, which is the expected, common outcome, not a
-   failure to engage - it means the deterministic score already looks
-   right. See "AI-data-driven scoring engine" below for the full reasoning,
-   and "Duration and Taiwan broadcast source are deterministic, not
-   AI-guessed" for the two things this build decides with a plain
-   formula/rule instead of asking Gemini at all. None of this depends on
-   who's looking at the page or when, so it's all computed once, at build
-   time.
-4. The result — every fixture, scored, nothing filtered or picked yet — is
+   duration. Computed every build, for every fixture.
+3. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
-5. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
+4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
    converts every fixture's kickoff to your own local time and applies your
    Settings nudges (sport priority, owned services). The actual "what's
    worth watching today" decision — **one local calendar day at a time**,
@@ -80,14 +63,15 @@ Scoring and picking are split across two different places, deliberately:
    actually conflict" are both relative to *your* clock — happens in
    `computeDayPlan`, described in "The viewing plan" below.
 
-## API-data-driven scoring engine (objective score + AI validation)
+## API-data-driven scoring engine (no AI involved)
 
-This is the biggest architectural change this repo has been through:
 competitiveness/watchability/enduranceScore/broadcastQuality used to be
-asked from Gemini directly, essentially "from memory." They're now computed
-**first**, deterministically, by `scripts/objective-score.mjs` from real,
-current statistical signals `scripts/sport-signals.mjs` fetches - and
-Gemini's role shrank to validating that number, never producing it.
+asked from Gemini directly, essentially "from memory," then (for one
+intermediate period) computed deterministically first with Gemini
+validating the result. Gemini is gone entirely now (see
+`docs/recommendation-engine-audit.md`'s Round 11) - every fixture's score
+is exactly what `scripts/objective-score.mjs` computes from real, current
+statistical signals `scripts/sport-signals.mjs` fetches, nothing more.
 
 **Per-sport signals actually used:**
 
@@ -114,60 +98,43 @@ Gemini's role shrank to validating that number, never producing it.
   without a dedicated standings-API integration yet (see "Known
   limitations" below).
 
-**What Gemini still does, and why it's now "validation," not "scoring":**
-`/match-recommend`'s prompt is handed each fixture's already-computed
-objective score PLUS the actual `factors` that produced it (e.g. `"season
-win% gap 4.5pp"`, `"last 10: 7-3 vs 5-5"`, `"postseason game"`), and is
-asked only for a small, bounded **adjustment** (-2 to +2 per dimension,
-clamped server-side regardless of what it returns) - never a replacement
-score. An adjustment of 0 across the board is the expected, common answer:
-it means the deterministic formula already reflects what real-world
-knowledge would say. A non-zero adjustment has to be grounded in something
-the formula genuinely couldn't see (a fresh injury, a rivalry's real
-history, which specific player is in form) - exactly the "assistance and
-validation, not the final judgment" role this repo's own design has always
-described for Gemini elsewhere (see "AI recommendations" below), now
-applied to the score itself, not just the scheduling on top of it. The
-comparative `/match-recommend-refine` follow-up works the same way, just
-comparing several contesting fixtures' adjustments against each other
-instead of validating one at a time.
-
-**If the shared proxy is unreachable or unconfigured**, a fixture simply
-keeps its objective score with a zero adjustment (`source: 'api-objective'`
-- see "AI validation" below) - still a real, current, statistically-
-grounded number, not the old crude win-rate-only `heuristicScore` this
-replaced (which is gone entirely). The reason text in that case
-(`buildObjectiveReasonZh`) is built from the actual factors behind the
-score (e.g. "依雙方戰績、近期戰況、盤口數據計算。") rather than a generic
-placeholder, and the card shows a lighter "（API 數據估計，尚未經 AI
-驗證）" caveat instead of the old "估計，非 AI 推薦" one.
+**Why Gemini is gone entirely** (`docs/recommendation-engine-audit.md`'s
+Round 11): this pipeline used to send every fixture's objective score to
+Gemini (via the shared Cloudflare Worker) for a small, bounded validation
+adjustment (-2 to +2 per dimension) on top of it. Two independent reasons
+killed it, not one: (1) free-tier Gemini quota couldn't sustain the
+workload - Google Search grounding (the one thing that could have added
+real signal a formula can't see, like an injury) failed with a 429
+RESOURCE_EXHAUSTED quota error on 100% of live-tested requests, a
+billing-tier wall, not a bug; (2) even the plain validation call, when it
+succeeded, was structurally bounded to a ±2 nudge - a live-verified case (a
+0-0 preseason exhibition scoring near-maximum competitiveness) showed
+Gemini correctly IDENTIFYING the problem in its own reasoning text while
+being unable to fix it, because only the deterministic formula itself
+could move the score that far. Every fixture's score is now exactly what
+`computeMatchObjectiveScore` computes - the same real, current,
+statistically-grounded number this engine always primarily relied on, not
+the old crude win-rate-only `heuristicScore` from before this engine
+existed (long gone). The reason text (`buildObjectiveReasonZh`) is built
+from the actual factors behind the score (e.g. "依雙方戰績、近期戰況、
+盤口數據計算。").
 
 **Known limitations** (stated plainly rather than left silently
 unaddressed, same posture as `docs/recommendation-engine-audit.md`):
 
-- **No live verification of the two new external APIs.** This integration
-  was built in a development session with no outbound network access to
-  EITHER the MLB Stats API or the Jolpica F1 API (nor, for that matter,
-  ESPN's own API - see that module's own top-of-file comment for the full
-  story) - every response shape assumed in `scripts/sport-signals.mjs` is
-  taken from these APIs' own long-stable, widely-documented public formats,
-  not confirmed against a live response. Both fetch functions are written
-  defensively enough that a shape mismatch degrades to "no signal for this
-  fixture" rather than breaking the build, but the very first real
-  scheduled run after this shipped is the actual live test - watch
-  `public/data/matches.json`'s `objectiveFactors`/the build log for whether
-  MLB/F1 fixtures are picking up real factors (e.g. `"last 10: ..."`) or
-  falling back to season-record-only.
 - **NBA and Premier League have no dedicated standings-API integration
   yet.** Both score on season record + odds + the existing rivalry/derby/
   national-broadcast detectors - real signals, but shallower than MLB's
   standings-proximity/recent-form depth. A free, no-key NBA/EPL standings
   source (or ESPN's own standings endpoint, not just its scoreboard) would
   be the natural next step.
-- **No injury data.** None of the sports pull an actual injury report - a
-  star player's absence is exactly the kind of thing this design deliberately
-  leaves for Gemini's own validation pass to catch, not something the
-  deterministic formula accounts for on its own.
+- **No injury data, and no real-time media/narrative signal at all.**
+  Neither is knowable from data this build already fetches, and adding
+  either back would mean either a new paid data source or a working
+  real-time search/grounding integration - deliberately not attempted
+  again without that being a real, separate, budgeted decision (see
+  `docs/recommendation-engine-audit.md`'s Round 9/11 for why the AI-search
+  route was tried and abandoned).
 - **F1's per-race modifiers (safety car, weather) aren't modeled.** Neither
   is knowable before a race starts from data this build already has, and
   adding real weather data would mean taking on a new API key/dependency
@@ -183,8 +150,9 @@ enabled, and which swiped match you Prefer for a slot - lives in this
 browser's own `localStorage` and nowhere else. There is no sign-up, no
 account, and no server-side sync of any kind: an earlier version of this
 site had a cross-device settings-sync feature (a shared passcode through
-the same Cloudflare Worker `scripts/build-data.mjs` already talks to for
-scoring); it's gone now, on purpose - one browser, one set of local
+the same shared Cloudflare Worker `/sports-proxy`/`/match-dispatch` use -
+see "On-demand refresh" below); it's gone now, on purpose - one browser,
+one set of local
 preferences, nothing to pair or lose track of across devices. Match
 data/scores are the one thing that genuinely IS shared (the same
 `matches.json` build serves every viewer), which is exactly why they never
@@ -206,11 +174,10 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
   race), renormalized away like any other missing signal.
 - **competitiveness** - how CLOSE tonight's specific pairing is (season
   record gap, recent form, betting-market spread)
-- **watchability** - entertainment value/mainstream public attention -
-  itself already the deterministic objective score folded together with
-  Gemini's own real-world-knowledge and Google Search-grounded validation
-  pass (see "AI recommendations" below for what that grounding pass
-  actually does and its own real limits)
+- **watchability** - entertainment value/mainstream public attention - the
+  deterministic objective score's own national-broadcast/rivalry/derby
+  detectors and betting-market signal (see "API-data-driven scoring engine"
+  above)
 - **enduranceScore** - does the contest actually stay meaningful all the
   way through, not just at kickoff
 - **broadcastQuality** - production quality of watching it
@@ -487,11 +454,11 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   ordinary and sprint weekends). Session times were cross-checked against
   Formula1.com's own official timetable and matched exactly. F1's Taiwan
   broadcaster is always 愛爾達體育台 - the MLB-specific "Apple TV exclusive
-  slate" override (see "Broadcast service registry" below and the shared
-  proxy's `/match-recommend`) explicitly does not apply to F1, even though ESPN's
-  own `broadcast` field for F1 also happens to say Apple TV (its real
-  international rights holder - a genuinely different, unrelated fact from
-  who carries it in Taiwan).
+  slate" override (see `resolveWhereToWatchTw` in build-data.mjs)
+  explicitly does not apply to F1, even though ESPN's own `broadcast` field
+  for F1 also happens to say Apple TV (its real international rights
+  holder - a genuinely different, unrelated fact from who carries it in
+  Taiwan).
 
 ## Sport priority (⚙, in the sport filter row)
 
@@ -558,30 +525,22 @@ LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
   it is a plain string check (`/apple\s*tv/i` against that field, MLB
   fixtures only), never a live search or a model guess.
 
-**Gemini has no role here at all anymore**: an earlier version of this
-rule kept the shared proxy's own `whereToWatchTw` guess around as a
-secondary `aiSuggestedWhereToWatchTw` signal for spot-checking the rule
-against reality, but the proxy's `/match-recommend` doesn't ask for or
-return a Taiwan broadcast guess at all anymore (see "AI recommendations"
-below) - there was nothing left for it to validate once the rule became
-fully deterministic from data ESPN already provides. This mirrors the
-same posture Gemini's competitiveness/watchability scoring has always had
-toward `computeDayPlan`'s scheduler (see "AI recommendations" below): a
-signal that feeds a deterministic process, never the final word by itself
-- applied here to duration and broadcast source too, both of which no
-longer need Gemini's judgment at all, only ESPN's own already-fetched
-fixture data.
+**Gemini has no role here at all, or anywhere else in this pipeline** (see
+`docs/recommendation-engine-audit.md`'s Round 11) - both duration and
+broadcast source are, and have long been, fully deterministic from data
+ESPN already provides.
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 
-`SERVICES` in `public/app.js` maps free-form `whereToWatchTw` text (Gemini's
-own wording, not a fixed enum) to a small badge for exactly three services
-this site's own viewer actually tracks: 愛爾達, Apple TV, Netflix. Any
-*other* broadcaster Gemini names (緯來, DAZN, Disney+, myVideo, MLB.TV, ...)
-still shows up as plain text on the card either way (see `watch-text` in
-`buildMatchCard`) - it just doesn't get a logo/color badge, since this
-registry only exists to badge the handful of services actually worth
-tracking, not to catalog every service Gemini might ever answer with.
+`SERVICES` in `public/app.js` maps `whereToWatchTw` text (a fixed rule's
+output, see `resolveWhereToWatchTw` above, not free-form AI wording) to a
+small badge for exactly three services this site's own viewer actually
+tracks: 愛爾達, Apple TV, Netflix - kept text-matched rather than collapsed
+to an enum only so a future third service has a ready slot. Any *other*
+broadcaster still shows up as plain text on the card either way (see
+`watch-text` in `buildMatchCard`) - it just doesn't get a logo/color badge,
+since this registry only exists to badge the handful of services actually
+worth tracking.
 All three render each service's own real, official mark, hotlinked rather
 than reproduced into this repo, same posture as the team/F1 logos pulled
 from ESPN's CDN elsewhere in this file: Netflix and Apple TV via Wikimedia
@@ -613,20 +572,19 @@ shows up and can still be
 recommended, this only tips a genuinely close call toward the one you can
 actually watch live right now.
 
-## AI runs in the background, not on page load
+## Scoring runs in the background, not on page load
 
-Nothing in the browser ever calls Gemini directly - that stays entirely
-server-side, in the scheduled build (see "Deployment" below), unattended;
-by the time anyone opens the page, every fixture in the window is already
-scored and sitting in a static file. The browser DOES now talk to two other
-read-only/trigger-only endpoints on the shared proxy - `/sports-proxy` (live
-score/odds polling, see "Live score/odds polling" below) and
-`/match-dispatch` (the manual "重新整理資料"/"AI 重新評估" buttons, see
-"On-demand refresh and AI reevaluation" below) - both entirely optional
-(silently unavailable if `PROXY_URL` isn't configured at build time, same
-graceful-degradation posture the AI validation pass itself already had) and
-neither one holds or needs a Gemini key of its own; the actual Gemini call
-still only ever happens inside the scheduled/dispatched build.
+Nothing in the browser ever computes a fixture's score - that stays
+entirely server-side, in the scheduled build (see "Deployment" below),
+unattended; by the time anyone opens the page, every fixture in the window
+is already scored and sitting in a static file. The browser DOES talk to
+two read-only/trigger-only endpoints on the shared proxy - `/sports-proxy`
+(live score/odds polling, see "Live score/odds polling" below) and
+`/match-dispatch` (the manual "重新整理資料" refresh button, see "On-demand
+refresh" below) - both entirely optional (silently unavailable if
+`PROXY_URL` isn't configured at build time) and neither one calls Gemini or
+any other AI - see the shared proxy's own README for what else the same
+Worker serves.
 
 ## One update path: on load, and exactly when a relevant match starts or ends
 
@@ -683,9 +641,9 @@ Paused while the tab is hidden or a card stack is mid-swipe (same
 and silently unavailable when `PROXY_URL`/`state.proxyUrl` isn't
 configured.
 
-This never re-runs objective scoring or AI validation - it only updates the
-same `competitors[].score`/`isFinished`/odds fields ESPN itself already
-reports, plus two further, real-time-only refinements built from them:
+This never re-runs objective scoring - it only updates the same
+`competitors[].score`/`isFinished`/odds fields ESPN itself already reports,
+plus two further, real-time-only refinements built from them:
 
 - **`liveExcitementBonus`** (`public/lib/recommendation.mjs`) - a small,
   bounded bonus added to a live match's `planningScore` (never its true
@@ -707,36 +665,21 @@ reports, plus two further, real-time-only refinements built from them:
   corrects its schedule-blocking length in real time instead of staying
   pinned to a single pre-game guess for its whole broadcast.
 
-## On-demand refresh and AI reevaluation
+## On-demand refresh
 
-Two Settings buttons trigger a real rebuild now, not just a re-read of
-whatever the last scheduled run already published:
+Settings' **重新整理資料** button triggers a real rebuild now, not just a
+re-read of whatever the last scheduled run already published - it fires the
+shared proxy's `/match-dispatch` route (see that repo's worker.js), which
+runs a `workflow_dispatch` against this repo's own `deploy.yml`: the exact
+same build the 15-minute cron runs (fresh ESPN/live data, objective score
+recomputed), just sooner.
 
-- **重新整理資料** - also fires the shared proxy's `/match-dispatch` route
-  (see that repo's worker.js), which runs a `workflow_dispatch` against this
-  repo's own `deploy.yml` - the exact same build the 15-minute cron runs,
-  just sooner. This is what actually gets fresh ESPN/live data without
-  waiting for the next cron tick.
-- **AI 重新評估** - fires the identical dispatch. There is no separate
-  "AI-only" build path - whether the resulting run actually calls Gemini is
-  decided entirely by `data/ai-meta.json`'s own shared clock (see "AI
-  validation" below), same as every other trigger (cron, a push, this
-  site's own owner manually running the workflow). This button's own
-  Settings text reads that same clock client-side first, so mashing it
-  tells you honestly "still on cooldown, ~N minutes left" without needing a
-  network round-trip just to find out.
-
-Both need the shared proxy's `MATCH_FIND_DISPATCH_TOKEN` secret configured
-(see that repo's README) - a GitHub PAT scoped narrowly to this repo's own
-Actions, unrelated to `GEMINI_API_KEY`. Silently unavailable (buttons
-explain why) when `PROXY_URL` isn't configured, or when that secret isn't
-set (the dispatch request itself just fails, same as any other network
-error this page already handles gracefully). A best-effort, silent ping on
-every page load also fires the same dispatch when it's genuinely been over
-an hour since the last real Gemini call (see
-`AI_REEVALUATE_MIN_INTERVAL_MS`/`maybePingAiReevaluate` in `app.js`) - so
-ordinary traffic, not just someone clicking a button, can trigger the next
-scheduled-feeling reevaluation in the background.
+Needs the shared proxy's `MATCH_FIND_DISPATCH_TOKEN` secret configured (see
+that repo's README) - a GitHub PAT scoped narrowly to this repo's own
+Actions. Silently unavailable (the button explains why) when `PROXY_URL`
+isn't configured, or when that secret isn't set (the dispatch request
+itself just fails, same as any other network error this page already
+handles gracefully).
 
 ## No developer tools in the UI
 
@@ -748,130 +691,6 @@ still works fine against a `public/data/matches.json` copy saved any other
 way (a browser's own devtools, or straight from a GitHub Actions run).
 Settings now shows only what an ordinary viewer would actually use.
 
-## AI validation (per-match adjustment cache survives throttled runs)
-
-Every unthrottled run sends **every currently non-finished fixture** in the
-14-day window to Gemini fresh via the shared proxy's `/match-recommend`,
-not just newly-appeared ones - the objective score itself is also
-recomputed fresh every run (standings/form genuinely change day to day),
-so a validation from hours or days ago isn't worth preserving over just
-asking again when Gemini IS actually being called. The response is an
-**adjustment** (`competitivenessAdjustment`/`watchabilityAdjustment`/
-`enduranceScoreAdjustment`/`broadcastQualityAdjustment`, each -2 to +2,
-plus `reason`/`venueZh`/`evidence`), applied on top of that run's own
-objective score. Requests are batched under the shared Worker's
-80-fixtures-per-call cap (see `AI_SCORE_BATCH_SIZE`), since an unthrottled
-run against a full 14-day window can easily mean a few hundred fixtures at
-once.
-
-**A fixture's own last real adjustment DOES survive between runs, though**
-(`data/ai-meta.json`'s `adjustments` map, keyed by match id, each stamped
-with `cachedAt`) - specifically so a THROTTLED run (see below; the
-schedule fires 4x more often than Gemini is actually allowed to be called)
-reuses a fixture's own last validation instead of resetting it to a bare
-objective score. An earlier version genuinely had no per-match cache at
-all, on the theory above that a stale validation isn't worth keeping - in
-practice that meant "AI validated" status flickered on and off roughly
-every 15 minutes on the deployed site: 3 out of 4 scheduled runs silently
-overwrote matches.json with every fixture's adjustment reset to zero, even
-ones a call earlier that same hour had just validated. `applyCachedAdjustments`
-(build-data.mjs) now falls back to the cache for any fixture that didn't
-get a fresh pick this run, as long as that cache entry isn't older than
-`AI_ADJUSTMENT_CACHE_MAX_AGE_HOURS` (6 - several throttle windows, but
-still bounded so a genuinely stale validation eventually ages out rather
-than being kept forever). A cache entry's own timestamp is never bumped
-just because some later run happened to reuse it, so it keeps aging
-normally either way.
-
-**Throttling how often Gemini gets called**: the workflow itself runs
-every 15 minutes so the free ESPN half of the build stays fresh (see
-"Deployment" below), but calling Gemini on every one of THOSE runs would
-burn quota for no benefit. `data/ai-meta.json` (the one file this pipeline
-still commits back to the repo) records `lastAiFetchAt` — the last time a
-build actually called the proxy — and ANY run (`schedule`, `push`, or
-`workflow_dispatch` — see `GITHUB_EVENT_NAME` in the workflow) skips
-calling Gemini entirely if that was less than `AI_FETCH_MIN_INTERVAL_HOURS`
-(1) ago; every fixture just runs on its objective score alone
-(`source: 'api-objective'`) until the next eligible run. This throttle is
-now applied uniformly regardless of what triggered the run — see that
-constant's own comment for why an earlier version's "push/dispatch always
-calls it" exception had to go once ordinary viewers, not just this site's
-own owner, gained a way to trigger a `workflow_dispatch` themselves (see
-"On-demand refresh and AI reevaluation" below): a shared hourly cap that a
-manual trigger could freely bypass wouldn't really be a cap at all. A local
-run (no `GITHUB_EVENT_NAME`) is the one exception, since there's nothing to
-throttle against when a person is running this directly themselves. The
-footer shows this same timestamp ("AI 最後查詢於 ...") alongside the
-Settings panel's own "重新整理資料"/"AI 重新評估" buttons — see "On-demand
-refresh and AI reevaluation" below for what those actually do now.
-
-The workflow commits `data/ai-meta.json` back to the repo only when its
-timestamp actually changed (see `.github/workflows/deploy.yml`'s "Commit
-AI fetch timestamp" step).
-
-**Media-attention/evidence research is only run for a bounded top slice of
-each batch, not the whole thing**: the shared proxy's `/match-recommend`
-folds a real Google Search-grounded pass (current standings, injuries,
-media buzz - the shared proxy's `fetchGroundedMatchInfo`) into scoring, but
-that pass has to finish inside a single ~8-second attempt. Asking it to
-genuinely research all ~80 fixtures a full 14-day-window batch can carry
-isn't a realistic amount of work for the model to do per fixture in that
-time - in practice a request that large tends to fall back to reasoning
-from training data (or empty evidence arrays across the board) rather than
-performing dozens of distinct real searches, which is indistinguishable
-from grounding "not doing anything" from this build's side even though the
-call itself succeeds. The shared proxy now caps that research pass to its
-own highest-objective-score `GROUNDED_MATCH_INFO_MAX_ITEMS` (20) fixtures
-per batch - the ones actually contending for a recommendation slot, where a
-real media-attention/injury/storyline fact could change the outcome -
-rather than spreading a fixed research budget thin across fixtures that
-were never going to be recommended anyway. Fixtures outside that slice are
-unaffected otherwise: they're still scored normally, just with no research
-evidence folded in, identical to what already happens whenever grounding
-fails or genuinely finds nothing.
-
-**Contested-cluster refinement (a second, comparative pass for close
-calls)**: the base validation call above adjusts each fixture independently
-in one big batch, which is fine for "does this objective score roughly
-hold up" but weak at "which of these two SPECIFIC overlapping fixtures is
-actually the bigger story" - nothing about validating them separately lets
-the model weigh them against each other. After the base pass,
-`findContestedClusters` groups fixtures that overlap in time AND landed
-within `CONTESTED_SCORE_DELTA` of each other's FINAL score (objective +
-adjustment) (transitively, so a three-way pileup becomes one cluster, not
-three overlapping pairs) and sends each cluster - never the full fixture
-list - to the shared proxy's `/match-recommend-refine`, which is allowed to reach for
-a Pro-tier model specifically because it only ever sees a handful of
-fixtures a day this way. Only `competitivenessAdjustment`/
-`watchabilityAdjustment`/`reason` get overwritten by the refined answer;
-`broadcastQualityAdjustment`/`enduranceScoreAdjustment`/`venueZh` stay
-whatever the base pass already decided. Every fixture actually sent is
-marked `refined: true` for the rest of this same run, and
-`MAX_REFINE_CLUSTERS_PER_RUN` bounds worst-case Pro-tier spend per run -
-refinement runs on the same throttle as the base pass (see above), so it
-costs nothing extra on a routine scheduled run that's already within the
-cooldown window.
-
-Refine calls are spaced ~4 seconds apart rather than fired back-to-back -
-confirmed live that the shared proxy's Pro-tier models aren't currently reachable on
-this account (each attempt falls through to the same `gemini-3.7-flash`
-the base pass already calls, near-instantly), so a burst of refine calls
-right after the base pass's own calls can blow through Gemini's real
-requests-*per-minute* cap even though the total count for one run is
-small. A few extra seconds of build time is free; re-triggering the same
-avoidable rate limit on every eligible run forever is not.
-
-**Confidence**: every scored match also gets a `confidence` (0–1, or
-`null` for a finished match that was never scored at all) reflecting how
-much its score should be trusted - the objective score alone
-(`api-objective`, 0.55 - real, current data, not yet AI-validated), a
-base-pass AI validation (`ai`, 0.75), and one that also survived the
-comparative refine pass above (`ai` + `refined`, 0.9) are three genuinely
-different levels of evidence, not interchangeable. See `computeConfidence`
-in `public/lib/recommendation.mjs` and `docs/recommendation-engine-audit.md`
-for exactly what it's grounded in (and what it deliberately isn't - there's
-no per-feature freshness timestamp in this pipeline to decay against yet).
-
 ## Deployment
 
 This repo deploys itself: `.github/workflows/deploy.yml` runs
@@ -879,10 +698,8 @@ This repo deploys itself: `.github/workflows/deploy.yml` runs
 
 - on every push to `main`,
 - on a schedule (every 15 minutes), so live status/newly-scheduled fixtures
-  stay fresh even with no code changes - this only costs a free ESPN fetch
-  on most runs, since `AI_FETCH_MIN_INTERVAL_HOURS` (see "AI validation"
-  above) is what actually keeps Gemini calls down to a few times a day
-  regardless of how often the workflow itself fires,
+  stay fresh even with no code changes - a free ESPN fetch plus a free,
+  local objective-score recompute, no external scoring call of any kind,
 - and on-demand via the Actions tab ("Run workflow"), or the "檢查更新"/
   "重新整理資料" buttons in Settings (client-side only - they just re-fetch
   whatever the last scheduled run already published, they can't trigger a
@@ -891,71 +708,45 @@ This repo deploys itself: `.github/workflows/deploy.yml` runs
 Make sure the repo's **Settings → Pages → Source** is set to **GitHub
 Actions** (no branch to pick — the workflow handles publishing).
 
-## AI recommendations (optional but recommended)
+## The shared proxy (optional - live scores and manual refresh only)
 
-The validation/refinement pass (see "API-data-driven scoring engine" above
-for the objective score it validates) is served by a shared Cloudflare
-Worker in its own dedicated repo,
-[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy)
-(`worker.js`, route `/match-recommend`) — this repo doesn't hold, and never
-needs, a Gemini API key of its own. That Worker also backs two sibling
-sites' own AI/sync features (Orbit, Orbit Vocab), so it's already deployed
-and configured if either of those is already running. It also runs a
-grounded Google Search pass for current, structured "evidence" (see "AI
-score cache" above and `evidence`/`evidenceRetrievedAt` on each match) - a
-Taiwan broadcast-channel lookup used to be part of that same call, but
-Match Find now decides that with its own hardcoded rule (see "Duration and
-Taiwan broadcast source are deterministic, not AI-guessed" above), so the
-proxy no longer asks for or returns one at all.
+`PROXY_URL` points at a shared Cloudflare Worker in its own dedicated repo,
+[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy),
+that also backs two sibling sites' own AI/sync features (Orbit, Orbit
+Vocab) - but as of `docs/recommendation-engine-audit.md`'s Round 11, Match
+Find itself no longer calls it for any AI/scoring purpose at all. The two
+routes this site's browser still talks to (`/sports-proxy` for live score
+polling, `/match-dispatch` for the manual "重新整理資料" refresh button - see
+their own sections above) are both plain data/trigger passthroughs with no
+Gemini involvement.
 
-`/match-recommend` validates a whole batch of fixtures' objective scores in
-one call, and its prompt explicitly asks Gemini to COMPARE same-day/
-overlapping fixtures against each other while deciding whether an
-adjustment is warranted — rather than judging each one in total isolation —
-so a genuinely bigger story the objective score's own factors don't already
-capture shows up as a real adjustment, not lost in both landing on similar
-numbers. Gemini's own judgment is still only ever a SIGNAL nudging the
-deterministic score that feeds `computeDayPlan`'s deterministic scheduler
-(`public/lib/recommendation.mjs`), never the final decision by itself -
-timing, continuity, and the cross-day/sport variety penalties described
-above all apply on top of it regardless of how Gemini adjusted anything. A
-small, separate `/match-recommend-refine` follow-up (Pro-tier model,
-`findContestedClusters` in `scripts/build-data.mjs`) still exists on top of
-that for the rare case of two fixtures landing suspiciously close in final
-score despite genuinely overlapping in time - defense in depth, not the
-only place comparison happens anymore.
+To enable those two optional features:
 
-To enable it:
-
-1. Deploy or confirm the shared-proxy Worker is live with `GEMINI_API_KEY`
-   set (see that repo's README) — the `/match-recommend` route reuses that
-   same key.
+1. Deploy or confirm the shared-proxy Worker is live (see that repo's
+   README) and, for `/match-dispatch`, that it has a
+   `MATCH_FIND_DISPATCH_TOKEN` secret configured.
 2. In **this** repo's **Settings → Secrets and variables → Actions →
    Variables**, add `PROXY_URL` set to that Worker's base URL (e.g.
-   `https://orbit-workers-proxy.<you>.workers.dev`, **no path suffix** — the
-   build script appends `/match-recommend` itself). This is a plain
-   variable, not a secret: the value carries no credential.
-3. Push to `main` (or run the workflow manually) — the next build will call
-   the proxy.
+   `https://orbit-workers-proxy.<you>.workers.dev`, **no path suffix**).
+   This is a plain variable, not a secret: the value carries no credential.
+3. Push to `main` (or run the workflow manually).
 
-Leaving `PROXY_URL` unset is fine; the site just falls back to the
-objective score alone (zero adjustment) for every fixture - see
-"API-data-driven scoring engine" above.
+Leaving `PROXY_URL` unset is fine; the site just runs without live score
+polling or the manual refresh button - scoring itself is entirely
+unaffected either way, since it was never gated on this.
 
 ## Running locally
 
 ```bash
-node scripts/build-data.mjs        # writes public/data/matches.json, updates data/ai-meta.json
+node scripts/build-data.mjs        # writes public/data/matches.json
 npx serve public                   # or any static file server
 ```
 
-Set `PROXY_URL` in your shell first if you want Gemini-validated results
-locally instead of the objective score alone - a local run always calls it
-(no `GITHUB_EVENT_NAME` set, treated the same as a `push`), and since
-there's no per-match cache, every non-finished fixture gets sent every
-time you run it. The MLB/F1 API signal fetches
-(`scripts/sport-signals.mjs`) need no key or setup at all - they run
-unconditionally whenever there's a live MLB/F1 fixture in the window.
+No API key or setup needed for scoring itself - `scripts/objective-score.mjs`
+and the MLB/F1 API signal fetches (`scripts/sport-signals.mjs`) run entirely
+from free, public, no-key APIs. Set `PROXY_URL` in your shell first only if
+you want to exercise the live-score-polling/manual-refresh features
+locally too.
 
 ## Tests
 
