@@ -16,7 +16,22 @@ on:
     - cron: '*/15 * * * *'
   push:
     branches: ['main']
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      debug_day_plan:
+        description: >-
+          Optional "from,to[,sport]" (dates YYYY-MM-DD, in this step's own
+          Asia/Taipei clock - this repo's own audience's local time, so
+          quiet-hours/day-bucketing match what a real viewer sees; sport is
+          an exact match.sport value, e.g. "MLB") to dump the actual
+          computed day plan for that range - see scripts/dump-day-plan.mjs's
+          own comment for why this exists (tracing a reported scheduling
+          bug against real, current fetched data from a run's own job log,
+          the one place this repo's own tooling can reach when the deployed
+          site/ESPN/the build artifact itself aren't directly reachable).
+          Leave empty to skip - the normal, default case.
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -70,6 +85,17 @@ jobs:
           # either means someone specifically wants fresh data now.
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: node scripts/build-data.mjs
+      - name: 'Debug: dump computed day plan'
+        # Opt-in only (see the workflow_dispatch input's own comment) - never
+        # runs on a routine schedule/push, so this adds nothing to the
+        # normal deploy's own log noise or runtime.
+        if: ${{ github.event.inputs.debug_day_plan != '' }}
+        env:
+          TZ: Asia/Taipei
+          DEBUG_DAY_PLAN: ${{ github.event.inputs.debug_day_plan }}
+        run: |
+          IFS=',' read -r FROM TO SPORT <<< "$DEBUG_DAY_PLAN"
+          node scripts/dump-day-plan.mjs "$FROM" "$TO" "$SPORT"
       - name: Commit AI fetch timestamp
         # data/ai-meta.json (unlike public/data/matches.json, which is fully
         # regenerated every run and never committed) is the persistent
