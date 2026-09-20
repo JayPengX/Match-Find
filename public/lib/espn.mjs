@@ -2,7 +2,7 @@
 //
 // The small, pure, browser-safe half of talking to ESPN's public scoreboard
 // API that app.js's own live-score/live-odds polling needs (see that file's
-// pollLiveMatches) - kept separate from scripts/build-data.mjs's own (much
+// pollLiveMatches) - kept separate from public/lib/match-builder.mjs's own (much
 // larger) ESPN-fetching logic since the build script's job is building the
 // whole matches.json from scratch (every league, every day, TBD handling,
 // objective scoring, ...) while this module's only job is "given a fixture
@@ -25,7 +25,7 @@ export function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
   return datesParam ? `${base}?dates=${datesParam}` : base;
 }
 
-// Mirrors scripts/build-data.mjs's own TEAM_LEAGUES table (sportKey/
+// Mirrors public/lib/match-builder.mjs's own TEAM_LEAGUES table (sportKey/
 // leagueKey) plus the id prefix that table's own `league.id` contributes to
 // every fixture's own `id` (`${league.id}-${event.id}`, see that script's
 // fetchTeamLeagueMatches) - kept as a small, separate, browser-safe copy

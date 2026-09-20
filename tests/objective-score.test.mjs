@@ -1,8 +1,8 @@
-// Tests for scripts/objective-score.mjs - the deterministic, API-data-based
+// Tests for public/lib/objective-score.mjs - the deterministic, API-data-based
 // scoring engine that replaced asking Gemini for competitiveness/
 // watchability/enduranceScore from scratch. Every function here is pure,
 // so these tests use plain hand-built numbers rather than real API
-// responses (see scripts/sport-signals.mjs's own tests for the parsing
+// responses (see public/lib/sport-signals.mjs's own tests for the parsing
 // half of this pipeline).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +20,7 @@ import {
   computeEplObjectiveScore,
   computeF1ObjectiveScore,
   skillFromWinPct
-} from '../scripts/objective-score.mjs';
+} from '../public/lib/objective-score.mjs';
 
 describe('clamp', () => {
   test('bounds a value inside [min, max]', () => {

@@ -1,18 +1,13 @@
-# Rebuilds public/data/matches.json from live fixtures on a schedule, then
-# deploys the whole public/ folder to GitHub Pages. See scripts/build-data.mjs
-# for what the build step actually does; this workflow just runs it and wires
-# the result to Pages (repo Settings -> Pages -> Source: GitHub Actions).
-name: Build match data and deploy to Pages
+# Deploys the static site (public/) to GitHub Pages on every push to main.
+# No scheduled data build here anymore - the match list is now fetched and
+# scored LIVE, in every viewer's own browser (see public/app.js's own top
+# comment, and public/lib/match-builder.mjs), not by a scheduled rebuild of
+# a static matches.json this workflow used to run every 15 minutes and
+# redeploy. This workflow's only job now is shipping CODE changes (repo
+# Settings -> Pages -> Source: GitHub Actions).
+name: Deploy to Pages
 
 on:
-  schedule:
-    # Every 15 minutes - this only costs an ESPN fetch (a free, unauthenticated
-    # public API); the objective-score recompute itself is free and local
-    # (see scripts/objective-score.mjs - no AI/external scoring call of any
-    # kind since docs/recommendation-engine-audit.md's Round 11). GitHub
-    # Pages is a public repo, so Actions minutes on GitHub-hosted runners
-    # aren't metered here either.
-    - cron: '*/15 * * * *'
   push:
     branches: ['main']
   workflow_dispatch:
@@ -22,13 +17,16 @@ on:
           Optional "from,to[,sport]" (dates YYYY-MM-DD, in this step's own
           Asia/Taipei clock - this repo's own audience's local time, so
           quiet-hours/day-bucketing match what a real viewer sees; sport is
-          an exact match.sport value, e.g. "MLB") to dump the actual
-          computed day plan for that range - see scripts/dump-day-plan.mjs's
-          own comment for why this exists (tracing a reported scheduling
-          bug against real, current fetched data from a run's own job log,
-          the one place this repo's own tooling can reach when the deployed
-          site/ESPN/the build artifact itself aren't directly reachable).
-          Leave empty to skip - the normal, default case.
+          an exact match.sport value, e.g. "MLB") to fetch a real,
+          current matches.json snapshot (via scripts/build-data.mjs) and
+          dump the actual computed day plan for that range - see
+          scripts/dump-day-plan.mjs's own comment for why this exists
+          (tracing a reported scheduling bug against real, current fetched
+          data from a run's own job log, the one place this repo's own
+          tooling can reach when ESPN/Polymarket aren't directly
+          reachable from wherever this is being debugged). Leave empty to
+          skip - the normal, default case, and the only thing this
+          workflow otherwise does.
         required: false
         default: ''
 
@@ -56,39 +54,24 @@ jobs:
       - name: Run tests
         # No runtime dependencies to install (see package.json) - this runs
         # the scoring/viewing-plan/evaluator unit tests (tests/, node:test)
-        # against every push/schedule/dispatch, same as the build step right
-        # after it - a bad change to public/lib/recommendation.mjs or
-        # scripts/build-data.mjs's pure helpers fails here before it ever
-        # reaches a live deploy.
+        # against every push/dispatch, so a bad change to
+        # public/lib/recommendation.mjs or public/lib/match-builder.mjs's
+        # pure helpers fails here before it ever reaches a live deploy.
         run: npm test
-      - name: Fetch fixtures and build match recommendations
-        env:
-          # Base URL of the shared Cloudflare Worker (no path suffix) - see
-          # README's "Live score/odds polling and manual refresh" section.
-          # A repo *variable*, not a secret: it ends up as a plain value in
-          # the output matches.json for the BROWSER to build its own
-          # /sports-proxy and /match-dispatch requests from - this build
-          # step itself doesn't call the proxy for anything (no AI/external
-          # scoring call of any kind - see build-data.mjs's own top
-          # comment). Left unset, the build still runs, just without those
-          # two browser-side features.
-          PROXY_URL: ${{ vars.PROXY_URL }}
-          # Lets a tab left open across a deploy tell "the code actually
-          # changed" apart from "just a routine scheduled data refresh" -
-          # see build-data.mjs's BUILD_ID and public/app.js's update-check
-          # polling. A scheduled rerun with no new commit reuses this same
-          # sha every time, which is exactly the distinction that matters.
-          BUILD_ID: ${{ github.sha }}
-        run: node scripts/build-data.mjs
-      - name: 'Debug: dump computed day plan'
-        # Opt-in only (see the workflow_dispatch input's own comment) - never
-        # runs on a routine schedule/push, so this adds nothing to the
-        # normal deploy's own log noise or runtime.
+      - name: 'Debug: build a snapshot and dump the computed day plan'
+        # Opt-in only (see the workflow_dispatch input's own comment) -
+        # never runs on a routine push, so this adds nothing to the normal
+        # deploy's own log noise or runtime. Runs scripts/build-data.mjs
+        # (the Node CLI wrapper around public/lib/match-builder.mjs) first
+        # to get a real, current matches.json for dump-day-plan.mjs to read
+        # - this workflow no longer builds one on every run the way it used
+        # to, so the debug step has to ask for its own fresh copy.
         if: ${{ github.event.inputs.debug_day_plan != '' }}
         env:
           TZ: Asia/Taipei
           DEBUG_DAY_PLAN: ${{ github.event.inputs.debug_day_plan }}
         run: |
+          node scripts/build-data.mjs
           IFS=',' read -r FROM TO SPORT <<< "$DEBUG_DAY_PLAN"
           node scripts/dump-day-plan.mjs "$FROM" "$TO" "$SPORT"
       - name: Cache-bust index.html's own script/stylesheet references
@@ -96,13 +79,12 @@ jobs:
         # styles.css themselves) with Cache-Control: max-age=600 - not
         # configurable, GitHub Pages has no equivalent of a custom
         # _headers file - so a viewer's browser can keep running JS/CSS
-        # from BEFORE a real deploy for up to 10 minutes even after
-        # matches.json itself (fetched with cache: 'no-store', see
-        # app.js) is already fresh. This is exactly the gap that let a fix
-        # look "not deployed yet" right after shipping it. A plain reload
-        # doesn't reliably close it either: the browser can still serve
-        # ./app.js from its own cache without even asking the server if
-        # that 600s window hasn't elapsed locally.
+        # from BEFORE a real deploy for up to 10 minutes after it ships.
+        # This is exactly the gap that let a fix look "not deployed yet"
+        # right after shipping it. A plain reload doesn't reliably close
+        # it either: the browser can still serve ./app.js from its own
+        # cache without even asking the server if that 600s window hasn't
+        # elapsed locally.
         #
         # Fixing it needs the URL app.js/styles.css are actually fetched
         # FROM to change on every real deploy, so the browser treats it as
@@ -110,8 +92,7 @@ jobs:
         # this build's commit sha does that. This only touches the
         # deployed copy in this runner's own working directory (never
         # committed back to git - public/index.html in the repo stays
-        # exactly as authored, same posture as public/data/matches.json
-        # never being committed either).
+        # exactly as authored).
         run: |
           sed -i "s|src=\"./app.js\"|src=\"./app.js?v=${{ github.sha }}\"|; s|href=\"./styles.css\"|href=\"./styles.css?v=${{ github.sha }}\"|" public/index.html
       - name: Setup Pages

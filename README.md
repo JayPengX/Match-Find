@@ -14,34 +14,41 @@ up for a 3am fixture. The page itself only ever shows the *recommendation* -
 a plain-language reason, not the raw competitiveness/watchability numbers
 behind it (see "Page layout" below).
 
-No sign-up, no app — it's a GitHub Pages site rebuilt every 15 minutes,
-installable as a PWA. There's no in-page header at all (an earlier version
-had a slim one; dropped entirely - an installed PWA's home-screen icon/OS
-title bar already carries the app's identity, so a masthead here was just
-empty space repeating it) - Settings (⚙) lives inline with the sport filter
-chips instead.
+No sign-up, no app — it's a static GitHub Pages site, deployed only when
+its own code changes, installable as a PWA. The match list itself is
+fetched and scored LIVE, in your own browser, every time you open it and
+on an ongoing refresh after that (see "How it works" below) - not from a
+periodically-rebuilt static file the way this site used to work. There's
+no in-page header at all (an earlier version had a slim one; dropped
+entirely - an installed PWA's home-screen icon/OS title bar already
+carries the app's identity, so a masthead here was just empty space
+repeating it) - Settings (⚙) lives inline with the sport filter chips
+instead.
 
 ## How it works
 
 Scoring and picking are split across two different places, deliberately:
 
-1. **`scripts/build-data.mjs`** (run by the scheduled GitHub Action below,
-   never by a browser) fetches upcoming *and currently-live* fixtures for
-   the next 14 days from
+1. **`public/lib/match-builder.mjs`'s `buildMatches`**, called directly by
+   *your own browser* (through the shared proxy - see "Live match data and
+   manual refresh" below; also callable from Node via
+   `scripts/build-data.mjs`, kept only for local dev/debugging tooling),
+   fetches upcoming *and currently-live* fixtures for the next 14 days from
    [ESPN's public scoreboard API](https://site.api.espn.com) — no API key
-   needed for this part. Only a FINISHED fixture is excluded - this script
-   re-fetches ESPN's live feed on every scheduled run and every push, so a
-   fixture that was still upcoming last run has very often already started
-   by the next one; dropping it the moment ESPN flips it to "live" used to
-   mean a match a viewer was actively watching would simply vanish from
-   "today" mid-game, even though the client already has everything it
-   needs (relativeLabel/`.is-live`, see "Page layout" below) to show it as
-   直播中 once it's actually in the data. Each fixture comes with both
-   teams' ESPN-hosted logo and a Traditional Chinese name looked up from
-   `scripts/team-names.mjs` (a static, best-effort translation table — see
-   that file's own comment; a team missing from it just shows English-only).
-2. **`scripts/objective-score.mjs` + `scripts/sport-signals.mjs`** compute
-   **competitiveness**, **watchability**, **enduranceScore**, and
+   needed for this part. Only a FINISHED fixture is excluded - every
+   refresh re-fetches ESPN's live feed, so a fixture that was still
+   upcoming last refresh has very often already started by the next one;
+   dropping it the moment ESPN flips it to "live" used to mean a match a
+   viewer was actively watching would simply vanish from "today" mid-game,
+   even though the client already has everything it needs
+   (relativeLabel/`.is-live`, see "Page layout" below) to show it as 直播中
+   once it's actually in the data. Each fixture comes with both teams'
+   ESPN-hosted logo and a Traditional Chinese name looked up from
+   `public/lib/team-names.mjs` (a static, best-effort translation table —
+   see that file's own comment; a team missing from it just shows
+   English-only).
+2. **`public/lib/objective-score.mjs` + `public/lib/sport-signals.mjs`**
+   compute **competitiveness**, **watchability**, **enduranceScore**, and
    **broadcastQuality** for every fixture DETERMINISTICALLY, from real,
    current sports-data APIs - this is the WHOLE score, not a baseline
    something else refines (there is no AI anywhere in this pipeline - see
@@ -49,19 +56,23 @@ Scoring and picking are split across two different places, deliberately:
    `docs/recommendation-engine-audit.md`'s Round 11 for why Gemini was
    removed entirely). MLB pulls standings/recent-form/streak data from the
    official MLB Stats API, F1 pulls championship-standings gap from the
-   Ergast-compatible Jolpica API, and every sport folds in season record
-   and betting odds already fetched from ESPN, plus the same rivalry/derby/
-   national-broadcast detectors `scripts/sport-duration.mjs` uses for
-   duration. Computed every build, for every fixture.
+   Ergast-compatible Jolpica API, every sport folds in season record and
+   real market odds (Polymarket - see "Live win% odds" below) already
+   fetched, plus the same rivalry/derby/national-broadcast detectors
+   `public/lib/sport-duration.mjs` uses for duration. Computed on every
+   refresh, for every fixture.
 3. The result — every fixture, scored, nothing filtered or picked yet — is
-   written to `public/data/matches.json`.
-4. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
-   converts every fixture's kickoff to your own local time and applies your
-   Settings nudges (sport priority, owned services). The actual "what's
-   worth watching today" decision — **one local calendar day at a time**,
-   because "what counts as an unreasonable hour" and "which fixtures
-   actually conflict" are both relative to *your* clock — happens in
-   `computeDayPlan`, described in "The viewing plan" below.
+   what `buildMatches` returns, straight back to the caller (no
+   intermediate file for the deployed site - `scripts/build-data.mjs` can
+   still write one to `public/data/matches.json` for local dev tooling,
+   see "Local dev tooling" below).
+4. **`public/app.js`'s `resolveViewingPlan`**, still running in *your*
+   browser, converts every fixture's kickoff to your own local time and
+   applies your Settings nudges (sport priority, owned services). The
+   actual "what's worth watching today" decision — **one local calendar
+   day at a time**, because "what counts as an unreasonable hour" and
+   "which fixtures actually conflict" are both relative to *your* clock —
+   happens in `computeDayPlan`, described in "The viewing plan" below.
 
 ## API-data-driven scoring engine (no AI involved)
 
@@ -70,8 +81,8 @@ asked from Gemini directly, essentially "from memory," then (for one
 intermediate period) computed deterministically first with Gemini
 validating the result. Gemini is gone entirely now (see
 `docs/recommendation-engine-audit.md`'s Round 11) - every fixture's score
-is exactly what `scripts/objective-score.mjs` computes from real, current
-statistical signals `scripts/sport-signals.mjs` fetches, nothing more.
+is exactly what `public/lib/objective-score.mjs` computes from real, current
+statistical signals `public/lib/sport-signals.mjs` fetches, nothing more.
 
 **Per-sport signals actually used:**
 
@@ -93,7 +104,7 @@ statistical signals `scripts/sport-signals.mjs` fetches, nothing more.
   which circuit it's at.
 - **NBA / Premier League**: season record and betting odds already fetched
   from ESPN, plus the same rivalry/derby and national-broadcast detectors
-  `scripts/sport-duration.mjs` already computes for the duration model
+  `public/lib/sport-duration.mjs` already computes for the duration model
   (`isNbaRivalry`/`isEplDerby`/`isNationalBroadcast`) - real facts, just
   without a dedicated standings-API integration yet (see "Known
   limitations" below).
@@ -140,7 +151,7 @@ unaddressed, same posture as `docs/recommendation-engine-audit.md`):
   adding real weather data would mean taking on a new API key/dependency
   this build doesn't currently need for anything else - deliberately not
   done without that being a real, separate decision (see
-  `scripts/sport-duration.mjs`'s own comment on the same trade-off for the
+  `public/lib/sport-duration.mjs`'s own comment on the same trade-off for the
   duration model).
 
 ## Local-only, no accounts
@@ -150,13 +161,13 @@ enabled, and which swiped match you Prefer for a slot - lives in this
 browser's own `localStorage` and nowhere else. There is no sign-up, no
 account, and no server-side sync of any kind: an earlier version of this
 site had a cross-device settings-sync feature (a shared passcode through
-the same shared Cloudflare Worker `/sports-proxy`/`/match-dispatch` use -
-see "On-demand refresh" below); it's gone now, on purpose - one browser,
-one set of local
-preferences, nothing to pair or lose track of across devices. Match
-data/scores are the one thing that genuinely IS shared (the same
-`matches.json` build serves every viewer), which is exactly why they never
-lived in `localStorage` to begin with.
+the same shared Cloudflare Worker `/sports-proxy` uses - see "Live match
+data and manual refresh" below); it's gone now, on purpose - one browser,
+one set of local preferences, nothing to pair or lose track of across
+devices. Match data/scores are fetched and scored independently by each
+viewer's own browser now (see "How it works" above) - never shared or
+synced between viewers, and never stored in `localStorage` either, since
+they're cheap to re-derive live and would just go stale sitting there.
 
 There's also only ever ONE recommendation system, not a choice between
 competing ones: `bestMatchScore` (`public/lib/recommendation.mjs`) is the
@@ -165,7 +176,7 @@ you pick between two subtly different "recommendation styles"; that choice
 added confusion without adding real value, so it's gone. `bestMatchScore`
 itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
 
-- **skill** - how GOOD the two teams actually are (`scripts/objective-score.mjs`'s
+- **skill** - how GOOD the two teams actually are (`public/lib/objective-score.mjs`'s
   `skillFromWinPct`, from each side's own win%/points-rate) - deliberately a
   separate axis from competitiveness below: two elite teams playing a close
   game and two also-ran teams playing an equally close game score
@@ -249,7 +260,7 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   between any two back-to-back picks, so "ends at 8:00, starts at 8:00" no
   longer counts as a real gap. **The overrun buffer only ever applies
   before a match is over.** Once ESPN's own status confirms a fixture is
-  finished, `durationMinutes` (see `scripts/build-data.mjs`'s
+  finished, `durationMinutes` (see `public/lib/match-builder.mjs`'s
   `finishedDurationMinutes`) stops being a pre-game guess and becomes the
   REAL elapsed broadcast time as of that fetch, and
   `schedulingDurationMinutes` stops padding it any further - there's no
@@ -286,7 +297,8 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   expected, MLB winning literally every day when a comparable alternative
   exists isn't. `computeWindowPlan`'s own `sportConcentration` return
   value exposes the whole window's actual sport split for anyone
-  inspecting `public/data/matches.json` directly, or a copy of it fed to
+  inspecting a `matches.json`-shaped snapshot directly (see "Local dev
+  tooling" below for how to get one), or a copy of it fed to
   `scripts/evaluate-recommendations.mjs` (see "Evaluating a historical
   export" below) - there is no in-app export button for this anymore (see
   "No developer tools in the UI" below).
@@ -316,13 +328,17 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
 ## Page layout
 
 - A horizontally-scrolling **day picker** at the top — every day in the
-  already-fetched 14-day window, all up front (no extra network request,
-  no "load more" click - it's all in the one `matches.json` fetched on page
-  load). Defaults to today, but jumps ahead to the next day that still has
+  fetched 14-day window, all up front once the full-window refresh lands
+  (a fast near-term refresh populates today/tomorrow first - see "Live
+  match data and manual refresh" below), no "load more" click needed once
+  it has. Defaults to today, but jumps ahead to the next day that still has
   a fixture to come if today's are all already over.
-- A row of **sport filter chips** (全部/英超/MLB/...) below the day picker,
-  built only from sports actually present in the enabled set (see "Enabled
-  sports settings" below) - narrows both sections below to one sport.
+- A single horizontally-scrolling row below the day picker holding both the
+  **sport filter chips** (全部/英超/MLB/...), built only from sports
+  actually present in the enabled set (see "Enabled sports settings"
+  below), and the Settings (⚙) button - last in that row, not first, so a
+  growing sport list scrolls rather than pushing it around. Picking a chip
+  narrows both sections below to one sport.
   Picking a sport chip that has nothing on the currently selected day (see
   `ensureSelectedDayHasActiveSport`) jumps the day picker to the nearest
   day that actually has one instead of leaving both sections empty for no
@@ -481,7 +497,7 @@ judgment call are plain, auditable rules computed entirely from ESPN's own
 fixture data (plus, for duration, ESPN's own betting-odds field and,
 LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
 
-- **Per-fixture predicted duration** (`scripts/sport-duration.mjs`) — every
+- **Per-fixture predicted duration** (`public/lib/sport-duration.mjs`) — every
   fixture used to get one flat per-league average (every MLB game: 190
   minutes, regardless of which two teams were playing). Real per-team pace
   varies by roughly 20 minutes across MLB alone, so this is now a real
@@ -517,7 +533,7 @@ LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
   time instead of the schedule staying pinned to a single guess for the
   whole broadcast.
 - **Taiwan broadcast source** (`resolveWhereToWatchTw` in
-  `scripts/build-data.mjs`) — 愛爾達體育台 is the hardcoded default for
+  `public/lib/match-builder.mjs`) — 愛爾達體育台 is the hardcoded default for
   every sport this site covers. The one exception is MLB's Apple TV
   "Friday Night Baseball" package, a genuine global streaming exclusive
   with no regional blackout - ESPN's own `broadcast` field (already
@@ -572,78 +588,70 @@ shows up and can still be
 recommended, this only tips a genuinely close call toward the one you can
 actually watch live right now.
 
-## Scoring runs in the background, not on page load
+## Scoring runs live, in your own browser
 
-Nothing in the browser ever computes a fixture's score - that stays
-entirely server-side, in the scheduled build (see "Deployment" below),
-unattended; by the time anyone opens the page, every fixture in the window
-is already scored and sitting in a static file. The browser DOES talk to
-two read-only/trigger-only endpoints on the shared proxy - `/sports-proxy`
-(live score/odds polling, see "Live score/odds polling" below) and
-`/match-dispatch` (the manual "重新整理資料" refresh button, see "On-demand
-refresh" below) - both entirely optional (silently unavailable if
-`PROXY_URL` isn't configured at build time) and neither one calls Gemini or
-any other AI - see the shared proxy's own README for what else the same
-Worker serves.
+Every fixture's score is computed fresh, by *your own browser*, every time
+you open this page and on an ongoing refresh after that - not once, ahead
+of time, on a schedule, in a server-side build the way this site used to
+work (that whole build-and-redeploy cycle is gone; see
+`docs/recommendation-engine-audit.md`'s own note on why). The browser talks
+to exactly one endpoint on the shared proxy, `/sports-proxy` - a thin,
+host-allowlisted CORS passthrough to ESPN/the MLB Stats API/Jolpica/
+Polymarket's Gamma API (none of the four sets CORS headers for arbitrary
+origins, so a browser can't read any of their responses directly) - never
+Gemini or any other AI. See the shared proxy's own README for what else
+the same Worker serves.
 
-## One update path: on load, and exactly when a relevant match starts or ends
+## Live match data and manual refresh
 
-Fetching `public/data/matches.json` itself still follows exactly one path,
-no blind polling - a tab left open re-fetches it at exactly three kinds of
-moment, never on a "check again in N minutes" schedule regardless of
-whether anything relevant is actually about to change:
+`buildMatches` (`public/lib/match-builder.mjs`) - the same fetch-and-score
+pipeline described in "How it works" above - runs on TWO refresh tiers,
+both through `/sports-proxy`, chosen because ESPN's own scoreboard endpoint
+has no multi-day range query for a team sport (confirmed live - only F1's
+own `racing/f1` endpoint accepts one), so fetching the WHOLE 14-day window
+really is one request per league per day, not something a single cheap
+query could replace:
 
-1. **On load.**
-2. **When a currently-loaded match's own start time arrives.**
-3. **When a currently-loaded match's own estimated broadcast end arrives**
-   (an ESTIMATE, not a guarantee - see "Baseball (and other no-clock
-   sports) get a real overrun buffer" below; a no-clock sport can still run
-   past it, which just means the actual "is this really over" answer comes
-   from ESPN's own status the next time this fires, not from the estimate
-   itself).
+- **Near-term** (today + tomorrow, `NEAR_TERM_DAYS_AHEAD`) - cheap, a
+  handful of requests, so this runs often (`NEAR_TERM_REFRESH_MS`, every
+  60 seconds): new fixtures, scores, and odds for what's actually happening
+  soon are the ones worth being genuinely live about.
+- **Full window** (the whole 14-day horizon) - expensive (~50+ requests),
+  so this runs far less often (`FULL_REFRESH_MS`, every 5 minutes): a
+  fixture 10 days out doesn't need up-to-the-minute freshness.
 
-`scheduleNextUpdate` (`public/app.js`) computes the single soonest such
-instant across every currently-loaded match (`nextRelevantTransitionMs`)
-and sets exactly one `setTimeout` for it - never a second, competing timer,
-and never `setInterval`. Each check reacts based on what actually changed,
-using `buildId` (the git commit the build ran from — `.github/workflows/
-deploy.yml` passes `github.sha`) to tell two cases apart:
+Both tiers merge into whatever's already loaded BY ID (`mergeFreshMatches`)
+rather than replacing it wholesale - the near-term tier only ever re-fetches
+a couple of days, so a wholesale replace would wipe out every far-future
+day the last full refresh already populated; and `buildMatches` itself
+degrades a single league's own fetch failure to an empty list for just that
+league rather than throwing, so replacing the whole match set with a result
+where one league came back empty would delete every match of that league
+from the page over a single transient network blip.
 
-- **New data, same code** (a routine scheduled rebuild of the same commit —
-  `buildId` unchanged): refreshes silently, keeping whatever day/filter the
-  viewer already has selected, then schedules the next check.
-- **New code** (a real commit was deployed — `buildId` changed): this tab
-  is still running the *old* JS/CSS/HTML no matter how fresh the data
-  underneath it is, so a silent refresh can't actually pick up whatever
-  changed in the code - the page navigates itself to a cache-busting URL
-  (`location.replace`) instead of trying to patch itself up in place.
-
-The two manual Settings buttons (檢查更新/重新整理資料) call the exact same
-function, so "how a matches.json refresh happens" only ever exists in one
-place - though 重新整理資料 now ALSO fires an on-demand rebuild (see below),
-which is what actually gets fresh ESPN data into that file sooner than the
-next scheduled cron tick.
+Settings' **立即重新整理** button just re-runs the full-window tier
+immediately, in your own browser - there's no server-side rebuild to
+dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly as
+fast as the automatic ones.
 
 ## Live score/odds polling
 
-The one update path above is deliberately event-driven, never a blind
-timer - but a genuinely LIVE match's own real-time score is the one thing
-that design can't provide by itself (`matches.json` is only ever as fresh as
-the last build, at most every 15 minutes). `pollLiveMatches`
-(`public/app.js`) is a narrowly-scoped exception: while at least one
-currently-loaded match is actually live, it polls the shared proxy's
-`/sports-proxy` route (a thin, host-allowlisted CORS passthrough to ESPN's
-own public scoreboard - browsers can't read ESPN's response directly, it
-sets no CORS headers for arbitrary origins) every 30 seconds for just that
-match's own league, and merges the real score/status straight into memory.
-Paused while the tab is hidden or a card stack is mid-swipe (same
-`isStackBeingInteractedWith` guard the scheduled update path already uses),
-and silently unavailable when `PROXY_URL`/`state.proxyUrl` isn't
-configured.
+A THIRD, even faster tier on top of the two above - `pollLiveMatches`
+(`public/app.js`) polls just SCORE/STATUS/ODDS for whatever's already
+loaded, on a much shorter interval (`LIVE_POLL_INTERVAL_MS`, 30 seconds)
+than re-scoring a whole fetch batch could reasonably run at, by hitting
+each sport's own narrow live-scoreboard endpoint (today ± a day, not the
+whole window) through the same `/sports-proxy` route and merging the
+result straight into the same match objects `buildMatches` already
+produced - never re-running the scoring/duration/objective-factor pipeline
+itself. Paused while the tab is hidden. Score/status comes from ESPN's own
+public scoreboard; odds comes from Polymarket instead (see "Live win%
+odds" below) - two separate fetches, since not every sport this tracks has
+both (F1 has real, live Polymarket odds but no ESPN score to poll at all).
 
 This never re-runs objective scoring - it only updates the same
-`competitors[].score`/`isFinished`/odds fields ESPN itself already reports,
-plus two further, real-time-only refinements built from them:
+`competitors[].score`/`isFinished`/odds fields ESPN/Polymarket already
+report, plus two further, real-time-only refinements built from them:
 
 - **`liveExcitementBonus`** (`public/lib/recommendation.mjs`) - a small,
   bounded bonus added to a live match's `planningScore` (never its true
@@ -665,21 +673,25 @@ plus two further, real-time-only refinements built from them:
   corrects its schedule-blocking length in real time instead of staying
   pinned to a single pre-game guess for its whole broadcast.
 
-## On-demand refresh
+## Live win% odds
 
-Settings' **重新整理資料** button triggers a real rebuild now, not just a
-re-read of whatever the last scheduled run already published - it fires the
-shared proxy's `/match-dispatch` route (see that repo's worker.js), which
-runs a `workflow_dispatch` against this repo's own `deploy.yml`: the exact
-same build the 15-minute cron runs (fresh ESPN/live data, objective score
-recomputed), just sooner.
-
-Needs the shared proxy's `MATCH_FIND_DISPATCH_TOKEN` secret configured (see
-that repo's README) - a GitHub PAT scoped narrowly to this repo's own
-Actions. Silently unavailable (the button explains why) when `PROXY_URL`
-isn't configured, or when that secret isn't set (the dispatch request
-itself just fails, same as any other network error this page already
-handles gracefully).
+Every card that has a real market open for it shows a devigged win%
+sourced from Polymarket (`public/lib/polymarket.mjs`) - never a guessed or
+defaulted 50/50, hidden entirely when no market exists yet for that
+fixture. Chosen over a sportsbook-odds feed (an earlier version of this
+feature used ESPN's own) specifically because a real prediction market's
+own trade price already IS a probability (no American-odds conversion
+needed), and it runs a genuine market on every sport this site tracks,
+including F1 (an outright race-winner market across the whole grid - shown
+as the top 3 favorites, not a two-sided bar, since that wouldn't make
+sense for a 20-driver field) - something no sportsbook feed here ever
+covered. MLB/NBA get a single combined two-outcome market; EPL's own
+market is a genuine three-outcome one (home/draw/away), read from three
+separate binary markets in the same event and devigged together. Each
+side of a two-/three-way bar is colored with that TEAM's own real brand
+color (`public/lib/color.mjs`'s WCAG contrast check - falling back to a
+fixed sport accent only when neither of a team's two colors reads legibly
+against the card's current background).
 
 ## No developer tools in the UI
 
@@ -687,66 +699,67 @@ An earlier version of Settings had a "開發者工具" section with a "匯出推
 資料" button (a client-side JSON download of the current plan, for
 inspecting `scripts/evaluate-recommendations.mjs` against). It's gone -
 that's not a viewer-facing feature, and `scripts/evaluate-recommendations.mjs`
-still works fine against a `public/data/matches.json` copy saved any other
-way (a browser's own devtools, or straight from a GitHub Actions run).
-Settings now shows only what an ordinary viewer would actually use.
+still works fine against a `matches.json`-shaped copy saved any other way
+(a browser's own devtools, or `node scripts/build-data.mjs` locally - see
+"Local dev tooling" below). Settings now shows only what an ordinary
+viewer would actually use - one "立即重新整理" button (see "Live match data
+and manual refresh" above).
 
 ## Deployment
 
-This repo deploys itself: `.github/workflows/deploy.yml` runs
-`scripts/build-data.mjs` and publishes `public/` to GitHub Pages —
-
-- on every push to `main`,
-- on a schedule (every 15 minutes), so live status/newly-scheduled fixtures
-  stay fresh even with no code changes - a free ESPN fetch plus a free,
-  local objective-score recompute, no external scoring call of any kind,
-- and on-demand via the Actions tab ("Run workflow"), or the "檢查更新"/
-  "重新整理資料" buttons in Settings (client-side only - they just re-fetch
-  whatever the last scheduled run already published, they can't trigger a
-  new one - see public/app.js's checkForUpdate).
+This repo deploys itself: `.github/workflows/deploy.yml` publishes
+`public/` to GitHub Pages on every push to `main` (or on-demand via the
+Actions tab). There is no scheduled rebuild anymore, and nothing for it to
+rebuild - the match list is fetched and scored live, in each viewer's own
+browser, on load and on its own two refresh tiers (see "Live match data
+and manual refresh" above), not from a static file this workflow used to
+regenerate every 15 minutes. This workflow's only job is shipping CODE
+changes.
 
 Make sure the repo's **Settings → Pages → Source** is set to **GitHub
 Actions** (no branch to pick — the workflow handles publishing).
 
-## The shared proxy (optional - live scores and manual refresh only)
+## The shared proxy (required - this is how live data actually reaches the page)
 
-`PROXY_URL` points at a shared Cloudflare Worker in its own dedicated repo,
+`public/app.js`'s own `PROXY_URL` constant points at a shared Cloudflare
+Worker in its own dedicated repo,
 [jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy),
 that also backs two sibling sites' own AI/sync features (Orbit, Orbit
 Vocab) - but as of `docs/recommendation-engine-audit.md`'s Round 11, Match
-Find itself no longer calls it for any AI/scoring purpose at all. The two
-routes this site's browser still talks to (`/sports-proxy` for live score
-polling, `/match-dispatch` for the manual "重新整理資料" refresh button - see
-their own sections above) are both plain data/trigger passthroughs with no
-Gemini involvement.
+Find itself no longer calls it for any AI/scoring purpose at all. The one
+route this site's browser talks to, `/sports-proxy`, is a plain,
+host-allowlisted CORS passthrough with no Gemini involvement - see "Live
+match data and manual refresh" above for why this page needs it at all
+(ESPN/the MLB Stats API/Jolpica/Polymarket send no CORS headers, so a
+browser can't read any of their responses directly).
 
-To enable those two optional features:
+Unlike Orbit/Orbit Vocab's own `PROXY_URL` (a GitHub Actions Variable
+substituted in at their own build time), Match Find has no build step left
+to substitute anything into - its `PROXY_URL` is a plain constant written
+directly into `public/app.js`'s own source, pointing at the real deployed
+Worker. If you fork this repo and deploy your own shared-proxy Worker,
+update that constant to your own Worker's base URL (**no path suffix**);
+there's no environment variable to set instead.
 
-1. Deploy or confirm the shared-proxy Worker is live (see that repo's
-   README) and, for `/match-dispatch`, that it has a
-   `MATCH_FIND_DISPATCH_TOKEN` secret configured.
-2. In **this** repo's **Settings → Secrets and variables → Actions →
-   Variables**, add `PROXY_URL` set to that Worker's base URL (e.g.
-   `https://orbit-workers-proxy.<you>.workers.dev`, **no path suffix**).
-   This is a plain variable, not a secret: the value carries no credential.
-3. Push to `main` (or run the workflow manually).
+## Local dev tooling
 
-Leaving `PROXY_URL` unset is fine; the site just runs without live score
-polling or the manual refresh button - scoring itself is entirely
-unaffected either way, since it was never gated on this.
-
-## Running locally
+`scripts/build-data.mjs` is a thin Node CLI wrapper around
+`public/lib/match-builder.mjs`'s own `buildMatches` - the exact same
+fetch-and-score pipeline the deployed site runs live in the browser, just
+callable directly from Node (which can reach ESPN/Polymarket/the MLB Stats
+API/Jolpica without going through the shared proxy at all). Kept purely
+for local dev/debugging tooling - the deployed site itself no longer
+depends on it or its output.
 
 ```bash
-node scripts/build-data.mjs        # writes public/data/matches.json
+node scripts/build-data.mjs        # writes a public/data/matches.json snapshot
 npx serve public                   # or any static file server
 ```
 
-No API key or setup needed for scoring itself - `scripts/objective-score.mjs`
-and the MLB/F1 API signal fetches (`scripts/sport-signals.mjs`) run entirely
-from free, public, no-key APIs. Set `PROXY_URL` in your shell first only if
-you want to exercise the live-score-polling/manual-refresh features
-locally too.
+No API key or setup needed - `public/lib/objective-score.mjs` and the
+MLB/F1 API signal fetches (`public/lib/sport-signals.mjs`) run entirely
+from free, public, no-key APIs, and this CLI calls them directly rather
+than through the shared proxy.
 
 ## Tests
 
@@ -754,28 +767,33 @@ locally too.
 function (recommendation style blending, overlap/slot grouping, weighted
 interval scheduling, `computeDayPlan`, `resolveViewingPlan`, confidence) -
 extracted out of `public/app.js` specifically so it's testable without a
-DOM and reusable from `scripts/build-data.mjs`. `npm test` (`node --test`,
-no dependencies to install) runs `tests/*.test.mjs` against it, plus
-`scripts/build-data.mjs`'s own pure ESPN-shape helpers (including
+DOM and reusable from `public/lib/match-builder.mjs`. `npm test` (`node
+--test`, no dependencies to install) runs `tests/*.test.mjs` against it,
+plus `public/lib/match-builder.mjs`'s own pure ESPN-shape helpers
+(including
 `resolveWhereToWatchTw`/`computeDurationMinutes`/`computeMatchObjectiveScore`),
-`scripts/sport-duration.mjs`'s own per-sport duration formulas,
-`scripts/objective-score.mjs`'s own deterministic scoring formulas
-(`tests/objective-score.test.mjs`), `scripts/sport-signals.mjs`'s own pure
-API-response parsing (`tests/sport-signals.test.mjs` - hand-built fixtures
-shaped like the MLB Stats API/Jolpica F1 API's own documented formats, not
-a live response - see that module's own top-of-file comment), and
+`public/lib/sport-duration.mjs`'s own per-sport duration formulas,
+`public/lib/objective-score.mjs`'s own deterministic scoring formulas
+(`tests/objective-score.test.mjs`), `public/lib/sport-signals.mjs`'s own
+pure API-response parsing (`tests/sport-signals.test.mjs` - hand-built
+fixtures shaped like the MLB Stats API/Jolpica F1 API's own documented
+formats, not a live response - see that module's own top-of-file comment),
+`public/lib/polymarket.mjs`'s own real-market matching/devig logic and
+`public/lib/color.mjs`'s own WCAG contrast math (both built from real,
+live-fetched sample data - see each test file's own comments), and
 `scripts/evaluate-recommendations.mjs` below. Also runs as its own step in
-`.github/workflows/deploy.yml`, before the build step, on every push/
-schedule/dispatch. See `docs/recommendation-engine-audit.md` for the fuller
-writeup of what's covered and why.
+`.github/workflows/deploy.yml`, on every push/dispatch. See
+`docs/recommendation-engine-audit.md` for the fuller writeup of what's
+covered and why.
 
 ## Evaluating a historical export
 
 `node scripts/evaluate-recommendations.mjs <export.json> [more.json ...]`
-reads one or more `public/data/matches.json`-shaped files - a copy saved
-straight from the live site (or a GitHub Actions build artifact/log) works
-fine; there is no in-app export button anymore (see "No developer tools in
-the UI" below) - and reports recommended count/rate, sport concentration, score/confidence
+reads one or more `matches.json`-shaped files - a copy saved from
+`node scripts/build-data.mjs` (see "Local dev tooling" above) or straight
+from a browser's own devtools works fine; there is no in-app export button
+anymore (see "No developer tools in the UI" above) - and reports
+recommended count/rate, sport concentration, score/confidence
 distributions, and how often the same two teams (or F1 session) get
 recommended across multiple distinct dates in the export - reported as a
 descriptive rate, not flagged as a bug, since a real multi-game series is
@@ -797,6 +815,6 @@ there's no build step that does this automatically.
 
 ## Fixing a team's Chinese name
 
-Edit `scripts/team-names.mjs` — it's a plain object keyed by league id and
+Edit `public/lib/team-names.mjs` — it's a plain object keyed by league id and
 ESPN's team abbreviation (e.g. `mlb.NYY`). A missing or wrong entry doesn't
 break anything: the site just shows that team's English name only.

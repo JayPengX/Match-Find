@@ -1,5 +1,5 @@
-// ---- scripts/sport-signals.mjs ----
-// Fetches the real, current statistical signals scripts/objective-score.mjs
+// ---- public/lib/sport-signals.mjs ----
+// Fetches the real, current statistical signals public/lib/objective-score.mjs
 // turns into a deterministic competitiveness/watchability/enduranceScore -
 // standings proximity, recent form, and championship-race intensity - from
 // dedicated, official/well-established sports-data APIs, deliberately NOT
@@ -29,7 +29,7 @@
 // where relevant) specifically because of that: a network failure OR a
 // response shape that doesn't match what's assumed here both fail exactly
 // the same way - this returns an empty Map/null signal, never throws - so
-// scripts/build-data.mjs's own scoring always degrades gracefully to
+// public/lib/match-builder.mjs's own scoring always degrades gracefully to
 // whatever OTHER signals it does have (season record from ESPN, betting
 // odds, or ultimately the plain heuristic) instead of breaking the build.
 // If a real run ever shows these coming back empty in practice, the fix is
@@ -38,20 +38,30 @@
 // that should work; only the exact parsing might need a correction once
 // someone can see a live response.
 
-const FETCH_TIMEOUT_MS = 15_000;
-// Same reasoning as build-data.mjs's own FETCH_USER_AGENT (a live-confirmed
-// Akamai bot-manager block on ESPN's scoreboard API, keyed on the UA
-// string) - neither MLB Stats API nor Jolpica has shown the same behavior,
-// but sending an honest, self-identifying UA here too costs nothing and
-// closes off the same failure mode before it's ever actually hit here.
-const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/jaypengx-collab/Match-Find)';
+// Both fetch functions below take an INJECTED `fetchJson(url)` rather than
+// calling fetch() themselves - this module now runs in two very different
+// places (public/lib/match-builder.mjs's Node CLI, which can call these hosts
+// directly, and public/app.js's browser build, which cannot: neither
+// statsapi.mlb.com nor api.jolpi.ca sends CORS headers, so a browser needs
+// to go through the shared proxy's /sports-proxy passthrough instead -
+// same reasoning as ./espn.mjs/./polymarket.mjs already being pure
+// URL-building/parsing modules that never fetch themselves). See
+// public/lib/match-builder.mjs's own comment for the two real
+// implementations this gets called with.
+export function mlbStandingsUrl(season) {
+  return `https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=${encodeURIComponent(season)}&standingsTypes=regularSeason`;
+}
+
+export function f1DriverStandingsUrl() {
+  return 'https://api.jolpi.ca/ergast/f1/current/driverStandings.json';
+}
 
 // ---- MLB: statsapi.mlb.com -----------------------------------------------
 //
 // Stable, long-published numeric team ids from the MLB Stats API - these
 // have been unchanged for many seasons and are independent of a team's own
 // on-field record, so this table almost never needs updating. Keyed by the
-// exact same ESPN `team.displayName` strings scripts/sport-duration.mjs's
+// exact same ESPN `team.displayName` strings public/lib/sport-duration.mjs's
 // own MLB_TEAM_PACE_OFFSET_MINUTES table uses, on purpose - both tables
 // describe the same 30 teams and must never silently drift apart from each
 // other under different spellings.
@@ -99,7 +109,7 @@ function parseGamesBack(value) {
 }
 
 // One teamRecord entry (per the MLB Stats API's own standings response
-// shape) -> the signal shape scripts/objective-score.mjs's
+// shape) -> the signal shape public/lib/objective-score.mjs's
 // computeMlbObjectiveScore expects. Exported and pure specifically so it's
 // testable against a small hand-built fixture without needing a real,
 // live API response (see this file's own top comment on why that's the
@@ -137,7 +147,7 @@ export function parseMlbStandingsResponse(json) {
 }
 
 // Fetches this season's MLB standings once and returns them keyed by ESPN's
-// own team displayName (the same string scripts/build-data.mjs already has
+// own team displayName (the same string public/lib/match-builder.mjs already has
 // on hand for every fixture, via buildCompetitor's `.name`) so callers
 // never need to touch a numeric team id themselves. Called ONCE per build
 // (not once per fixture - every MLB game that day shares the same league-
@@ -147,15 +157,11 @@ export function parseMlbStandingsResponse(json) {
 // failure - every team simply reads back as "no standings signal", which
 // computeMlbObjectiveScore already treats as a normal, harmless case (see
 // its own comment).
-export async function fetchMlbStandings(season) {
+export async function fetchMlbStandings(season, fetchJson) {
   const byName = new Map();
   try {
-    const response = await fetch(
-      `https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season=${encodeURIComponent(season)}&standingsTypes=regularSeason`,
-      { headers: { 'User-Agent': FETCH_USER_AGENT }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
-    );
-    if (!response.ok) return byName;
-    const byTeamId = parseMlbStandingsResponse(await response.json());
+    const json = await fetchJson(mlbStandingsUrl(season));
+    const byTeamId = parseMlbStandingsResponse(json);
     for (const [displayName, teamId] of Object.entries(MLB_STATS_API_TEAM_IDS)) {
       const signal = byTeamId.get(teamId);
       if (signal) byName.set(displayName, signal);
@@ -207,14 +213,10 @@ export function parseF1DriverStandingsResponse(json) {
 // next update) and returns computeTitleRaceIntensity's own result, or null
 // on any failure (network, non-OK response, or an empty/malformed
 // standings list) - never throws.
-export async function fetchF1TitleRaceIntensity() {
+export async function fetchF1TitleRaceIntensity(fetchJson) {
   try {
-    const response = await fetch('https://api.jolpi.ca/ergast/f1/current/driverStandings.json', {
-      headers: { 'User-Agent': FETCH_USER_AGENT },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
-    });
-    if (!response.ok) return null;
-    const driverStandings = parseF1DriverStandingsResponse(await response.json());
+    const json = await fetchJson(f1DriverStandingsUrl());
+    const driverStandings = parseF1DriverStandingsResponse(json);
     return computeTitleRaceIntensity(driverStandings);
   } catch (error) {
     console.warn(`F1 championship standings fetch failed (falling back to no title-race signal): ${error.message}`);

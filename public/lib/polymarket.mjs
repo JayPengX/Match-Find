@@ -10,7 +10,7 @@
 // never carried at all (confirmed live in an earlier version of this
 // feature: zero `odds` field anywhere on any F1 session).
 //
-// No fetch here - see scripts/build-data.mjs (Node/build-time) and
+// No fetch here - see public/lib/match-builder.mjs (Node/build-time) and
 // public/app.js (browser live-poll, via the shared proxy's /sports-proxy
 // passthrough - gamma-api.polymarket.com sends no CORS headers, confirmed
 // live) for the actual network calls, so the exact same matching/parsing

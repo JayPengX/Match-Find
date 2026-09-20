@@ -1,11 +1,11 @@
-// ---- scripts/objective-score.mjs ----
+// ---- public/lib/objective-score.mjs ----
 // Deterministic, per-sport "objective" competitiveness/watchability/
 // enduranceScore/broadcastQuality scoring, computed from real statistical
 // signals (season record, recent form, standings proximity to a playoff
 // spot, championship-race intensity, betting-market spread) rather than
 // asked from Gemini's own training-data impression of two teams.
 //
-// This is the architectural inversion scripts/build-data.mjs's own
+// This is the architectural inversion public/lib/match-builder.mjs's own
 // top-of-file comment describes: these numbers are now the PRIMARY score,
 // computed the same way every time from the same inputs, before Gemini
 // ever sees the fixture. The shared proxy's `/match-recommend` is asked
@@ -14,7 +14,7 @@
 // to invent competitiveness/watchability from scratch the way it used to.
 //
 // Every function here is pure (no network, no Date.now(), no randomness) -
-// scripts/sport-signals.mjs owns fetching/parsing the real API data these
+// public/lib/sport-signals.mjs owns fetching/parsing the real API data these
 // functions consume, kept deliberately separate so the SCORING LOGIC is
 // testable with plain hand-built numbers, independent of whatever a real
 // API response happens to look like on a given day.

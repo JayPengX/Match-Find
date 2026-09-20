@@ -1,4 +1,4 @@
-// ---- scripts/team-names.mjs ----
+// ---- public/lib/team-names.mjs ----
 // Traditional Chinese names for every team ESPN's `/teams` endpoint lists
 // for each league, keyed by ESPN's own `abbreviation` (stable and short,
 // unlike `displayName` which has punctuation/spacing quirks that are easy

@@ -1,32 +1,41 @@
 // ---- public/app.js ----
-// Reads ./data/matches.json (written at build time by scripts/build-data.mjs,
-// which fetches fixtures and scores them deterministically from real
-// sports-data APIs - see that script's own top comment) and does everything
-// that has to happen per viewer instead of once at build time:
+// Builds and renders the whole match list LIVE, in this browser - calling
+// public/lib/match-builder.mjs's own buildMatches directly (through the
+// shared proxy, since none of the underlying APIs sends CORS headers - see
+// proxyFetchJson below), not by reading a static matches.json a scheduled
+// GitHub Action rebuilt and redeployed every 15 minutes the way this used
+// to work. That whole build-and-deploy cycle is gone: every viewer's own
+// tab now fetches and scores fixtures itself, on load and on two
+// recurring refresh tiers (see "Live match data" below) - genuinely live,
+// not "as fresh as the last scheduled rebuild happened to be," and a
+// manual refresh is now instant (this browser re-fetching and re-scoring
+// directly) instead of waiting ~30-60 seconds for a CI build to finish and
+// a new static file to deploy.
+//
+// This file still does everything that has to happen per viewer on top of
+// that shared scoring:
 //
 //   - Converting every UTC kickoff to THIS viewer's own local time.
 //   - Deciding which matches form "today's recommended lineup" - this has
-//     to run here, not in the build script, because "don't recommend a
+//     to run here, not in the shared scoring, because "don't recommend a
 //     match starting at 3am" and "which match is closest to right now" are
-//     both relative to the viewer's own clock, and one static build serves
-//     every viewer in every timezone at once.
+//     both relative to the viewer's own clock, and buildMatches's own
+//     output is the same regardless of which timezone asked for it.
 //
-// The scoring itself (competitiveness/watchability/reason) already happened
-// automatically in the background, on a schedule, well before this page
-// ever loaded - see build-data.mjs. There is no AI anywhere in this
-// pipeline as of docs/recommendation-engine-audit.md's Round 11 (removed
-// entirely - free-tier Gemini quota couldn't sustain the workload, and its
-// own bounded ±2 validation nudge was never more than a small adjustment on
-// top of this same deterministic score anyway). `whereToWatchTw` was never
-// an AI answer either - it's a hardcoded rule (`resolveWhereToWatchTw`, in
-// build-data.mjs): 愛爾達體育台 for everything except an MLB fixture ESPN
-// itself reports as Apple TV. The only network endpoints this page ever
-// talks to are the shared proxy's own read-only `/sports-proxy` (live
-// score/odds polling, see pollLiveMatches) and `/match-dispatch` (the
-// manual "重新整理資料" refresh button, see requestMatchDispatch) - both
-// entirely optional (see state.proxyUrl, sourced from matches.json's own
-// `proxyUrl` field, null and both features silently unavailable when
-// PROXY_URL isn't configured at build time). Everything else - sport
+// The scoring itself (competitiveness/watchability/reason) is entirely
+// deterministic, computed from real sports-data APIs - see
+// public/lib/match-builder.mjs's own top comment. There is no AI anywhere
+// in this pipeline as of docs/recommendation-engine-audit.md's Round 11
+// (removed entirely - free-tier Gemini quota couldn't sustain the
+// workload, and its own bounded ±2 validation nudge was never more than a
+// small adjustment on top of this same deterministic score anyway).
+// `whereToWatchTw` was never an AI answer either - it's a hardcoded rule
+// (`resolveWhereToWatchTw`, in match-builder.mjs): 愛爾達體育台 for
+// everything except an MLB fixture ESPN itself reports as Apple TV. The
+// only network endpoint this page ever talks to is the shared proxy's own
+// read-only `/sports-proxy` passthrough - used for building/refreshing the
+// match list itself now (see proxyFetchJson), not just live score/odds
+// polling (pollLiveMatches) the way it used to be. Everything else - sport
 // priority, enabled sports, and which swiped match a viewer prefers - is
 // local-only, in this browser's own localStorage, with no server-side sync
 // of any kind (see README's "Local-only, no accounts").
@@ -40,14 +49,14 @@
 // scheduling helpers, computeDayPlan, resolveViewingPlan, confidence, the
 // broadcast-service registry) lives in ./lib/recommendation.mjs instead of
 // here - extracted so it can be unit-tested directly (see
-// tests/recommendation.test.mjs) and reused by scripts/build-data.mjs (for
-// confidence) without a DOM. The viewer's own local "Prefer" state (which
-// swiped match to stick with per slot) is its own further pure module,
-// ./lib/preferences.mjs - see that file's own top comment for why "match
-// data -> recommendation -> user preference -> UI/card state" are kept as
-// four separate layers instead of collapsing into one. This file keeps
-// everything DOM/localStorage/render-related, and calls into both modules
-// for the rest.
+// tests/recommendation.test.mjs) and reused by public/lib/match-builder.mjs
+// (for confidence) without a DOM. The viewer's own local "Prefer" state
+// (which swiped match to stick with per slot) is its own further pure
+// module, ./lib/preferences.mjs - see that file's own top comment for why
+// "match data -> recommendation -> user preference -> UI/card state" are
+// kept as four separate layers instead of collapsing into one. This file
+// keeps everything DOM/localStorage/render-related, and calls into both
+// modules for the rest.
 import {
   SERVICES,
   resolveService,
@@ -75,11 +84,41 @@ import {
   resolveTeamOdds,
   resolveF1WinnerOdds
 } from './lib/polymarket.mjs';
+// The one shared fetch+score pipeline - see that module's own top comment
+// for why this now runs live, in every viewer's own browser, instead of
+// once at build time.
+import { buildMatches, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+
+// The shared Cloudflare Worker's base URL (jaypengx-collab/shared-proxy) -
+// a plain, public value, not a secret (a static site's own client bundle
+// can't keep anything truly hidden anyway - see that repo's own worker.js
+// comment on /sports-proxy). Used to be injected into matches.json at
+// build time from a GitHub Actions repo Variable; hardcoded directly here
+// now that there's no more build step to inject it from (see this file's
+// own top comment on why) - confirmed live to still be the real deployed
+// Worker's own URL.
+const PROXY_URL = 'https://orbit-workers-proxy.pengzjay.workers.dev';
+
+// Every host buildMatches needs (ESPN, Polymarket, the MLB Stats API,
+// Jolpica) sends no CORS headers, so a browser can't fetch any of them
+// directly - this is the ONE fetchJson this page ever hands to
+// buildMatches, routing every request through the shared proxy's
+// /sports-proxy passthrough instead (see that Worker's own
+// SPORTS_PROXY_ALLOWED_HOSTS - it only forwards to hosts it already
+// trusts). Same shape as scripts/build-data.mjs's own Node-side fetchJson,
+// just reaching these hosts through the proxy instead of directly.
+async function proxyFetchJson(url) {
+  const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+    cache: 'no-store'
+  });
+  if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
+  return response.json();
+}
 
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
   rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
-  tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyMatchData
+  tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyFreshBuild
   matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
@@ -158,14 +197,14 @@ const state = {
   // overlap neighborhood, so swiping to a new primary without this could
   // hand back a bigger/different member list than the one just shown,
   // reading as the stack growing or reshuffling under the viewer's finger
-  // mid-swipe. In-memory only, never persisted - cleared in applyMatchData
+  // mid-swipe. In-memory only, never persisted - cleared in applyFreshBuild
   // whenever genuinely fresh match data arrives (a fetch/poll can add,
   // remove, or reschedule fixtures, so last render's snapshot is no longer
   // trustworthy), never by a pin's own render.
   stackMembershipByDay: new Map()
 };
 
-// Sport labels as ESPN/build-data.mjs spell them internally (see
+// Sport labels as ESPN/match-builder.mjs spell them internally (see
 // TEAM_LEAGUES in that script) stay the stable data key and CSS hook
 // (data-sport="Premier League" etc.) - only the on-screen label goes
 // through this map, so the underlying data model never has to change
@@ -256,7 +295,7 @@ function buildSportIcon(sport) {
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` is now a fixed rule's output (see build-data.mjs's
+// `whereToWatchTw` is now a fixed rule's output (see match-builder.mjs's
 // `resolveWhereToWatchTw`), not Gemini's own free-form guess, but this
 // registry still matches it by plain text rather than a hardcoded enum
 // value here - both service names it can now actually produce (愛爾達體育台/
@@ -314,7 +353,7 @@ function buildSportIcon(sport) {
 // card. SERVICES/resolveService themselves now live in ./lib/recommendation.mjs
 // (imported above) - this file only still owns which of them are "mine".
 // 'netflix' staying in this list is harmless but now permanently inert for
-// the score nudge above: since build-data.mjs's `resolveWhereToWatchTw`
+// the score nudge above: since match-builder.mjs's `resolveWhereToWatchTw`
 // hardcoded every fixture's `whereToWatchTw` to either 愛爾達體育台 or
 // Apple TV (see this repo's README), no fixture can ever match Netflix
 // here anymore - kept rather than removed since this constant is still
@@ -346,7 +385,6 @@ const settingsResetBtn = document.getElementById('settings-reset-btn');
 const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
 const updateStatusText = document.getElementById('update-status-text');
-const checkUpdateBtn = document.getElementById('check-update-btn');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
 
 // ---- Sport priority settings ---------------------------------------------
@@ -652,7 +690,7 @@ function relativeLabel(match, now = Date.now()) {
   return hours ? `${days} 天 ${hours} 小時後` : `${days} 天後`;
 }
 
-// "已結束" plus the final score, when build-data.mjs actually got one back
+// "已結束" plus the final score, when match-builder.mjs actually got one back
 // from ESPN as a plain number for both sides - anything else (missing,
 // non-numeric, only one side present) just falls back to the plain label
 // rather than showing a half-built or misleading score line.
@@ -679,7 +717,7 @@ function dayLabelFor(date, { short = false } = {}) {
   const diffDays = Math.round((startOfDay(date) - startOfDay(today)) / 86_400_000);
   if (diffDays === 0) return '今天';
   if (diffDays === 1) return '明天';
-  // Yesterday is a real, explicitly reachable day now (see build-data.mjs's
+  // Yesterday is a real, explicitly reachable day now (see match-builder.mjs's
   // own one-day lookback and computeDayPlan treating a finished match as a
   // normal candidate) - it deserves the same clear "昨天" label 今天/明天
   // already get, not just falling through to a bare weekday/date.
@@ -892,7 +930,7 @@ function buildMatchCard(match) {
   node.dataset.matchId = match.id;
   const start = Date.parse(match.startTimeUtc);
   // For a FINISHED match, match.durationMinutes is already the real
-  // observed elapsed time (see build-data.mjs's finishedDurationMinutes) -
+  // observed elapsed time (see match-builder.mjs's finishedDurationMinutes) -
   // no forward uncertainty left to hedge. For one that hasn't finished yet,
   // the displayed end time uses estimatedDurationMinutes (recommendation.mjs)
   // - the SAME real-clock-overrun-padded estimate schedulingDurationMinutes
@@ -908,7 +946,7 @@ function buildMatchCard(match) {
 
   if (match.timeTbd) {
     // startTimeUtc is only a placeholder for a TBD fixture (see
-    // build-data.mjs's isTimeTbd) - showing it as a real clock time would
+    // match-builder.mjs's isTimeTbd) - showing it as a real clock time would
     // just be a confident-looking guess, so this says plainly that it
     // isn't known yet instead.
     node.querySelector('.match-time-range').textContent = '時間未定';
@@ -920,7 +958,7 @@ function buildMatchCard(match) {
     node.querySelector('.match-time-range').textContent =
       `${localTimeFormatter().format(new Date(start))} – ${localTimeFormatter().format(new Date(end))}`;
     // A finished match's real end time rarely matches `end` above (that's
-    // only ever durationMinutes' per-sport AVERAGE - see build-data.mjs's
+    // only ever durationMinutes' per-sport AVERAGE - see match-builder.mjs's
     // isFinished comment), so this says "已結束" (plus the final score,
     // when ESPN reported both as plain numbers) instead of a relative
     // countdown/直播中 that would otherwise still be computed from that
@@ -1073,7 +1111,7 @@ function buildMatchCard(match) {
   }
 
   // The generic factor-label reason line ("依雙方戰績、近期戰況...計算。" -
-  // see build-data.mjs's buildObjectiveReasonZh) was reported as useless:
+  // see match-builder.mjs's buildObjectiveReasonZh) was reported as useless:
   // it never says anything a viewer couldn't already tell from the card
   // itself (which factors happen to feed a deterministic formula, not
   // anything about the actual matchup), and reads as boilerplate repeated
@@ -1257,10 +1295,11 @@ function visibleDays() {
 
 function renderDayScroller() {
   // Every day that actually has something to show, up front, no "load
-  // more" click - the whole window is already baked into matches.json at
-  // build time (see build-data.mjs's own comment on DAYS_AHEAD), so
-  // there's no cost to showing all of it right away; a click-to-reveal
-  // step here only ever hid days that were already sitting in memory.
+  // more" click - the whole window is already in memory once the
+  // full-window refresh tier lands (see refreshFullWindow/DEFAULT_DAYS_AHEAD),
+  // so there's no cost to showing all of it right away; a click-to-reveal
+  // step here would only ever hide days that were already sitting in
+  // memory.
   const nodes = visibleDays().map(day => {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1718,10 +1757,10 @@ function renderSections() {
 }
 
 // Fixtures ESPN has on the schedule but hasn't set a real kickoff time for
-// yet (see build-data.mjs's isTimeTbd - almost always a playoff game whose
+// yet (see match-builder.mjs's isTimeTbd - almost always a playoff game whose
 // bracket slot is set before its exact date/time is) - these never carry a
 // trustworthy startTimeUtc, so they're kept entirely out of the day-picker/
-// DP pipeline (see applyMatchData) and just listed here once, independent
+// DP pipeline (see applyFreshBuild) and just listed here once, independent
 // of whichever day is currently selected, with a "時間未定" label instead
 // of a clock time.
 function renderTbdSection() {
@@ -1783,29 +1822,52 @@ function pickInitialDay(days, matches) {
   return todayKey;
 }
 
-// Applies a freshly-fetched matches.json payload to the page. Used both by
-// the initial load and by checkForUpdate() below, so "how a payload turns
-// into what's on screen" only exists in one place.
-function applyMatchData(data) {
-  // Fresh data can add, remove, or reschedule fixtures - last render's
-  // frozen stack membership (see state.stackMembershipByDay's own comment)
-  // would otherwise keep pinning viewers to a now-stale member list, or
-  // permanently exclude a genuinely new alternative that just appeared.
-  state.stackMembershipByDay = new Map();
-  const allMatches = Array.isArray(data.matches) ? data.matches : [];
-  // TBD fixtures (see build-data.mjs's isTimeTbd) never carry a real
-  // startTimeUtc, so they're split off here, before anything else touches
-  // the list - buildDayList/resolveViewingPlan both assume every match has
-  // a trustworthy clock time, and a placeholder would otherwise land them
-  // on an arbitrary day or mess with the DP's overlap math.
-  const rawMatches = allMatches.filter(m => !m.timeTbd);
-  state.tbdMatches = allMatches.filter(m => m.timeTbd);
+// Folds a freshly-built match list into whatever's already loaded, by id -
+// an UPSERT, never a wholesale replace. Two real reasons this matters now
+// that fetching happens live, repeatedly, in the browser rather than once
+// at build time: (1) the near-term refresh tier (see scheduleNearTermRefresh
+// below) only ever re-fetches a couple of days' worth of fixtures - a
+// wholesale replace would wipe out every far-future day the last FULL
+// refresh already populated; (2) buildMatches already degrades a single
+// league's own fetch failure to an empty list for just that league rather
+// than throwing (see that function's own comment) - replacing the whole
+// match set with a result where one league came back empty would delete
+// every match of that league from the page over a single transient
+// network blip, not just fail to refresh it.
+function mergeFreshMatches(freshMatches) {
+  const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
+  const byTbdKey = new Map(state.tbdMatches.map(m => [m.id, m]));
+  freshMatches.forEach(m => {
+    if (m.timeTbd) byTbdKey.set(m.id, m);
+    else byId.set(m.id, m);
+  });
+  return { rawMatches: [...byId.values()], tbdMatches: [...byTbdKey.values()] };
+}
 
-  if (data.generatedAt) {
-    const generated = new Date(data.generatedAt);
+// Applies a freshly-built match list to the page - called by both refresh
+// tiers below (and the initial load, which is just the full-window tier's
+// own first run), so "how a fresh batch of matches turns into what's on
+// screen" only exists in one place.
+function applyFreshBuild(matches, generatedAt) {
+  const previousIds = new Set(state.allRawMatches.map(m => m.id));
+  const { rawMatches, tbdMatches } = mergeFreshMatches(matches);
+  // A genuine add/remove (a new fixture entering the window, a
+  // postponement) invalidates last render's frozen stack membership (see
+  // state.stackMembershipByDay's own comment) - but a routine refresh that
+  // only UPDATED existing matches in place (a score, an odds move) must
+  // NOT reset it, or every swipeable stack would reshuffle on every single
+  // refresh tick regardless of whether anything conflict-relevant actually
+  // changed.
+  const freshIds = new Set(rawMatches.map(m => m.id));
+  if (previousIds.size !== freshIds.size || [...previousIds].some(id => !freshIds.has(id))) {
+    state.stackMembershipByDay = new Map();
+  }
+
+  state.tbdMatches = tbdMatches;
+  if (generatedAt) {
+    const generated = new Date(generatedAt);
     generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
   }
-  state.proxyUrl = data.proxyUrl || null;
   renderTbdSection();
 
   if (!rawMatches.length) {
@@ -1818,7 +1880,12 @@ function applyMatchData(data) {
     return;
   }
 
-  state.daysAhead = data.daysAhead;
+  errorState.hidden = true;
+  // The day-scroller's own pill COUNT is a UI-window concept independent
+  // of which refresh tier just ran - a near-term refresh only re-fetches a
+  // couple of days, but every day the last full-window refresh already
+  // populated still deserves its own pill.
+  state.daysAhead = DEFAULT_DAYS_AHEAD;
   state.allRawMatches = rawMatches;
   applyEnabledSportsAndRender();
 }
@@ -1827,7 +1894,7 @@ function applyMatchData(data) {
 // Settings (see "Enabled sports settings" below), then redoes everything
 // downstream of that - the viewing plan, the day list (a day can gain or
 // lose entries entirely depending which sports are on), and every render
-// call. Shared by the initial load/poll (applyMatchData) and by toggling a
+// call. Shared by the initial load/poll (applyFreshBuild) and by toggling a
 // sport in Settings, so "what's actually on screen" only ever has one path
 // from "which sports are enabled" to the DOM.
 function applyEnabledSportsAndRender() {
@@ -1874,234 +1941,105 @@ function applyEnabledSportsAndRender() {
   renderSections();
 }
 
-// Checks whether the deployed site has moved on since this tab loaded it,
-// and reacts in one of two ways depending on WHAT changed:
-//   - New data, same code (a routine scheduled rebuild - buildId, the git
-//     commit the build ran from, is unchanged): refresh silently. This is
-//     exactly as safe as the initial load, just triggered later.
-//   - New code (buildId changed - a real commit was deployed, not just a
-//     rebuild of the same one): this tab is still running the OLD
-//     JS/CSS/HTML no matter how fresh the data underneath it is, so
-//     applying new data can't actually pick up whatever changed in the
-//     code. Force a real reload rather than applying the new data and
-//     leaving the stale code running, or merely flagging it for someone
-//     to notice and click - a fix that's live on the server but still
-//     invisible to whoever's looking at the page isn't actually shipped
-//     yet from their point of view. A plain location.reload() alone isn't
-//     enough here: GitHub Pages serves app.js/styles.css themselves with
-//     Cache-Control: max-age=600 (not configurable - no equivalent of a
-//     custom _headers file), so the browser can still hand back a cached
-//     copy of THOSE specific files without even asking the server, for up
-//     to 10 minutes, regardless of how the reload was triggered. A
-//     different query string on the page URL itself forces a genuinely
-//     fresh index.html fetch, which - now that deploy.yml stamps that
-//     file's own script/stylesheet tags with this build's commit sha at
-//     deploy time - pulls in fresh JS/CSS too, since the browser has never
-//     cached a URL with this exact query string before.
-// ---- One update path: on load, and exactly when a relevant match starts
-// or ends ---------------------------------------------------------------
+// ---- Live match data: two refresh tiers, both calling buildMatches -------
 //
-// No polling, no fixed-interval timers, no hidden background refreshes -
-// this is the ONLY place this page ever re-fetches matches.json on its
-// own, and it only ever does so at three moments: once on load (init()),
-// once at the moment a currently-loaded match's own start time arrives,
-// and once at its estimated broadcast end (see nextRelevantTransitionMs
-// below) - never a blind "check again in N minutes" regardless of whether
-// anything relevant is actually about to change. Both of the manual
-// Settings buttons (檢查更新/重新整理資料) call this same function too, so
-// "how a refresh happens" only exists in one place either way.
-let nextUpdateTimer = null;
+// This replaces a scheduled GitHub Action that rebuilt a static
+// matches.json every 15 minutes and redeployed it - see this file's own
+// top comment for why. Two tiers, not one, because ESPN's own scoreboard
+// endpoint has no multi-day range query for a team sport (confirmed live -
+// only F1's own racing/f1 endpoint accepts one), so fetching the WHOLE
+// multi-week window really is one request per league per day, not
+// something a single cheap query could replace - doing that on every
+// refresh, aggressively, isn't practical:
+//   - NEAR-TERM tier (NEAR_TERM_DAYS_AHEAD days, every NEAR_TERM_REFRESH_MS):
+//     cheap (a handful of requests), so this can run often - today/
+//     tomorrow's scores, new fixtures, and odds are the ones actually
+//     worth being "live" about.
+//   - FULL-WINDOW tier (the whole DEFAULT_DAYS_AHEAD-day horizon, every
+//     FULL_REFRESH_MS): expensive (~50+ requests), so this runs far less
+//     often - a fixture 10 days out doesn't need up-to-the-minute
+//     freshness, nothing about it is "live" in any meaningful sense.
+// Both apply through the SAME mergeFreshMatches/applyFreshBuild (see
+// above) - an upsert, never a wholesale replace - so neither tier can ever
+// wipe out what the other one already loaded.
+const NEAR_TERM_DAYS_AHEAD = 2;
+const NEAR_TERM_REFRESH_MS = 60_000;
+const FULL_REFRESH_MS = 5 * 60_000;
 
-// How long to wait before retrying after a genuine fetch failure (offline,
-// a transient server error) - deliberately separate from the lifecycle-
-// transition scheduling below: a network hiccup needs its own short
-// recovery, not a wait for whatever match happens to start or end next
-// (which could be hours away, or never, in an empty window).
-const RETRY_AFTER_ERROR_MS = 60_000;
-// A transition instant that's already effectively "now" (e.g. loading the
-// page mid-match) still gets a short real delay rather than firing
-// immediately/recursively; capped at 24h so an empty or far-future window
-// never leaves this page with no scheduled check at all.
-const MIN_NEXT_UPDATE_DELAY_MS = 5_000;
-const MAX_NEXT_UPDATE_DELAY_MS = 24 * 60 * 60_000;
+let nearTermRefreshTimer = null;
+let fullRefreshTimer = null;
 
-// The soonest future instant, across every currently-loaded (non-finished,
-// non-TBD) match regardless of the viewer's own sport filter or selected
-// day, that its lifecycle meaningfully changes - it starts, or its
-// estimated broadcast ends (see matchLifecycleState/estimatedDurationMinutes
-// in ./lib/recommendation.mjs - an ESTIMATE, not a guarantee, so this can
-// occasionally fire a little before or after a no-clock sport's real end;
-// that's fine, ESPN's own status is what buildMatchCard/relativeLabel
-// actually trust, this timer only decides WHEN to go ask it again). A
-// sport the viewer has filtered out, or a day they aren't currently
-// looking at, still deserves a wake-up - switching back to it later should
-// already reflect reality, not whatever was true when they last looked.
-function nextRelevantTransitionMs(now = Date.now()) {
-  let soonest = Infinity;
-  for (const match of state.allRawMatches) {
-    if (match.isFinished || match.timeTbd) continue;
-    const start = Date.parse(match.startTimeUtc);
-    if (start > now && start < soonest) soonest = start;
-    const estimatedEnd = start + estimatedDurationMinutes(match) * 60_000;
-    if (estimatedEnd > now && estimatedEnd < soonest) soonest = estimatedEnd;
+async function refreshNearTerm() {
+  try {
+    const { matches, generatedAt } = await buildMatches({ daysAhead: NEAR_TERM_DAYS_AHEAD, fetchJson: proxyFetchJson });
+    applyFreshBuild(matches, generatedAt);
+  } catch (error) {
+    console.error('near-term refresh failed', error);
   }
-  return Number.isFinite(soonest) ? soonest : null;
 }
 
-// Schedules exactly the next checkForUpdate call - clears any previously
-// scheduled one first, so there is only ever one live timer no matter how
-// many times this runs (called fresh after every load/checkForUpdate,
-// below).
-function scheduleNextUpdate() {
-  if (nextUpdateTimer) clearTimeout(nextUpdateTimer);
-  const now = Date.now();
-  const target = nextRelevantTransitionMs(now) ?? now + MAX_NEXT_UPDATE_DELAY_MS;
-  const delay = Math.min(MAX_NEXT_UPDATE_DELAY_MS, Math.max(MIN_NEXT_UPDATE_DELAY_MS, target - now));
-  nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), delay);
-}
-
-// `silent` is what makes this the same function for the three real
-// triggers (initial load, and the two scheduled lifecycle transitions
-// above) and the two manual Settings buttons: the scheduled/background
-// path doesn't want status text fighting with whatever else the viewer
-// might be looking at, while a viewer who just tapped "檢查更新" or
-// "重新整理資料" wants to actually see the answer.
-async function checkForUpdate({ silent = false } = {}) {
+// `silent` keeps the background timer from fighting with a viewer who just
+// tapped "立即重新整理" for status text either one might want to set.
+async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
   if (!silent) {
-    updateStatusText.textContent = '檢查中…';
-    checkUpdateBtn.disabled = true;
-    refreshDataBtn.disabled = true;
+    if (statusEl) statusEl.textContent = '重新整理中…';
+    if (button) button.disabled = true;
   }
   try {
-    const response = await fetch('./data/matches.json', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    if (data.generatedAt === state.generatedAt) {
-      // The underlying data hasn't changed, but a scheduled call here
-      // almost always means a match's OWN lifecycle just crossed a
-      // boundary (it started, or its estimated end passed) purely by wall
-      // clock, independent of whether the build has re-fetched anything -
-      // re-render so the is-live styling/relative label/pinned-to-top
-      // ordering (all derived from matchLifecycleState, which reads the
-      // current time) actually reflects that now, not just on the next
-      // unrelated event.
-      renderSections();
-      if (!silent) updateStatusText.textContent = '已是最新版本。';
-      scheduleNextUpdate();
-      return;
-    }
-
-    if (state.buildId && data.buildId && data.buildId !== state.buildId) {
-      if (!silent) updateStatusText.textContent = '發現新版本，正在套用…';
-      location.replace(`${location.pathname}?v=${encodeURIComponent(data.buildId)}`);
-      return; // navigating away - nothing left here to schedule
-    }
-
-    state.generatedAt = data.generatedAt;
-    applyMatchData(data);
-    scheduleNextUpdate();
-    if (!silent) updateStatusText.textContent = '資料已更新。';
+    const { matches, generatedAt } = await buildMatches({ daysAhead: DEFAULT_DAYS_AHEAD, fetchJson: proxyFetchJson });
+    applyFreshBuild(matches, generatedAt);
+    if (!silent && statusEl) statusEl.textContent = '資料已更新。';
   } catch (error) {
-    console.error('update check failed', error);
-    if (!silent) updateStatusText.textContent = '檢查失敗，請稍後再試。';
-    if (nextUpdateTimer) clearTimeout(nextUpdateTimer);
-    nextUpdateTimer = setTimeout(() => checkForUpdate({ silent: true }), RETRY_AFTER_ERROR_MS);
+    console.error('full refresh failed', error);
+    if (!silent && statusEl) statusEl.textContent = '重新整理失敗，請稍後再試。';
   } finally {
-    if (!silent) {
-      checkUpdateBtn.disabled = false;
-      refreshDataBtn.disabled = false;
-    }
+    if (!silent && button) button.disabled = false;
   }
 }
-checkUpdateBtn.addEventListener('click', () => checkForUpdate());
 
-// ---- On-demand refresh (shared proxy's /match-dispatch) --------------------
-//
-// "重新整理資料" fires a GitHub Actions workflow_dispatch (see the shared
-// proxy's own worker.js /match-dispatch route) that re-pulls ESPN's live
-// data and recomputes every fixture's objective score fresh - there is no
-// separate "just the ESPN half" endpoint to trigger, same reasoning
-// checkForUpdate's own comment already gives for why checkUpdateBtn/
-// refreshDataBtn share one function.
-// A plain client-side courtesy debounce - the shared proxy enforces the
-// REAL global rate limit server-side regardless; this only avoids an
-// obviously-redundant second request while the first is still in flight or
-// was just sent.
-const MATCH_DISPATCH_CLIENT_COOLDOWN_MS = 60_000;
-let lastDispatchRequestAt = 0;
+function scheduleNearTermRefresh() {
+  if (nearTermRefreshTimer) clearTimeout(nearTermRefreshTimer);
+  nearTermRefreshTimer = setTimeout(async () => {
+    // A backgrounded tab still gets rescheduled (so it picks back up the
+    // moment it's visible again) but skips the actual fetch - no point
+    // spending battery/quota refreshing a page nobody's looking at.
+    if (document.visibilityState !== 'hidden') await refreshNearTerm();
+    scheduleNearTermRefresh();
+  }, NEAR_TERM_REFRESH_MS);
+}
 
-async function requestMatchDispatch({ statusEl, button, pendingText, successText, failureText } = {}) {
-  if (!state.proxyUrl) {
-    if (statusEl) statusEl.textContent = '此站台尚未設定共用 Worker，無法觸發重新整理。';
-    return;
-  }
-  if (Date.now() - lastDispatchRequestAt < MATCH_DISPATCH_CLIENT_COOLDOWN_MS) {
-    if (statusEl) statusEl.textContent = '剛請求過，請稍候再試一次。';
-    return;
-  }
-  lastDispatchRequestAt = Date.now();
-  if (button) button.disabled = true;
-  if (statusEl && pendingText) statusEl.textContent = pendingText;
-  try {
-    const response = await fetch(`${state.proxyUrl}/match-dispatch`, { method: 'POST' });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body?.error?.message || `HTTP ${response.status}`);
-    }
-    if (statusEl && successText) statusEl.textContent = successText;
-    // The dispatched build takes roughly half a minute to run and deploy -
-    // these are the only two extra fetches this triggers, both going
-    // through the exact same checkForUpdate() every other trigger already
-    // uses (see that function's own comment) - not a second, competing
-    // polling loop.
-    setTimeout(() => checkForUpdate({ silent: true }), 45_000);
-    setTimeout(() => checkForUpdate({ silent: true }), 90_000);
-  } catch (error) {
-    console.error('match-dispatch failed', error);
-    if (statusEl && failureText) statusEl.textContent = failureText;
-  } finally {
-    if (button) button.disabled = false;
-  }
+function scheduleFullRefresh() {
+  if (fullRefreshTimer) clearTimeout(fullRefreshTimer);
+  fullRefreshTimer = setTimeout(async () => {
+    if (document.visibilityState !== 'hidden') await refreshFullWindow({ silent: true });
+    scheduleFullRefresh();
+  }, FULL_REFRESH_MS);
 }
 
 refreshDataBtn.addEventListener('click', () => {
-  // Still does the ordinary "read whatever's already published" check
-  // immediately too (free, instant, no proxy needed) - a viewer gets
-  // whatever's already there right away, on top of a genuinely fresh build
-  // landing shortly after.
-  checkForUpdate();
-  requestMatchDispatch({
-    statusEl: updateStatusText,
-    button: refreshDataBtn,
-    pendingText: '已請求重新整理資料，建置完成後會自動套用…',
-    successText: '已請求重新整理，請稍候約 30-60 秒。',
-    failureText: '請求失敗，請稍後再試。'
-  });
+  refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
 });
 
 // ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -
 //
-// Everything ELSE on this page only ever refreshes on the event-driven
-// schedule described above (on load, and exactly when a match starts/ends) -
-// deliberately no blind polling, per this file's own long-standing design.
-// Two things that design can't provide on its own (matches.json is only
-// ever as fresh as the last build, at most every 15 minutes): a genuinely
-// LIVE match's actual current score, AND a market's odds actually moving
-// throughout the day rather than only refreshing on the next 15-minute
-// build. Both need a real, if narrowly-scoped, exception: poll the shared
-// proxy's /sports-proxy (a thin CORS passthrough - see that module) on a
-// fixed short interval, and merge the real score/status/odds back into
-// state.allRawMatches in place. Score/status still comes from ESPN's own
-// public scoreboard; odds comes from Polymarket instead (see
-// ./lib/polymarket.mjs for why) - two separate fetches below, since not
-// every sport this tracks has both (F1 has real, live Polymarket odds but
-// no ESPN score to poll at all). This never re-runs the AI validation pass
-// or recomputes competitiveness/watchability/reason - only the same live
-// facts already reported (score, finished status, odds), plus letting
-// recommendation.mjs's own liveExcitementBonus react to a live score change
-// so a live match that turns out to be a genuine nail-biter can bump the
-// day's plan (item 6) - see applyRecentRepeatPenalties's own comment for
-// where that bonus is actually applied.
+// A THIRD, even faster refresh tier on top of the two buildMatches tiers
+// above (near-term/full-window) - this one polls just SCORE/STATUS/ODDS
+// for whatever's already loaded, on a much shorter interval than either
+// buildMatches tier could reasonably run at (see this file's own top
+// comment on why re-scoring a whole fetch batch isn't cheap enough to do
+// every few seconds), by hitting each sport's OWN narrow live-scoreboard
+// endpoint (today ± a day, not the whole window) and merging the result
+// straight into the SAME match objects buildMatches already produced -
+// never re-running the scoring/duration/objective-factor pipeline itself,
+// only the same live facts already reported (score, finished status,
+// odds), plus letting recommendation.mjs's own liveExcitementBonus react
+// to a live score change so a live match that turns out to be a genuine
+// nail-biter can bump the day's plan (item 6) - see
+// applyRecentRepeatPenalties's own comment for where that bonus is
+// actually applied. Score/status comes from ESPN's own public scoreboard;
+// odds comes from Polymarket instead (see ./lib/polymarket.mjs for why) -
+// two separate fetches below, since not every sport this tracks has both
+// (F1 has real, live Polymarket odds but no ESPN score to poll at all).
 const LIVE_POLL_INTERVAL_MS = 30_000;
 let livePollTimer = null;
 // How far before kickoff this starts polling a still-PRE fixture purely for
@@ -2212,7 +2150,7 @@ async function pollLiveMatches() {
         state.allRawMatches.forEach(match => {
           if (match.sport !== sport || match.isFinished) return;
           if (sport === 'F1') {
-            // Only the Race session shows odds - see build-data.mjs's own
+            // Only the Race session shows odds - see match-builder.mjs's own
             // enrichWithPolymarketOdds comment for why `-race` is this
             // session's own stable id suffix.
             if (!match.id.endsWith('-race')) return;
@@ -2276,20 +2214,29 @@ function scheduleLivePoll() {
 }
 
 async function init() {
+  state.proxyUrl = PROXY_URL;
+  // Near-term first, for a fast initial paint (a handful of requests -
+  // today/tomorrow's own fixtures) - the full window follows right behind
+  // it, unblocked, so the day-scroller's far-future pills fill in shortly
+  // after rather than the viewer waiting on all ~50+ requests before
+  // seeing anything at all.
   try {
-    const response = await fetch('./data/matches.json', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    state.generatedAt = data.generatedAt;
-    state.buildId = data.buildId;
-
-    applyMatchData(data);
-    scheduleNextUpdate();
-    scheduleLivePoll();
+    await refreshNearTerm();
   } catch (error) {
     console.error(error);
+  }
+  if (!state.allRawMatches.length && !state.tbdMatches.length) {
+    // Nothing loaded at all yet (the near-term fetch itself failed
+    // outright, e.g. the proxy is unreachable) - say so rather than
+    // leaving a silently empty page; refreshFullWindow below and the
+    // scheduled retries can still recover this once network/the proxy
+    // comes back.
     errorState.hidden = false;
   }
+  scheduleNearTermRefresh();
+  scheduleLivePoll();
+  refreshFullWindow({ silent: true });
+  scheduleFullRefresh();
 }
 
 init();

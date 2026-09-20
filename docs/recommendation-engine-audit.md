@@ -2092,3 +2092,119 @@ present) and after (bug confirmed gone) the fix, as documented above.
   matching/parsing/devig logic and public/lib/color.mjs's contrast math -
   the ESPN-odds-specific tests from Round 15 were deleted along with the
   module they tested - 315/315 tests pass overall.
+
+## Round 17 (2026-09-20/21): the scheduled build-and-deploy cycle is gone entirely
+
+- **Live-requested, three items in one message**: "Make the sport league
+  label filter button one row horizontal scroll and move settings to the
+  end instead of the start"; "Proper import polymarket live data... keep in
+  mind of F1 odds... showing the odds of winning for the top three
+  drivers" (largely already true from Round 16 - re-verified rather than
+  re-built); "Remove merge and check for update feature and replace it
+  with live constant updating data flow, we need to get rid of the
+  deployment flow and adapt a user based proxy request... if you think
+  there is better approach do it your way."
+
+- **Filter row**: `.filter-row` was `flex-wrap: wrap` with the settings
+  button FIRST in the DOM - changed to a single non-wrapping row
+  (`overflow-x: auto`, the same scrollbar-hiding pattern `.day-scroller`
+  already used) with the settings button moved LAST in index.html's own
+  markup, not just visually reordered with CSS `order` - so a future
+  screen-reader/keyboard tab order matches the visual one.
+
+- **The big one**: this site used to work like every previous round
+  described - `scripts/build-data.mjs` ran on a 15-minute GitHub Actions
+  cron, wrote a static `matches.json`, and redeployed; the browser only
+  ever read that file plus a narrow 30-second live-score/odds poll
+  (`pollLiveMatches`) on top of it. "Get rid of the deployment flow" meant
+  removing that whole cycle, not just tuning its interval: the match list
+  is now fetched and scored **live, in each viewer's own browser**, via a
+  new exported `buildMatches` (moved from `scripts/build-data.mjs` into
+  `public/lib/match-builder.mjs`, alongside `team-names.mjs`/
+  `objective-score.mjs`/`sport-duration.mjs`/`sport-signals.mjs`, all
+  relocated from `scripts/` to `public/lib/` since none of them had any
+  actual Node-specific code - confirmed by grepping for `node:`/`process.`
+  imports before moving a single one). `scripts/build-data.mjs` survives
+  as a thin ~50-line Node CLI wrapper, kept only for local dev tooling
+  (`dump-day-plan.mjs`/`evaluate-recommendations.mjs` still read a
+  `matches.json` snapshot from disk) - the deployed site depends on
+  neither it nor its output anymore.
+
+  Investigated the real request-volume constraint before designing the
+  refresh cadence, not just picking a number: live-tested whether ESPN's
+  own team-sport scoreboard endpoint accepts a multi-day `dates` range
+  (the way F1's own `racing/f1` endpoint does) to cut the ~50+ requests a
+  full 14-day window needs down to a handful - it does not (confirmed
+  live, HTTP 400 for both MLB and EPL). That constraint shaped a genuine
+  two-tier design rather than one "refresh everything, aggressively" loop:
+  a cheap **near-term** tier (today+tomorrow, a handful of requests, every
+  60 seconds) for what's actually live-worthy, and an expensive
+  **full-window** tier (the whole 14-day horizon, every 5 minutes) for the
+  day-scroller's far-future pills, which don't need per-minute freshness.
+  Both merge into `state.allRawMatches` BY ID (`mergeFreshMatches`), never
+  a wholesale replace - `buildMatches` already degrades one league's own
+  fetch failure to an empty list rather than throwing, so a wholesale
+  replace on a transient network blip would have deleted every match of
+  that league from the page. The existing 30-second `pollLiveMatches`
+  stays as a THIRD, even faster tier on top of both, unchanged in spirit.
+  The manual "重新整理資料"/"檢查更新" buttons (and the whole `buildId`-based
+  new-code-vs-new-data detection, and the shared proxy's own
+  `/match-dispatch` GitHub Actions trigger route) were deleted outright as
+  dead code, replaced by one "立即重新整理" button that just re-runs the
+  full-window tier immediately - no more 30-60 second wait for a CI
+  redeploy.
+
+- **`PROXY_URL` used to be a GitHub Actions Variable substituted into
+  `matches.json` at build time** - with no build step left to substitute
+  it, it's now a plain hardcoded constant in `public/app.js`, its real
+  value confirmed by reading it straight off the currently-deployed site's
+  own (about-to-be-retired) `matches.json` rather than guessed.
+
+- **A real, previously-undetected production bug found and fixed while
+  verifying this live**: the shared proxy's own `/sports-proxy` route sent
+  NO User-Agent at all on its outbound fetch to ESPN, which got rejected
+  outright by ESPN's Akamai bot manager ("Access Denied",
+  errors.edgesuite.net) - live-confirmed via a direct curl to the real
+  deployed Worker. This is the exact same live-confirmed Akamai block
+  `scripts/build-data.mjs`'s own Node-side fetch already works around with
+  an honest, self-identifying UA - the Worker's own outbound fetch just
+  never got the same treatment. This means the EXISTING live-score/odds
+  poll feature (shipped in earlier rounds) had likely never actually
+  succeeded in production either, silently - `pollLiveMatches`'s own
+  try/catch swallows a failed fetch with no visible symptom, since the
+  card's initial (Node-fetched, build-time) numbers already looked
+  correct. Fixed in `jaypengx-collab/Shared-Proxy` by adding the same
+  `Match-Find-Bot/1.0` UA to the Worker's own outbound fetch, deployed,
+  and re-verified live (HTTP 403 → HTTP 200, real MLB scoreboard JSON back)
+  before relying on it for this round's own architecture.
+
+- **A second, sandbox-only obstacle, correctly diagnosed rather than
+  worked around blindly**: a Playwright-launched Chromium in this
+  environment doesn't trust the sandbox's own TLS-interception CA, so
+  every real HTTPS request from that browser fails
+  `ERR_CERT_AUTHORITY_INVALID` regardless of target - confirmed this was
+  sandbox-only (not the Akamai bug above, already separately fixed and
+  verified via curl) by using Playwright's own `page.route()` to relay
+  every `/sports-proxy` request through Node's own working `fetch`
+  instead, hitting the exact same real, live, now-fixed Worker - this
+  verifies the actual `app.js` code path (URL construction, request
+  sequencing, merging, rendering) end to end with genuine live data,
+  without needing the sandbox's own browser to complete a raw HTTPS
+  connection at all. Confirmed live: 75 real proxy requests relayed, 13
+  day pills, 16 real match cards rendered with real team-colored
+  odds bars, zero console errors, "立即重新整理" button correctly
+  re-triggers the full-window tier.
+
+- `.github/workflows/deploy.yml` renamed ("Deploy to Pages") and stripped
+  of its `schedule: cron` trigger and its "Fetch fixtures and build match
+  recommendations" step entirely - the opt-in `debug_day_plan` manual dump
+  now runs `node scripts/build-data.mjs` itself first (only when actually
+  invoked) rather than relying on a build step that no longer exists.
+  `jaypengx-collab/Shared-Proxy`'s own `/match-dispatch` route, its
+  `MATCH_FIND_DISPATCH_TOKEN` secret setup docs, and Match-Find's own
+  README sections describing the old build/deploy/update-check cycle were
+  all removed/rewritten to match, rather than left stale.
+
+  No test count regression - the four relocated modules' own tests moved
+  with them (import paths updated, logic untouched); 315/315 tests pass,
+  same as Round 16's own final count.

@@ -1,4 +1,4 @@
-// Tests for the pure helper functions exported from scripts/build-data.mjs
+// Tests for the pure helper functions exported from public/lib/match-builder.mjs
 // (isTimeTbd/parseOverallRecord/oddsContext/computeMatchObjectiveScore/...).
 // Importing this file does NOT run a live build - see build-data.mjs's own
 // entry-module guard at the bottom (`if (isMain) { main()... }`), added
@@ -18,7 +18,7 @@ import {
   computeMatchObjectiveScore,
   describeFactorsZh,
   buildObjectiveReasonZh
-} from '../scripts/build-data.mjs';
+} from '../public/lib/match-builder.mjs';
 
 describe('isTimeTbd', () => {
   test('flags a status whose shortDetail contains TBD', () => {

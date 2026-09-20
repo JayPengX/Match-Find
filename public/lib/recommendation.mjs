@@ -4,14 +4,14 @@
 // watching": turning a fixture's deterministic, real-data scores
 // (competitiveness/watchability/broadcastQuality/enduranceScore - all
 // decided once at build time, entirely from real sports-data APIs, see
-// scripts/objective-score.mjs - no AI involved anywhere in this pipeline
+// public/lib/objective-score.mjs - no AI involved anywhere in this pipeline
 // as of docs/recommendation-engine-audit.md's Round 11) into a day's
 // back-to-back viewing plan, plus the score/confidence bookkeeping that
 // decision is built from.
 //
 // Extracted out of public/app.js (which still owns everything DOM/
 // localStorage/render-related) so this logic can be:
-//   - imported by scripts/build-data.mjs too (confidence is computed once,
+//   - imported by public/lib/match-builder.mjs too (confidence is computed once,
 //     at build time - see computeConfidence below), and
 //   - unit-tested directly with Node's built-in test runner (see
 //     tests/recommendation.test.mjs) without needing a DOM.
@@ -85,13 +85,13 @@ export function resolveService(whereToWatchTw) {
 // to the same question, and it's deliberately NOT anchored on any single
 // dimension either: "best match" means the fixture that combines real
 // SKILL (how good the two teams actually ARE, independent of tonight's
-// pairing - see scripts/objective-score.mjs's skillFromWinPct), genuine
+// pairing - see public/lib/objective-score.mjs's skillFromWinPct), genuine
 // COMPETITIVENESS (how CLOSE tonight's specific pairing is - competitiveness
 // - plus whether those stakes actually stay meaningful all the way through
 // rather than just at kickoff - enduranceScore), and broad ENTERTAINMENT/
 // public attention (watchability - itself the deterministic objective
 // score's own national-broadcast/rivalry/derby detectors and betting-market
-// signal, see scripts/objective-score.mjs - plus broadcastQuality's
+// signal, see public/lib/objective-score.mjs - plus broadcastQuality's
 // production-quality signal) - never a match that only
 // wins because it's exceptional on one of those axes while being mediocre
 // on the others. A viewer explicitly asked for this distinction: two elite
@@ -104,7 +104,7 @@ export function resolveService(whereToWatchTw) {
 // present ones so a finished/never-scored match, or a sport with no skill
 // signal at all (F1 - see objective-score.mjs's own comment), still gets a
 // real number built from what IS known, same "renormalize over what's
-// present" posture scripts/objective-score.mjs's own weightedAverage uses.
+// present" posture public/lib/objective-score.mjs's own weightedAverage uses.
 // Falls back to the build-time composite `match.score` only when NONE of
 // these dimensions are set at all (nothing left to blend).
 export const BEST_MATCH_WEIGHTS = {
@@ -151,7 +151,7 @@ export const PRIORITY_SCORE_DELTA = 1;
 // for" without turning this into a hard filter.
 export const OWNED_SERVICE_SCORE_BONUS = 0.5;
 
-// True when scripts/objective-score.mjs already flagged this fixture as a
+// True when public/lib/objective-score.mjs already flagged this fixture as a
 // real, independently-known draw (a derby, a "Big Six"-style globally
 // followed club, or a historic rivalry) - see that module's own EPL/MLB/NBA
 // comments for why this exists at all: a pure win%-based formula has no way
@@ -234,7 +234,7 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
 // file's own git history. Gemini validation is gone entirely now (see
 // docs/recommendation-engine-audit.md's Round 11): every non-finished
 // fixture gets the exact same deterministic, real-data objective score
-// (scripts/objective-score.mjs) computed the exact same way, so there is
+// (public/lib/objective-score.mjs) computed the exact same way, so there is
 // no longer a per-fixture "how was THIS one scored" question to answer -
 // only "was a score computed for it at all" (a finished/never-scored
 // fixture has none, hence null - "how confident is this score" is
@@ -536,7 +536,7 @@ export function matchLifecycleState(match, now = Date.now()) {
 // ---- Live duration correction (a real-time refinement of the pre-game
 // estimate, using ESPN's own live period/clock data) ------------------------
 //
-// scripts/sport-duration.mjs's predictions are necessarily PRE-GAME
+// public/lib/sport-duration.mjs's predictions are necessarily PRE-GAME
 // estimates, decided from a team's own historical pace before a single
 // pitch/tip-off/kickoff - real, CURRENT progress once a match is actually
 // live is a much stronger signal for "how long will this broadcast really

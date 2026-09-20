@@ -231,11 +231,6 @@ button {
   padding: 12px 16px;
   cursor: pointer;
 }
-.settings-action-btn.is-secondary {
-  background: var(--bg-elevated);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
 .settings-btn-row {
   display: flex;
   gap: 10px;
@@ -314,18 +309,27 @@ main#app {
   color: #fff;
   box-shadow: 0 6px 16px -8px rgba(91, 140, 255, 0.6);
 }
+/* One horizontal-scrolling row, never wrapping to a second line - same
+   scrollbar-hiding pattern as .day-scroller just above, for the same
+   reason (a growing sport list, e.g. F1 added alongside MLB/NBA/EPL,
+   would otherwise push the settings button around/wrap the whole bar
+   taller instead of just scrolling). The settings button sits LAST, after
+   every sport chip, not first - see index.html's own element order,
+   which this relies on directly rather than reordering with CSS `order`. */
 .filter-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+  margin-bottom: 0;
+  scrollbar-width: none;
 }
+.filter-row::-webkit-scrollbar { display: none; }
 /* Keeps #sport-filters as a real element (app.js's renderFilters targets it
    with replaceChildren without disturbing the settings button, a fixed
    sibling) while contributing nothing of its own to the box tree - its
-   chip children lay out directly in .filter-row's own flex row, right
-   after the settings button. */
+   chip children lay out directly in .filter-row's own flex row. */
 #sport-filters {
   display: contents;
 }
@@ -346,6 +350,7 @@ main#app {
 }
 .settings-chip-btn:hover { color: var(--accent); border-color: var(--accent); }
 .filter-chip {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -357,6 +362,7 @@ main#app {
   min-height: 42px;
   font-size: 0.84rem;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }

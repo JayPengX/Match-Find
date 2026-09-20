@@ -1,4 +1,4 @@
-// Tests for scripts/sport-signals.mjs's own PURE parsing functions -
+// Tests for public/lib/sport-signals.mjs's own PURE parsing functions -
 // parseMlbTeamRecord/parseMlbStandingsResponse/computeTitleRaceIntensity/
 // parseF1DriverStandingsResponse - against small, hand-built fixtures
 // shaped like these APIs' own long-documented public response formats.
@@ -16,7 +16,7 @@ import {
   computeTitleRaceIntensity,
   parseF1DriverStandingsResponse,
   F1_TITLE_RACE_DECIDED_GAP_POINTS
-} from '../scripts/sport-signals.mjs';
+} from '../public/lib/sport-signals.mjs';
 
 describe('MLB_STATS_API_TEAM_IDS', () => {
   test('has exactly 30 teams, one per MLB club, with unique numeric ids', () => {

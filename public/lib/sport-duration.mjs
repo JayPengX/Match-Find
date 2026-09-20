@@ -1,9 +1,9 @@
-// ---- scripts/sport-duration.mjs ----
+// ---- public/lib/sport-duration.mjs ----
 // Deterministic, per-fixture broadcast-length predictions for every sport
 // this site covers - MLB, NBA, Premier League, and F1's race session.
 //
 // Why this exists: `durationMinutes` used to be one flat per-league
-// constant (see scripts/build-data.mjs's old TEAM_LEAGUES table) - every
+// constant (see public/lib/match-builder.mjs's old TEAM_LEAGUES table) - every
 // MLB game got the exact same 190 minutes regardless of which two teams
 // were actually playing, even though real per-team pace varies by roughly
 // 20 minutes end to end (a Tampa Bay-Cleveland game runs meaningfully

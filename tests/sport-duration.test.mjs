@@ -1,4 +1,4 @@
-// Tests for scripts/sport-duration.mjs - the deterministic, per-fixture
+// Tests for public/lib/sport-duration.mjs - the deterministic, per-fixture
 // broadcast-length formulas that replaced the old flat per-league average
 // (see that module's own top-of-file comment).
 import { test, describe } from 'node:test';
@@ -26,7 +26,7 @@ import {
   F1_MAX_ACTIVE_RACING_MINUTES,
   resolveF1CircuitKey,
   predictF1RaceDurationMinutes
-} from '../scripts/sport-duration.mjs';
+} from '../public/lib/sport-duration.mjs';
 
 describe('MLB duration prediction', () => {
   test('two teams with no offsets recognized average to the flat baseline plus the ABS padding', () => {
