@@ -1657,3 +1657,114 @@ causes rather than left as unexplained "it's wrong":**
 
 Tests unaffected by this round (the UI-side changes have no dedicated
 Node test harness) - the existing 276 lib/data tests still pass unchanged.
+
+## Round 13, continued: the EPL push-back was wrong
+
+The reporter pushed back on both "no change made" conclusions above,
+insisting the Man City/Crystal Palace case was reproducing right now on
+TODAY's date (9/20), not some aged-out "yesterday". That correction was
+right, and re-checking it under that framing (today's own date tab, not
+the "昨天" relative label) surfaced a real, previously-undiscovered bug -
+the actual root cause behind essentially the entire Liverpool/Bournemouth
+saga (#3/#7/Round 13's own EPL section above).
+
+**A long-finished match's `durationMinutes` blew up to hours, silently
+crowding a genuinely better fixture out of the schedule.** Crystal Palace
+vs Leeds United (13:00 UTC kickoff, `enduranceScore: 8`, by far 9/20's
+highest-scoring EPL fixture) was recorded with `durationMinutes: 290` -
+four hours fifty minutes, for a normal finished Premier League league
+match. `finishedDurationMinutes` (`scripts/build-data.mjs`) computes a
+finished fixture's duration as "how long ago did this start" - a fix from
+an earlier round for the OPPOSITE problem (a blowout that genuinely ended
+EARLY still reserving its full pre-game estimate). That's only a good
+proxy for the real game length when the fetch happens shortly after the
+match actually ends. This workflow's cron reads the WHOLE day's schedule
+every 15 minutes regardless of when each individual fixture kicked off or
+finished - so a 13:00 UTC kickoff re-checked at 17:41 UTC (a perfectly
+ordinary cron cycle, nothing anomalous about it) got "elapsed minutes
+since kickoff" (281) recorded as its actual game length, when the real
+match was over in ~115 minutes like any other EPL fixture. `datePlan`'s
+scheduler (`public/lib/recommendation.mjs`) trusts `durationMinutes`
+completely - a 290-minute reserved block for a 13:00 kickoff extends to
+17:25 UTC, which fully swallows Man Utd vs Fulham's 15:30 kickoff, forcing
+the scheduler to choose between them. Since Crystal Palace/Leeds's own
+(correct) score handily beat Man Utd/Fulham, and BOTH slots the day
+actually needed were worth filling, the scheduler picked the two matches
+that didn't conflict (Sunderland vs Man City + Man Utd vs Fulham) over the
+one match that scored higher but appeared to block a whole second fixture
+that, in reality, it was already over well before.
+
+This has nothing to do with any particular team - it silently penalizes
+whichever finished match this round's cron happens to catch furthest after
+its own final whistle, which skews toward exactly the kind of high-profile,
+long-stoppage-time, still-being-talked-about match a viewer is most likely
+to ask "why wasn't this recommended" about.
+
+Fixed with `FINISHED_DURATION_CAP_MINUTES_BY_SPORT`
+(`scripts/build-data.mjs`): `finishedDurationMinutes` now clamps the naive
+elapsed-since-kickoff number to a per-sport realistic ceiling (Premier
+League 140 - chosen so two league fixtures on the real-world-standard
+2h30m broadcast gap never cross the scheduler's own transition-buffer
+boundary purely from this effect; NBA 180; MLB 360, kept generous since
+it's this codebase's own declared no-clock/low-reliability sport; F1 180),
+floored at the existing `MIN_FINISHED_DURATION_MINUTES`. A fetch that DOES
+land soon after the real final whistle is completely unaffected - this
+only clips the implausible case. Verified against a live rebuild: Crystal
+Palace vs Leeds United's `durationMinutes` dropped from 290 to 140, and it
+is now correctly the day's top EPL pick instead of Sunderland vs Man City.
+Liverpool vs Bournemouth still doesn't win (competitiveness 3/10 - a
+genuinely one-sided match), which is correct; Crystal Palace vs Leeds
+(competitiveness 8/10) legitimately deserves the slot more, and now gets
+it. Added regression coverage in `tests/build-data.test.mjs`.
+
+The Padres/Dodgers repeat question was re-checked against a second, later
+live snapshot and still didn't reproduce (Tampa Bay Rays/Yankees still won
+both slots) - unlike the EPL case, this one hasn't turned up a concrete
+bug yet. Flagged back to the reporter with a request for the exact card
+label (推薦 vs 偏好) next time it's visible, since a stale pin from before
+the pin-persistence fix (#10) landed is the next most likely explanation
+and that distinction would confirm or rule it out directly.
+
+**Two further live-reported UI issues, both root-caused past their
+surface symptom:**
+
+- *"Single blue dot, not all dots present and filled in"* - NOT a color
+  bug (the --border → --text-muted change earlier in this round didn't
+  actually fix it, because it wasn't the real cause). This project's
+  global reset puts everything in `box-sizing: border-box`. The dot
+  markup relied on a tiny declared `width`/`height` (6-8px) plus large
+  `padding` (10-11px) and `background-clip: content-box` to paint only a
+  small inner circle while keeping a big tap target. Under border-box, a
+  width smaller than its own padding can't yield a negative content area -
+  the browser clamps the CONTENT box to 0x0, so every inactive dot's
+  content-clipped background painted nothing. The one dot that WAS
+  visible (`.is-active`) only worked by accident: `background: var(
+  --accent)` is shorthand, which resets `background-clip` back to its
+  default (border-box), so only the active dot ever painted its full
+  padded box. This bug predates this session's work entirely - it was
+  never actually about the color. Fixed by decoupling the tap target from
+  the visible dot: the button is a plain 22px transparent target with no
+  padding to fight box-sizing over, and the visible 7px circle is a
+  `::after` pseudo-element positioned independently. Verified with a
+  Playwright screenshot: all N dots now render, the active one filled
+  `--accent` at 1.3x scale, the rest a visible `--text-muted` gray.
+- *"Dots and swipe button are big"* / *"swipe gesture gets stuck in the
+  background on a screen bigger than a phone"* - the arrow buttons were
+  sized to this app's own `--tap` (44px, its standard touch-target
+  constant elsewhere), oversized for this tight inline control; shrunk to
+  30px, dots' tap target to 22px. The "stuck in background" report is a
+  real, distinct bug from the original Safari freeze: a card contains real
+  `<img>` team-logo elements, and starting a MOUSE drag on top of an
+  `<img>` triggers the browser's own native HTML5 image drag-and-drop (a
+  "ghost" copy of the image trailing the cursor under the browser's own
+  drag session) - something a real touch drag never triggers, which is
+  exactly why this only showed up "on a screen bigger than a phone" (i.e.
+  mouse input, not touch). Fixed from both sides: `-webkit-user-drag: none`
+  on every image inside the stack, plus `event.preventDefault()` in the
+  pointerdown handler itself (for browsers that don't honor the CSS
+  property). Re-verified the full swipe test suite (Playwright, both
+  simulated mouse-drag and synthetic `pointerType: 'touch'` events) still
+  advances/snaps-back/never-gets-stuck correctly with this added.
+
+279/279 tests pass (up from 276, three new cases for the finished-duration
+cap).

@@ -421,24 +421,38 @@ main#app {
 .match-stack-viewport > .match-card:active {
   cursor: grabbing;
 }
+/* A card drag starting on top of a real <img> (team logos) is the
+   browser's own trigger for native HTML5 image drag-and-drop - a "ghost"
+   copy of the image that follows the cursor under the BROWSER's own drag
+   session, entirely outside buildMatchStack's pointer-event handling.
+   Live-reported as the swipe getting visibly "stuck in the background" on
+   a mouse/desktop-sized screen specifically - a real touch drag never
+   triggers this the way a mousedown-on-an-<img> does. Disabling native
+   drag on every image inside the stack (belt) plus preventDefault() in
+   the pointerdown handler itself (suspenders, for browsers that don't
+   honor -webkit-user-drag) closes it from both sides. */
+.match-stack-viewport img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
 .match-stack-nav {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   margin-top: 8px;
 }
 .match-stack-arrow {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--tap);
-  height: var(--tap);
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--bg-raised);
   color: var(--text);
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   line-height: 1;
   flex-shrink: 0;
   cursor: pointer;
@@ -451,29 +465,49 @@ main#app {
   display: flex;
   align-items: center;
 }
+/* The real bug behind "only one blue dot shows, the rest are invisible"
+   was never just color (an earlier pass here changed --border to
+   --text-muted and it kept happening): this project's global reset puts
+   every element in box-sizing: border-box, and the previous version tried
+   to get a small visible dot with a big tap target by setting a tiny
+   width/height (6-8px) and relying on PADDING (10-11px) plus
+   `background-clip: content-box` to draw only the inner content box. Under
+   border-box, a declared width smaller than its own padding can't produce
+   a negative content area - the browser clamps the CONTENT box to 0x0, so
+   the content-clipped background painted literally nothing. The one dot
+   that WAS visible (.is-active) only worked by accident: `background:
+   var(--accent)` is shorthand, which resets background-clip back to its
+   default (border-box) on top of the base rule's content-box, so only the
+   active dot ever painted its full padded box. Fixed by decoupling the
+   visible dot from the tap target entirely - the button itself IS the tap
+   target (no padding-driven sizing to fight box-sizing over), and the
+   actual small dot is a `::after` pseudo-element sized and centered
+   independently. */
 .match-stack-dot {
-  /* The visible dot is small (8px), but its actual tap target is padded out
-     to a comfortable thumb size - a small hit area here is exactly the kind
-     of thing that reads as "unresponsive" on a real phone even though the
-     click handler itself works fine. Uses --text-muted, not --border - the
-     border color is meant to be a near-invisible hairline against
-     --bg-raised (that's the whole point of a border color), which made an
-     inactive dot almost impossible to see against the card behind it -
-     live-reported as "the dots are kind of invisible". --text-muted is
-     built to be legible body-adjacent text, not a subtle hairline. */
-  width: 8px;
-  height: 8px;
-  padding: 10px;
-  background-clip: content-box;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
   border-radius: 50%;
-  background-color: var(--text-muted);
-  transition: background-color 0.15s ease, transform 0.15s ease;
+  background: transparent;
   cursor: pointer;
 }
-.match-stack-dot.is-active {
-  background: var(--accent);
-  transform: scale(1.25);
+.match-stack-dot::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  transform: translate(-50%, -50%);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.match-stack-dot.is-active::after {
+  background-color: var(--accent);
+  transform: translate(-50%, -50%) scale(1.3);
 }
 .match-stack-hint {
   display: flex;

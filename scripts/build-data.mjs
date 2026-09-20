@@ -161,9 +161,46 @@ export function computeDurationMinutes(league, away, home, venue, broadcast, odd
 // (ESPN marking a fixture 'post' almost immediately, e.g. a postponement)
 // can't produce a laughably tiny reserved block.
 export const MIN_FINISHED_DURATION_MINUTES = 30;
-export function finishedDurationMinutes(startTimeUtc, now) {
+// Ceilinged well ABOVE any realistic finished-game length, per sport, for
+// the opposite reason: "how long ago did this start" is only a good proxy
+// for "how long did it actually run" when this fetch happens shortly after
+// the fixture ends. This workflow runs on a 15-minute cron reading a WHOLE
+// day's schedule at once, so a match that finished hours before the run
+// that catches it (a lunchtime EPL kickoff checked again in the evening,
+// same as any run whose previous cycle was delayed or skipped) had its
+// "duration" computed as elapsed-time-to-NOW, not elapsed-time-to-the-
+// actual-final-whistle - live-reported as a finished, genuinely great,
+// high-endurance match (Crystal Palace 0-0 recorded as `durationMinutes:
+// 290`, an EPL match kicked off 13:00 UTC, fetched again at 17:41 UTC)
+// reserving a 4h50m schedule block against a normal ~115-minute league
+// fixture, which then blocked the day planner from ALSO recommending
+// whatever else could have followed it - the exact mechanism behind
+// several live reports of "the best match of the day didn't win" that
+// traced back to nothing being wrong with the match's own score at all.
+// Set well above genuine worst-case overruns (extra innings/rain delays
+// for MLB, OT for NBA) so a fetch that DOES land soon after the real final
+// whistle is completely unaffected - this only clips the case where the
+// naive elapsed-to-now number is already implausible for the sport.
+// Premier League's own 140 (not just "a bit above" the 108-125 pre-game
+// estimate range in sport-duration.mjs) is deliberately picked so that two
+// back-to-back league fixtures scheduled the real-world-standard 2h30m
+// apart (e.g. two 13:00 UTC kickoffs vs. a 15:30 UTC one, exactly this
+// bug's own live-reported case) never fall on the wrong side of the
+// TRANSITION_BUFFER_MINUTES boundary in recommendation.mjs's scheduler
+// purely because a late fetch inflated one of them - 140 + 10 minutes of
+// transition buffer lands exactly at 2h30m, matching that real broadcast
+// gap instead of quietly eating into it.
+export const FINISHED_DURATION_CAP_MINUTES_BY_SPORT = {
+  'Premier League': 140,
+  NBA: 180,
+  MLB: 360,
+  F1: 180
+};
+const DEFAULT_FINISHED_DURATION_CAP_MINUTES = 240;
+export function finishedDurationMinutes(startTimeUtc, now, sport) {
   const elapsedMinutes = Math.round((now.getTime() - Date.parse(startTimeUtc)) / 60_000);
-  return Math.max(MIN_FINISHED_DURATION_MINUTES, elapsedMinutes);
+  const cap = FINISHED_DURATION_CAP_MINUTES_BY_SPORT[sport] ?? DEFAULT_FINISHED_DURATION_CAP_MINUTES;
+  return Math.max(MIN_FINISHED_DURATION_MINUTES, Math.min(cap, elapsedMinutes));
 }
 
 // ---- Taiwan broadcast source (a hardcoded rule, not an AI guess) --------
@@ -405,7 +442,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
         durationMinutes: isFinished
-          ? finishedDurationMinutes(new Date(startMs).toISOString(), now)
+          ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label)
           : computeDurationMinutes(
               league,
               away,
@@ -479,7 +516,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       // sport-duration.mjs's own comment for why Qualifying/Sprint keep
       // their flat session.durationMinutes instead.
       const durationMinutes = isFinished
-        ? finishedDurationMinutes(new Date(startMs).toISOString(), now)
+        ? finishedDurationMinutes(new Date(startMs).toISOString(), now, 'F1')
         : sessionType.abbreviation === 'Race'
           ? predictF1RaceDurationMinutes(venue)
           : sessionType.durationMinutes;

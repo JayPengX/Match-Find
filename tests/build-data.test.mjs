@@ -14,6 +14,7 @@ import {
   computeDurationMinutes,
   finishedDurationMinutes,
   MIN_FINISHED_DURATION_MINUTES,
+  FINISHED_DURATION_CAP_MINUTES_BY_SPORT,
   computeMatchObjectiveScore,
   describeFactorsZh,
   buildObjectiveReasonZh
@@ -227,6 +228,41 @@ describe('finishedDurationMinutes', () => {
     const start = '2026-09-19T18:00:00.000Z';
     const now = new Date('2026-09-19T18:05:00.000Z');
     assert.equal(finishedDurationMinutes(start, now), MIN_FINISHED_DURATION_MINUTES);
+  });
+
+  // Live-verified regression: a real finished EPL fixture (Crystal Palace
+  // vs Leeds United, kicked off 13:00 UTC) was still fetched again at
+  // 17:41 UTC by this workflow's own 15-minute cron - "how long ago did
+  // this start" (281 minutes) got recorded as the match's own
+  // `durationMinutes`, even though a Premier League league fixture is
+  // never remotely close to running that long. That 290-minute reserved
+  // schedule block (used by public/lib/recommendation.mjs's own
+  // scheduler) then crowded out a later match that could have easily,
+  // actually followed it - the real mechanism behind several live reports
+  // of "the best/most-hyped match of the day wasn't recommended" that had
+  // nothing wrong with that match's own score at all.
+  test('caps an implausibly large reading at this sport\'s own realistic ceiling, per FINISHED_DURATION_CAP_MINUTES_BY_SPORT', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-20T17:41:00.000Z'); // 281 real minutes later
+    assert.equal(
+      finishedDurationMinutes(start, now, 'Premier League'),
+      FINISHED_DURATION_CAP_MINUTES_BY_SPORT['Premier League']
+    );
+    assert.ok(FINISHED_DURATION_CAP_MINUTES_BY_SPORT['Premier League'] < 281);
+  });
+
+  test('a genuine same-cycle fetch (elapsed time well under the cap) is unaffected by the cap', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-20T14:55:00.000Z'); // 115 real minutes later
+    assert.equal(finishedDurationMinutes(start, now, 'Premier League'), 115);
+  });
+
+  test('an unrecognized/missing sport falls back to a generous default cap, never Infinity', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-21T13:00:00.000Z'); // a full day later
+    const result = finishedDurationMinutes(start, now, 'Curling');
+    assert.ok(Number.isFinite(result));
+    assert.ok(result < 24 * 60);
   });
 });
 

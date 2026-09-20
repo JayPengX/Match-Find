@@ -1290,9 +1290,21 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     card.style.transform = '';
   }
 
+  // A card contains real <img> team-logo elements, and starting a mouse
+  // drag ON TOP of an <img> is the browser's own built-in trigger for
+  // native HTML5 drag-and-drop (a "ghost" copy of the image that follows
+  // the cursor, entirely outside this code's event handling) - reported
+  // live as the swipe visibly getting "stuck in the background" when
+  // dragging with a mouse on a screen bigger than a phone, i.e. exactly
+  // the desktop/mouse case real touch never hits (a touch drag doesn't
+  // start the native image drag the way a mousedown-on-an-<img> does).
+  // preventDefault() here is what stops that native drag from ever
+  // starting, on top of the CSS `-webkit-user-drag: none` on the card's
+  // own images (styles.css) for the browsers that honor it.
   card.addEventListener('pointerdown', event => {
     if (!event.isPrimary || activePointerId != null) return;
     if (event.target.closest('button')) return; // dots/arrows keep their own click handling
+    event.preventDefault();
     activePointerId = event.pointerId;
     dragStartX = event.clientX;
     dragStartY = event.clientY;
