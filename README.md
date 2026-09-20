@@ -401,7 +401,7 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   (`pinSlotChoice`). A card whose start overlaps an earlier match - whether
   or not either one made the plan - gets a small note naming that match and
   how long they overlap (`computeOverlapRange` in `buildMatchCard`).
-  **The stack is driven entirely by explicit pointer events and a CSS
+  **The stack is driven entirely by explicit Touch/Mouse events and a CSS
   `transform`** (`buildMatchStack` in `app.js`), not native CSS scroll-snap -
   an earlier design (scrollLeft + scroll-snap + a requestAnimationFrame poll
   waiting for native momentum to "settle") went through three separate
@@ -412,18 +412,32 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   device stayed correct on every other one. A transform is just a plain CSS
   property this code sets directly (`translateX(calc(-index*100% + dragPx))`)
   and reads back exactly what it set - there's no separate physics engine
-  whose output has to be inferred after the fact. `pointerdown`/`pointermove`/
-  `pointerup` track the gesture directly: a small movement threshold decides
-  horizontal-swipe vs. vertical-page-scroll before committing to either (so
-  a swipe starting on a stack never fights the page's own scroll), a live
-  drag renders immediately as the finger moves (with resistance past either
-  end, never a hard stop), and release commits to the next/previous card
-  the instant it crosses a distance-or-velocity threshold - no polling, no
-  waiting for anything to "settle", since nothing is still moving under the
-  hood after that. Verified against a real headless-browser reproduction
-  driving actual `PointerEvent`s (not just reasoning about scroll physics)
-  across a 3-card chain and a synthetic 10-game slate shaped like a real
-  MLB night. The node-reuse mechanism this replaced (keeping the exact DOM
+  whose output has to be inferred after the fact. `touchstart`/`touchmove`/
+  `touchend`/`touchcancel` (plus a `mousedown`/`mousemove`/`mouseup` fallback
+  for non-touch input) track the gesture directly: a small movement
+  threshold decides horizontal-swipe vs. vertical-page-scroll before
+  committing to either (so a swipe starting on a stack never fights the
+  page's own scroll), a live drag renders immediately as the finger moves
+  (with resistance past either end, never a hard stop), and release commits
+  to the next/previous card the instant it crosses a distance-or-velocity
+  threshold - no polling, no waiting for anything to "settle", since
+  nothing is still moving under the hood after that. Deliberately Touch
+  Events, not the newer Pointer Events API this went through first: this
+  site's own audience is heavily iOS Safari/PWA (see the day-picker's own
+  scroll-snap comment on pre-18.2 Safari), and Safari's Pointer Events
+  support, while real, has stayed genuinely less mature than Chromium's for
+  years (`touch-action` landed late, `setPointerCapture`/`pointercancel`
+  timing has had known quirks) - exactly the kind of gap this repo's own
+  sandbox can't catch (no WebKit browser is installed there to test
+  against at all, only Chromium). Touch Events have had solid, consistent
+  Safari support since iOS 2. Verified against a real headless-browser
+  reproduction driving actual low-level touch input (Chrome DevTools
+  Protocol's `Input.dispatchTouchEvent`, which goes through the full
+  browser touch/gesture pipeline - not a `dispatchEvent(new PointerEvent(...))`
+  called directly on one element, which bypasses that pipeline entirely and
+  had already given a false pass once) across a 3-card chain and a
+  synthetic 10-game slate shaped like a real MLB night, including
+  deliberately imprecise diagonal gestures. The node-reuse mechanism this replaced (keeping the exact DOM
   node a swipe just landed on alive across the pin's own re-render, tracking
   which member is currently pinned via `wrapper.dataset.primaryId` rather
   than a value captured once at build time) is unchanged - a `transform` is

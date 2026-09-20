@@ -1359,44 +1359,58 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // that this IS the first/last card without a hard, jarring stop.
   const OVERDRAG_RESISTANCE = 0.35;
 
-  let pointerId = null;
+  // Touch Events (touchstart/move/end/cancel), not Pointer Events - this
+  // repo's own audience is heavily iOS Safari/PWA (see the day-picker's own
+  // scroll-snap comment on pre-18.2 Safari), and Safari's Pointer Events
+  // support is real but has stayed genuinely less mature than Chromium's
+  // for years (touch-action landed later, setPointerCapture/pointercancel
+  // timing has known quirks) - exactly the kind of gap a Chromium-only
+  // sandbox test can't catch (this environment has no WebKit browser
+  // installed at all to test against directly). Touch Events, by contrast,
+  // have had solid, consistent Safari support since iOS 2 - the safer
+  // choice for a gesture this central to the whole page, even though
+  // Pointer Events would unify touch/mouse/pen into one API. A plain mouse
+  // fallback below covers desktop testing/pointer-mouse devices, which
+  // never fire touch events at all.
   let startX = 0;
   let startY = 0;
   let lastX = 0;
   let startTime = 0;
+  let active = false;
   // true = committed to a horizontal swipe, false = handed off to the
   // page's own vertical scroll, null = not yet decided this gesture.
   let horizontal = null;
 
-  function onPointerDown(event) {
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    pointerId = event.pointerId;
-    startX = lastX = event.clientX;
-    startY = event.clientY;
+  function begin(x, y) {
+    active = true;
+    startX = lastX = x;
+    startY = y;
     startTime = performance.now();
     horizontal = null;
     markStackInteraction();
   }
-  function onPointerMove(event) {
-    if (event.pointerId !== pointerId) return;
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
+  // Returns true if this move was claimed as part of the horizontal
+  // gesture (caller should preventDefault to stop the page scrolling too),
+  // false otherwise (not yet decided, or handed off to vertical scroll).
+  function move(x, y) {
+    if (!active) return false;
+    const dx = x - startX;
+    const dy = y - startY;
     if (horizontal === null) {
-      if (Math.abs(dx) < DIRECTION_LOCK_THRESHOLD_PX && Math.abs(dy) < DIRECTION_LOCK_THRESHOLD_PX) return;
+      if (Math.abs(dx) < DIRECTION_LOCK_THRESHOLD_PX && Math.abs(dy) < DIRECTION_LOCK_THRESHOLD_PX) return false;
       horizontal = Math.abs(dx) > Math.abs(dy);
-      if (horizontal) track.setPointerCapture?.(pointerId);
     }
-    if (!horizontal) return; // vertical gesture - let the page scroll, touch-action already allows it
-    event.preventDefault();
-    lastX = event.clientX;
+    if (!horizontal) return false; // vertical gesture - let the page scroll, touch-action already allows it
+    lastX = x;
     markStackInteraction();
     const atStart = currentIndex === 0 && dx > 0;
     const atEnd = currentIndex === ordered.length - 1 && dx < 0;
     render(atStart || atEnd ? dx * OVERDRAG_RESISTANCE : dx, false);
+    return true;
   }
-  function onPointerUp(event) {
-    if (event.pointerId !== pointerId) return;
-    pointerId = null;
+  function end() {
+    if (!active) return;
+    active = false;
     if (!horizontal) return;
     const dx = lastX - startX;
     const elapsedMs = Math.max(1, performance.now() - startTime);
@@ -1407,16 +1421,54 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const delta = pastDistance || pastVelocity ? (dx < 0 ? 1 : -1) : 0;
     commitToIndex(currentIndex + delta);
   }
-  function onPointerCancel(event) {
-    if (event.pointerId !== pointerId) return;
-    pointerId = null;
+  function cancel() {
+    if (!active) return;
+    active = false;
     if (horizontal) commitToIndex(currentIndex); // snap back to wherever this card already was
   }
 
-  track.addEventListener('pointerdown', onPointerDown);
-  track.addEventListener('pointermove', onPointerMove, { passive: false });
-  track.addEventListener('pointerup', onPointerUp);
-  track.addEventListener('pointercancel', onPointerCancel);
+  track.addEventListener(
+    'touchstart',
+    event => {
+      begin(event.touches[0].clientX, event.touches[0].clientY);
+    },
+    { passive: true }
+  );
+  track.addEventListener(
+    'touchmove',
+    event => {
+      if (move(event.touches[0].clientX, event.touches[0].clientY)) event.preventDefault();
+    },
+    { passive: false }
+  );
+  track.addEventListener('touchend', end);
+  track.addEventListener('touchcancel', cancel);
+
+  // Mouse fallback - a real mouse (not a touch device dispatching
+  // compatibility mouse events too; browsers suppress those after a real
+  // touch sequence) never fires the touch listeners above at all. The
+  // move/up listeners live on `window`, not `track` (a real drag's mouse
+  // can leave the track's own bounds mid-gesture), but are only ever
+  // ATTACHED while a mouse drag on THIS stack is actually in progress -
+  // every buildMatchStack call would otherwise add its own permanent
+  // window-level listener pair that outlives the stack itself (a real
+  // memory/CPU leak across a long session with many stacks built over
+  // time, e.g. every pin/fracture rebuild - see this function's own
+  // comment on how often that happens on a real MLB night).
+  function onWindowMouseMove(event) {
+    move(event.clientX, event.clientY);
+  }
+  function onWindowMouseUp() {
+    window.removeEventListener('mousemove', onWindowMouseMove);
+    window.removeEventListener('mouseup', onWindowMouseUp);
+    end();
+  }
+  track.addEventListener('mousedown', event => {
+    if (event.button !== 0) return;
+    begin(event.clientX, event.clientY);
+    window.addEventListener('mousemove', onWindowMouseMove);
+    window.addEventListener('mouseup', onWindowMouseUp);
+  });
 
   wrapper.append(hint, viewport, dots);
   return wrapper;
