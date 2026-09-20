@@ -1870,3 +1870,67 @@ threads Round 13 pushed back on (one wrongly) plus a genuinely new one:
   the pin (and its 偏好 tag) survives.
 
 283/283 tests pass (up from 279).
+
+## Round 15 (2026-09-20)
+
+- **Live-reported**: "9/23 second card stack still broke with a bunch of
+  nonexistent cards and when you swipe it mess with it, only happen 9/23."
+  Reproduced against the real live-fetched 9/23 data (via Playwright, real
+  browser, `timezoneId: 'Asia/Taipei'`): a single MLB night with 15 games
+  starting between 06:35 and 10:10 all chain together into ONE transitive
+  conflict cluster (each pair of neighboring start times overlaps by
+  >75% of the shorter game's duration - see `isNearTotalOverlap`/
+  `groupIntoSlots`), even though the first (06:35) and last (10:10) games
+  in the chain don't overlap each other at all. `computeDayPlan` correctly
+  produces TWO independent recommended picks from this one cluster
+  (documented behavior - see recommendation.mjs's own comment on
+  `choice.slotKey`: "a cluster of 3+ ... renders as TWO separate swipeable
+  stacks ... both part of the same underlying conflict cluster"), and both
+  picks correctly carry the SAME `slotKey` (the whole cluster, by design -
+  needed so a pin found anywhere in the cluster resolves consistently).
+  The bug was entirely in app.js's `renderRecommendedSection`: its
+  `dayMembership` freeze-cache (which exists so a stack's shown
+  alternatives don't reshuffle/grow across re-renders) was keyed by that
+  bare `slotKey`. Since both stacks share the same `slotKey`, the SECOND
+  stack's cache lookup found the FIRST stack's already-frozen members
+  (Cleveland/Boston, Chicago White Sox/Royals, Miami/Cubs, Brewers/
+  Phillies, Reds/Braves, Nationals/Tigers, Cardinals/Pirates - none of
+  which have any real time overlap with the second stack's actual 09:40-
+  10:10 games) and displayed THOSE as its "alternatives" - exactly the
+  reported "bunch of nonexistent cards," and clicking through them
+  reshuffled unpredictably because each click re-triggered the same
+  cross-stack cache collision from a different starting point (the "mess
+  with it" symptom). Confirmed causally by reverting the fix and
+  re-running the identical Playwright script: the broken 8-unrelated-
+  alternatives list reappeared exactly as reported, then disappeared again
+  once the fix was restored.
+
+  Fix: track how many stacks sharing a given `slotKey` have already been
+  built THIS render (`stackOccurrenceBySlotKey`, local to
+  `renderRecommendedSection`) and key `dayMembership` by `` `${slotKey}::${occurrence}` ``
+  instead of the bare `slotKey`. Since `ordered` is always visited in the
+  same chronological order every render, the Nth stack sharing a cluster
+  keeps mapping to the same frozen entry across renders (swipes, live
+  polls) while no longer colliding with any OTHER stack from the same
+  cluster. `slotKey` itself (used for the actual pin lookup in
+  `pinSlotChoice`/`buildMatchStack`) is untouched - only the UI-local
+  freeze cache's key changed. Verified live: the second 9/23 stack now
+  shows exactly its real alternatives (San Diego Padres/Los Angeles
+  Dodgers, Houston Astros/Seattle Mariners, Los Angeles Angels/Athletics -
+  the actual 09:40-10:10 games), and swiping through all three is stable
+  and consistent across re-renders.
+
+  This is only reproducible on a night where one transitive cluster is
+  large enough (spans more real time than any single game's duration)
+  that the scheduler independently recommends 2+ picks from it - a normal
+  MLB slate condition (many games start within the same ~2-hour window),
+  not a 9/23-specific data quirk; 9/23 is simply the night the user
+  happened to look at while it was showing.
+
+No new automated test added for this one - it's a DOM-rendering bug in
+app.js, which (like the rest of app.js) has no unit-test harness in this
+repo (see tests/ - only the pure lib/scripts modules are covered by
+`node --test`); verified instead via a real-browser Playwright
+reproduction against live-fetched data, both before (bug confirmed
+present) and after (bug confirmed gone) the fix, as documented above.
+283/283 existing tests still pass.

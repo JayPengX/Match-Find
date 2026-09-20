@@ -1509,6 +1509,25 @@ function renderRecommendedSection() {
     dayMembership = new Map();
     state.stackMembershipByDay.set(dayKey, dayMembership);
   }
+  // How many recommended picks sharing this render's `slotKey` we've
+  // already turned into a stack, so two separate stacks from the SAME
+  // transitive cluster (see computeDayPlan's own comment on `slotKey`: "a
+  // cluster of 3+ near-total-overlapping matches where the scheduler
+  // independently recommends more than one of them... renders as TWO
+  // separate swipeable stacks... both part of the same underlying conflict
+  // cluster") get their OWN frozen membership entry below instead of
+  // colliding on one shared `dayMembership` key. Live-verified 9/23 case:
+  // a single 15-match MLB cluster (every game between 06:35-10:10 chained
+  // together by transitive near-overlap) produced two independent picks,
+  // 06:35 Blue Jays/Orioles and 09:40 Angels/Athletics - both carry the
+  // exact same `slotKey` (the whole cluster). Without this counter, the
+  // second stack's `dayMembership.get(slotKey)` found the FIRST stack's
+  // already-frozen members (Brewers/Phillies, Cardinals/Pirates, etc. -
+  // none of which overlap the 09:40 game at all) and showed those as its
+  // own "alternatives", exactly the "bunch of nonexistent cards" reported:
+  // swiping the second stack flipped between games with zero real time
+  // conflict with what was actually in that slot.
+  const stackOccurrenceBySlotKey = new Map();
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
     // A FINISHED match is kept in 推薦賽事 purely as viewing HISTORY (see
@@ -1531,7 +1550,14 @@ function renderRecommendedSection() {
     if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = match.slotKey || slotKeyFromMembers(members);
-      const knownIds = dayMembership.get(slotKey);
+      // Composite key: which OCCURRENCE of this shared cluster slotKey this
+      // is within THIS render's chronological pass, not the bare slotKey -
+      // see the comment on stackOccurrenceBySlotKey above for why a bare
+      // slotKey collides across a cluster's separate stacks.
+      const occurrence = stackOccurrenceBySlotKey.get(slotKey) || 0;
+      stackOccurrenceBySlotKey.set(slotKey, occurrence + 1);
+      const freezeKey = `${slotKey}::${occurrence}`;
+      const knownIds = dayMembership.get(freezeKey);
       if (knownIds) {
         // Never `.recommended` (besides `match` itself) - a frozen member
         // that ended up independently recommended elsewhere this render
@@ -1546,7 +1572,7 @@ function renderRecommendedSection() {
         members = stable;
         alternatives = members.filter(m => m.id !== match.id);
       } else {
-        dayMembership.set(slotKey, new Set(members.map(m => m.id)));
+        dayMembership.set(freezeKey, new Set(members.map(m => m.id)));
       }
       if (!alternatives.length) {
         const card = buildMatchCard(match);
