@@ -422,6 +422,20 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   every following swipe on that same node broke the identical way until an
   unrelated render corrected it back to the real pin from somewhere else -
   which read as the stack suddenly flicking back and freezing there again.
+  A pinned choice also always excludes every OTHER member of its own
+  stack, not just whichever ones directly overlap the pin in time
+  (`computeDayPlan` in `recommendation.mjs`). A 3+-member stack can be a
+  "chain" - card 1 overlaps card 2, card 2 overlaps card 3, but 1 and 3
+  don't overlap each other at all - and an earlier version left a
+  non-adjacent member like that freely schedulable even after a pin, since
+  it never directly conflicted with the pinned pick. Swiping to the
+  lowest-scored card in exactly that shape let the OTHER end of the chain
+  get independently re-recommended too, silently splitting one 3-card
+  stack into two separate 2-card stacks mid-swipe - the dots would jump to
+  a smaller stack and further swipes would loop between only the
+  remaining two cards, never reaching back to the first. A pin now always
+  owns its entire stack, so its member set (and therefore which card is
+  first/second/third) stays stable across every swipe.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day

@@ -896,12 +896,27 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   clusters.forEach(cluster => cluster.members.forEach(m => clusterByMatchId.set(m.id, cluster)));
 
   // A pinned choice is a hard user override (see app.js's pinSlotChoice) -
-  // it alone represents its conflict cluster now. Every OTHER match that
-  // genuinely can't be watched alongside it (a direct pairwise
-  // isNearTotalOverlap, not just "somewhere in the same transitive
-  // cluster") is excluded from the scheduler entirely; anything else stays
-  // a normal free candidate the planner is still free to schedule around
-  // the pin (see docs/recommendation-engine-audit.md section 26).
+  // it alone represents its conflict cluster now, so EVERY OTHER member of
+  // that same cluster is excluded, not just whichever ones directly
+  // (pairwise) near-totally overlap the pin. An earlier version excluded
+  // only the direct pairwise overlaps, on the theory that a member which
+  // doesn't itself conflict with the pin should stay a normal free
+  // candidate the planner can still schedule elsewhere. In practice that
+  // broke the swipeable card stack itself: a 3+ member chain cluster (A-B
+  // near-total-overlap, B-C near-total-overlap, but A and C NOT direct
+  // overlapping each other) presents as ONE 3-card "pick one of these"
+  // stack, backed by the fact that with no pin the DP naturally picks only
+  // one of the three (whichever has the best single/combined value). The
+  // moment a viewer swiped to pin the lowest-scored, non-adjacent member
+  // (C), forcing it in let the DP ALSO freely re-add the other end of the
+  // chain (A) purely because forcing a pick skips the "is this worth it"
+  // comparison altogether - the result was BOTH A and C independently
+  // "recommended", silently fracturing the single 3-member stack the
+  // viewer was mid-swipe on into two separate 2-member stacks (a jarring
+  // "swipe to the last card and the dots jump/shrink" regression - see
+  // README). A pin's whole point is "I am committing to this cluster's
+  // choice being exactly this one" - so it now always owns the full
+  // cluster, keeping every stack's member set stable across every pin.
   const forcedIds = new Set();
   const excludedIds = new Set();
   clusters.forEach(cluster => {
@@ -911,7 +926,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     if (!pinnedMatch) return;
     forcedIds.add(pinnedMatch.id);
     cluster.members.forEach(m => {
-      if (m.id !== pinnedMatch.id && isNearTotalOverlap(m, pinnedMatch)) excludedIds.add(m.id);
+      if (m.id !== pinnedMatch.id) excludedIds.add(m.id);
     });
   });
 

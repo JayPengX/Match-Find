@@ -951,18 +951,37 @@ describe('groupIntoSlots is anchor-independent (docs bug #7)', () => {
   });
 });
 
-describe('a pinned choice only excludes matches it directly conflicts with', () => {
-  test('pinning one member of a wider cluster leaves an unrelated free candidate schedulable', () => {
-    // a-b near-totally overlap, b-c near-totally overlap, but a-c do not -
-    // one transitive presentational cluster, but pinning b should only
-    // hard-exclude a and c if THEY individually conflict with b.
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9 });
-    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:01:00.000Z', effectiveScore: 8 });
-    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T18:02:00.000Z', effectiveScore: 7 });
-    const pinnedForDay = new Map([[[a.id, b.id, c.id].sort().join('|'), 'b']]);
+describe('a pinned choice always owns its entire cluster, never just its direct conflicts', () => {
+  test('pinning one member of a wider cluster still excludes an unrelated, non-conflicting member of the same cluster', () => {
+    // a-b near-totally overlap, b-c near-totally overlap, but a and c do
+    // NOT overlap each other at all - one transitive presentational
+    // cluster/swipeable stack (groupIntoSlots unions by the chain, not by
+    // every pair individually), but a and c are otherwise perfectly
+    // schedulable together. An earlier version excluded only whichever
+    // members directly (pairwise) conflicted with the pin, which let a
+    // genuinely reproduced real bug through: forcing the lowest-scored,
+    // non-adjacent member of a 3-card swipe stack silently let the OTHER
+    // end of the chain get independently re-recommended too (since forcing
+    // a pick skips the "is this worth it" comparison a natural, unpinned
+    // plan would have made) - fracturing one 3-member stack into two
+    // separate 2-member stacks mid-swipe. A pin now always excludes every
+    // other member of its full cluster, keeping the stack's member set
+    // - and therefore which card is "first/second/third" - stable across
+    // every pin.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T17:30:00.000Z', durationMinutes: 180, effectiveScore: 100 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:30:00.000Z', durationMinutes: 60, effectiveScore: 3 });
+    const naturalPlan = computeDayPlan('2026-09-19', [a, b, c].map(m => ({ ...m })));
+    // Confirms the setup: unpinned, the DP naturally picks only b (the
+    // three-member stack a viewer would actually see and swipe through).
+    assert.deepEqual(naturalPlan.map(m => m.id), ['b']);
+
+    const pinnedForDay = new Map([[[a.id, b.id, c.id].sort().join('|'), 'c']]);
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
-    assert.deepEqual(plan.map(m => m.id), ['b']);
-    assert.equal(b.recommended, true);
+    assert.deepEqual(plan.map(m => m.id), ['c']);
+    assert.equal(c.recommended, true);
+    assert.equal(a.recommended, false);
+    assert.deepEqual(new Set(c.alternativeIds), new Set(['a', 'b']));
   });
 });
 
