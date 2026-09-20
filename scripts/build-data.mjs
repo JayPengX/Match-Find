@@ -62,6 +62,11 @@ import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // forever the way an already-computed score can) so there's exactly one
 // definition of what "confidence" means, not two that could drift.
 import { computeConfidence } from '../public/lib/recommendation.mjs';
+// The same devigged-moneyline-to-win% math the live-poll refresh (public/
+// lib/espn.mjs) uses, kept in one shared pure module so a card's initial
+// build-time percentage and every later live update to it are computed
+// identically - see that module's own top-of-file comment.
+import { parseMoneylineWinPct } from '../public/lib/odds.mjs';
 // Deterministic, per-fixture broadcast-length formulas (MLB team pace,
 // NBA/EPL modifiers, F1 circuit baselines), plus the rivalry/derby/
 // national-broadcast detectors the objective scoring engine below reuses
@@ -344,9 +349,12 @@ export function parseOddsSignal(competition) {
   const odds = competition.odds?.[0];
   const spread = Number(odds?.spread);
   const overUnder = Number(odds?.overUnder);
+  const winPct = parseMoneylineWinPct(odds?.moneyline);
   return {
     spread: Number.isFinite(spread) ? spread : null,
-    overUnder: Number.isFinite(overUnder) ? overUnder : null
+    overUnder: Number.isFinite(overUnder) ? overUnder : null,
+    winPctAway: winPct?.away ?? null,
+    winPctHome: winPct?.home ?? null
   };
 }
 
@@ -455,6 +463,8 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         isPostseason,
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
+        oddsWinPctAway: oddsSignal.winPctAway,
+        oddsWinPctHome: oddsSignal.winPctHome,
         durationMinutes: isFinished
           ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label)
           : computeDurationMinutes(
@@ -546,6 +556,8 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
         isPostseason: false,
         oddsSpread: null,
         oddsOverUnder: null,
+        oddsWinPctAway: null,
+        oddsWinPctHome: null,
         durationMinutes,
         venue,
         broadcast: broadcast || '',

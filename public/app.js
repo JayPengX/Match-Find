@@ -922,6 +922,31 @@ function buildMatchCard(match) {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
 
+  // A sportsbook's own devigged moneyline (see build-data.mjs's
+  // parseOddsSignal/public/lib/odds.mjs) as a live win-probability bar -
+  // only rendered when a real market has actually posted a two-sided
+  // line, which in practice means MLB/NBA close to game time (see that
+  // module's own comment: soccer/F1 essentially never get one via ESPN's
+  // API, and a US game far enough out won't have one yet either). Never a
+  // guessed/defaulted 50/50 - hidden entirely rather than showing a fake
+  // number when the market itself hasn't weighed in.
+  const oddsEl = node.querySelector('.match-odds');
+  if (
+    match.competitors &&
+    match.competitors.length === 2 &&
+    Number.isFinite(match.oddsWinPctAway) &&
+    Number.isFinite(match.oddsWinPctHome)
+  ) {
+    oddsEl.hidden = false;
+    oddsEl.querySelector('.match-odds-away').textContent = `${Math.round(match.oddsWinPctAway)}%`;
+    oddsEl.querySelector('.match-odds-home').textContent = `${Math.round(match.oddsWinPctHome)}%`;
+    oddsEl.querySelector('.match-odds-bar-fill').style.width = `${match.oddsWinPctAway}%`;
+    oddsEl.setAttribute(
+      'aria-label',
+      `獲勝機率：${match.competitors[0].name} ${Math.round(match.oddsWinPctAway)}%，${match.competitors[1].name} ${Math.round(match.oddsWinPctHome)}%`
+    );
+  }
+
   renderVenue(node.querySelector('.match-venue'), match);
 
   const watchEl = node.querySelector('.match-watch');
@@ -2063,6 +2088,21 @@ async function pollLiveMatches() {
         }
         if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
         if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        // The devigged win% is what the odds badge on the card actually
+        // shows (see buildMatchCard) - unlike spread/overUnder (which only
+        // ever feed the scoring engine, never a raw on-card number), a
+        // moving line here is directly visible, so this has to flip
+        // `changed` itself or the market could move for several poll
+        // ticks in a row with the card silently still showing the last
+        // build's number.
+        if (update.oddsWinPctAway != null && match.oddsWinPctAway !== update.oddsWinPctAway) {
+          match.oddsWinPctAway = update.oddsWinPctAway;
+          changed = true;
+        }
+        if (update.oddsWinPctHome != null && match.oddsWinPctHome !== update.oddsWinPctHome) {
+          match.oddsWinPctHome = update.oddsWinPctHome;
+          changed = true;
+        }
         if (update.isFinished && !match.isFinished) {
           match.isFinished = true;
           changed = true;

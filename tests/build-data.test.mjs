@@ -63,11 +63,38 @@ describe('oddsContext', () => {
 
 describe('parseOddsSignal', () => {
   test('extracts spread/overUnder as plain numbers', () => {
-    assert.deepEqual(parseOddsSignal({ odds: [{ spread: -1.5, overUnder: 8.5 }] }), { spread: -1.5, overUnder: 8.5 });
+    assert.deepEqual(parseOddsSignal({ odds: [{ spread: -1.5, overUnder: 8.5 }] }), {
+      spread: -1.5,
+      overUnder: 8.5,
+      winPctAway: null,
+      winPctHome: null
+    });
   });
   test('returns nulls (never NaN) when no provider has posted odds', () => {
-    assert.deepEqual(parseOddsSignal({}), { spread: null, overUnder: null });
-    assert.deepEqual(parseOddsSignal({ odds: [] }), { spread: null, overUnder: null });
+    assert.deepEqual(parseOddsSignal({}), { spread: null, overUnder: null, winPctAway: null, winPctHome: null });
+    assert.deepEqual(parseOddsSignal({ odds: [] }), {
+      spread: null,
+      overUnder: null,
+      winPctAway: null,
+      winPctHome: null
+    });
+  });
+  test('also devigs a posted moneyline into a real win%', () => {
+    // Real DraftKings-via-ESPN shape (2026-09-20 Twins @ Angels) - away
+    // -115, home -104 (both favorites-flavored numbers since this is a
+    // near-pick'em game) devigs to Twins ~53.5%/Angels ~46.5%.
+    const result = parseOddsSignal({
+      odds: [
+        {
+          spread: 1.5,
+          overUnder: 8,
+          moneyline: { away: { close: { odds: '-115' } }, home: { close: { odds: '-104' } } }
+        }
+      ]
+    });
+    assert.equal(result.spread, 1.5);
+    assert.ok(result.winPctAway > result.winPctHome);
+    assert.equal(Math.round((result.winPctAway + result.winPctHome) * 10) / 10, 100);
   });
 });
 

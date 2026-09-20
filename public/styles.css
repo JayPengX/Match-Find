@@ -655,6 +655,41 @@ main#app {
   font-size: 0.82rem;
   color: var(--text-muted);
 }
+/* Devigged sportsbook win% (see build-data.mjs's parseOddsSignal / public/
+   lib/odds.mjs) - a single track split into an away segment (accent blue)
+   and a home segment (warm amber), so which side is currently favored
+   reads at a glance without needing to parse two separate numbers first. */
+.match-odds {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+.match-odds-pct {
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 2.4em;
+}
+.match-odds-away { text-align: right; }
+.match-odds-home { text-align: left; }
+.match-odds-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  /* A translucent RGBA fill, not `opacity` - opacity on this element would
+     also fade its .match-odds-bar-fill child (opacity composites down the
+     whole subtree), which needs to stay fully solid to read as "the
+     favored side" against the muted track underneath it. */
+  background: rgba(255, 184, 77, 0.35);
+  overflow: hidden;
+}
+.match-odds-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
 .match-watch {
   display: flex;
   align-items: center;

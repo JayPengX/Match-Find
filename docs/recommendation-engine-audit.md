@@ -1934,3 +1934,53 @@ repo (see tests/ - only the pure lib/scripts modules are covered by
 reproduction against live-fetched data, both before (bug confirmed
 present) and after (bug confirmed gone) the fix, as documented above.
 283/283 existing tests still pass.
+
+- **Live-requested feature**: "time to add a odds display on the card,
+  and odds should adjust live, odds should display in %, make sure the
+  API you port in is good data." Checked what ESPN's own scoreboard API
+  (already the sole data source this build uses - see this doc's own
+  top-of-file architecture notes) actually returns before wiring
+  anything: `competition.odds[0]` carries a real per-provider (DraftKings,
+  via ESPN's own betting integration) `moneyline` object with plain
+  American odds strings (`"-115"`/`"+102"`) for MLB/NBA once a book has
+  posted a line (in practice: from roughly a day out until kickoff -
+  confirmed live against 9/20 vs. 9/22/9/23 scoreboard responses: 5/15
+  MLB games had a posted moneyline on the 9/20 slate that's close to
+  kickoff, 0/16 did two days out on 9/22). Soccer/F1 essentially never
+  carry one via this API, matching this build's existing spread/overUnder
+  posture (see build-data.mjs's own oddsContext comment).
+
+  A raw American moneyline isn't a probability - two-sided book odds
+  always overround (both sides' naive implied probabilities sum to MORE
+  than 100%, the book's own vig) - so a new shared pure module,
+  public/lib/odds.mjs, does the actual textbook American-odds-to-implied-
+  probability conversion and then DEVIGS the pair (divides each side by
+  their own sum) so the number shown is "how likely is this team to win"
+  rather than "how much of your money the book wants on this side".
+  Shared by BOTH scripts/build-data.mjs's own pregame build (the card's
+  initial %) and public/lib/espn.mjs's `extractLiveUpdates` (the existing
+  30-second live-poll mechanism `pollLiveMatches` already runs for
+  score/status - see that function's own top-of-file comment), so the
+  exact same math backs a card's number at every point in its lifecycle,
+  not two independently-written copies that could quietly drift apart.
+  `pollLiveMatches` previously read a live poll's updated oddsSpread/
+  oddsOverUnder but never actually flagged `changed` for them (those two
+  only ever fed the SCORING engine, invisibly, on the next full render) -
+  the new win% fields DO flag `changed` themselves, since they're now a
+  real, directly-visible on-card number a market moving mid-poll should
+  actually update, not just an internal scoring input.
+
+  UI: a compact bar under the two team names (away% - colored track split
+  - home%), shown ONLY when a real two-sided line exists for that
+  fixture (never a guessed/defaulted 50/50 - most fixtures still show
+  nothing here, exactly matching how rarely ESPN actually has one this
+  far out). Verified end to end with real ESPN odds data (patched into a
+  local matches.json via the exact same parseMoneylineWinPct function the
+  build itself calls, not hand-typed numbers) and a live-browser
+  screenshot: Milwaukee Brewers 64% – Baltimore Orioles 36%, San
+  Francisco Giants 29% – Los Angeles Dodgers 71%, etc., each summing to
+  100% and rendering with a proportionally-filled bar.
+
+  9 new tests added (public/lib/odds.mjs's own conversion/devig/parse
+  logic, plus updated + one new build-data.mjs parseOddsSignal case for
+  the added moneyline parsing) - 295/295 tests pass (up from 283).
