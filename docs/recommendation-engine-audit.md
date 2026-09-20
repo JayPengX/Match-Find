@@ -1544,3 +1544,116 @@ MLB.
 
 All 276 tests pass (up from 270 - new coverage added for the penalty cap,
 the big-club bonus, and the pin-persistence-across-cluster-drift fix).
+
+## Round 13
+
+Follow-up live report after Round 12 shipped, covering the tap-only swipe
+rewrite specifically plus two live-data questions.
+
+**Swipe gesture removed entirely in Round 12 was the wrong amount of fix.**
+Round 12 went all the way to tap/click-only controls to structurally kill
+the "stuck after one swipe on Safari" bug class, reasoning that a real drag
+gesture has an inherent "is this gesture done yet" timing question and a
+tap does not. Live feedback: taps work, but the swipe itself is genuinely
+better UX and is achievable on Safari - the reporter has other real
+projects with working Safari swipe. That's consistent with the Round 12
+diagnosis: the three prior FAILED swipe attempts weren't proof swiping
+itself is unsafe on Safari, they were proof that deciding a drag's
+completion via a frame-count guess or a `transitionend` listener is unsafe
+(Safari can skip `transitionend` outright when a transition is interrupted,
+backgrounded, or its element is removed mid-transition - which is exactly
+what happens on every successful swipe once the card gets replaced).
+
+Restored dragging in `buildMatchStack` (`public/app.js`) as an INPUT method
+layered on top of the exact same tap-safe `choose(index)` function the
+arrows/dots already call, never as a second, parallel state machine:
+- Pointer Events (`pointerdown`/`pointermove`/`pointerup`/`pointercancel`/
+  `lostpointercapture`) with `setPointerCapture`, not separate touch/mouse
+  listeners - capture is what keeps the whole gesture pinned to the card
+  even if the finger wanders off it mid-drag, which a bare
+  `touchmove`/`touchend` pair has no equivalent for.
+- `touch-action: pan-y` on the card (`styles.css`) instead of manual
+  `preventDefault()` gesture math, so Safari's own native engine - not this
+  file's own JS - arbitrates "page scroll" vs. "horizontal swipe".
+- The commit decision happens synchronously inside the `pointerup` handler,
+  read directly off the pointer's own final position - never inside an
+  animation/transition callback. The fly-off animation on a successful
+  swipe is purely decorative: it's started and then immediately abandoned
+  as `choose()` tears down that exact card node on the same tick, so
+  nothing downstream ever waits on it to finish (a plain `setTimeout` was
+  considered and rejected for the same reason `transitionend` was - no need
+  to wait on ANYTHING async when the synchronous path is available).
+- `pointerup`, `pointercancel`, AND `lostpointercapture` all funnel into one
+  `resetDrag()`, so however the gesture ends - a normal release, the OS
+  reclaiming the gesture, a second finger landing - the card is guaranteed
+  out of the drag state, never stranded mid-transform waiting on an event
+  that might not arrive.
+- Swiping past either end of the stack snaps back rather than flying off
+  into a replacement that never comes - `choose()` clamps and is a no-op at
+  the boundary, so the fly-off animation is only started once the target
+  index is confirmed to actually differ from the current one.
+Verified with Playwright/Chromium: a real mouse-drag sequence (multi-step
+`mousemove`, matching the intermediate-position stream a touch drag
+produces) advances the stack correctly across 5 repeated swipes, a
+below-threshold drag snaps back with the card unchanged, 10 rapid swipes
+past the last card never gets stuck, and a synthetic `pointerType: 'touch'`
+event sequence dispatched directly (bypassing Playwright's mouse-only
+`page.mouse` API) also advances the stack with zero console/page errors.
+Real Safari itself still isn't available in this sandbox, so device
+confirmation is still the one thing only the reporter can give - but this
+is a structurally different bet than the three prior failed attempts: the
+actual moment of state change no longer depends on any animation event
+firing at all.
+
+**Swipe-stack dots were "kind of invisible".** They used
+`background-color: var(--border)` for the inactive state - `--border` is
+deliberately a near-invisible hairline color against `--bg-raised` (that's
+the whole point of a border color), which made an inactive dot nearly
+impossible to see against the card behind it. Switched to `--text-muted`
+(built to be legible body-adjacent text, not a subtle hairline) and bumped
+the visible dot from 6px to 8px.
+
+**Live-data spot checks against two further reports, both traced to real
+causes rather than left as unexplained "it's wrong":**
+
+- *Padres @ Dodgers appearing to repeat across 9/23 and 9/25.* Reran the
+  exact `computeWindowPlan` pipeline against the currently deployed
+  `matches.json` (same live ESPN data the reporter would have seen). It
+  does NOT currently pick Padres/Dodgers on either date - both slots go to
+  Tampa Bay Rays @ New York Yankees, including a genuine day/night
+  doubleheader on 9/22 (two separate real games, `mlb-401873648` at 17:05
+  UTC and `mlb-401817034` at 23:05 UTC, both TW-day-keyed to 9/23 - NOT a
+  duplicate-data bug). Padres/Dodgers's own night window (02:10-05:13 UTC)
+  is pushed into a real, if narrow, ~27-minute overlap with the Yankees/Rays
+  night game's OWN scheduling window once that game's pre-existing 25% MLB
+  overrun buffer (`DURATION_OVERRUN_BUFFER_BY_RELIABILITY.low`, predating
+  this session) is applied - so the scheduler correctly treats them as
+  competing for one slot and picks the higher-scoring Yankees/Rays game
+  instead. Since ESPN's live standings/schedule refresh continuously, this
+  specific comparison can only be verified against data as of THIS build,
+  not whatever the reporter's browser had cached when they tested - if it
+  really did show Padres/Dodgers on both dates, that was very likely EITHER
+  an earlier data snapshot (before either game's score/overrun math looked
+  like it does now) OR the pre-Round-12 pin-persistence bug (#10) forcing
+  in a stale pinned choice. Nothing here points to an actual defect in the
+  current pipeline; no change made.
+- *"Yesterday" now recommending a Man City game instead of Liverpool vs
+  Bournemouth.* Verified `buildDayList`/`localDateKey` (`public/app.js`):
+  "yesterday" is computed fresh from the VIEWER'S OWN clock on every page
+  load, with no fixed anchor - it is always "whatever real calendar date is
+  one day before now", not a specific frozen fixture list. Real time has
+  moved on since the original report; the Liverpool/Bournemouth match has
+  since aged out of `build-data.mjs`'s 2-day lookback window entirely (it's
+  further in the past now than the window reaches), so of course "yesterday"
+  now shows an entirely different day's real EPL results - and the current
+  crop of currently-deployed "yesterday" fixtures contains no Man City game
+  at all (a Sunderland vs Man City fixture exists, but it's on TODAY, not
+  yesterday). This isn't a bug to chase with more scoring adjustments -
+  "yesterday" is a moving target on a live-refreshing site by design, and a
+  specific fixture that already aged out of the window cannot be forced
+  back into first place without breaking the window's own definition. No
+  change made; flagged back to the reporter rather than silently
+  no-op'd.
+
+Tests unaffected by this round (the UI-side changes have no dedicated
+Node test harness) - the existing 276 lib/data tests still pass unchanged.

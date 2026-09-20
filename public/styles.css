@@ -393,21 +393,33 @@ main#app {
   font-weight: 700;
 }
 /* A slot with a genuinely mutually-exclusive alternative (see
-   groupIntoSlots/buildMatchStack) renders as a tap-to-switch stack instead
-   of either silently picking one or showing both at once - only one card is
-   ever on screen at a time, switched via the prev/next arrows or a dot
-   below it, each an ordinary tap/click that commits immediately. This
-   replaced an earlier drag/swipe-gesture design (see buildMatchStack's own
-   comment for why: a real touch drag has an inherent "is the gesture done
-   yet" timing question that repeatedly produced live, reported freezes on
-   real Safari - a tap has no such question, so there is nothing left here
-   for a gesture-timing bug to ever get stuck in). */
+   groupIntoSlots/buildMatchStack) renders as a switchable stack instead of
+   either silently picking one or showing both at once - only one card is
+   ever on screen at a time, switched via a swipe, the prev/next arrows, or
+   a dot below it. The prev/next/dot controls commit immediately and can
+   never get stuck (an ordinary click has no "is this done yet" question).
+   The swipe gesture (see buildMatchStack's own comment) is a real touch
+   drag layered back on top of that same tap-safe foundation after an
+   earlier drag design caused three straight live-reported Safari freezes -
+   its commit point is still a synchronous call into the exact same
+   tap-safe code path, never a second state machine of its own. */
 .match-stack {
   position: relative;
   margin-bottom: 12px;
 }
 .match-stack-viewport > .match-card {
   margin-bottom: 0;
+  /* Tells Safari/iOS this element owns horizontal gestures itself (see
+     buildMatchStack's pointer-event handlers) while still letting a
+     vertical drag pass straight through as an ordinary page scroll -
+     the browser's own native gesture engine arbitrates that, instead of
+     a manual preventDefault() call getting it wrong. */
+  touch-action: pan-y;
+  cursor: grab;
+  user-select: none;
+}
+.match-stack-viewport > .match-card:active {
+  cursor: grabbing;
 }
 .match-stack-nav {
   display: flex;
@@ -440,17 +452,22 @@ main#app {
   align-items: center;
 }
 .match-stack-dot {
-  /* The visible dot is small (6px), but its actual tap target is padded out
+  /* The visible dot is small (8px), but its actual tap target is padded out
      to a comfortable thumb size - a small hit area here is exactly the kind
      of thing that reads as "unresponsive" on a real phone even though the
-     click handler itself works fine. */
-  width: 6px;
-  height: 6px;
-  padding: 11px;
+     click handler itself works fine. Uses --text-muted, not --border - the
+     border color is meant to be a near-invisible hairline against
+     --bg-raised (that's the whole point of a border color), which made an
+     inactive dot almost impossible to see against the card behind it -
+     live-reported as "the dots are kind of invisible". --text-muted is
+     built to be legible body-adjacent text, not a subtle hairline. */
+  width: 8px;
+  height: 8px;
+  padding: 10px;
   background-clip: content-box;
   border: none;
   border-radius: 50%;
-  background-color: var(--border);
+  background-color: var(--text-muted);
   transition: background-color 0.15s ease, transform 0.15s ease;
   cursor: pointer;
 }

@@ -1230,6 +1230,136 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
   }
 
+  // ---- Swipe gesture (layered on top of choose(), never a second state
+  // machine) -----------------------------------------------------------
+  //
+  // The prior swipe implementation was ripped out entirely (see this
+  // function's own git history / docs/recommendation-engine-audit.md Round
+  // 12) after three straight live-reported "stuck after one swipe on
+  // Safari" bugs, each one a variant of the same root cause: the gesture's
+  // COMPLETION was decided by something that can silently never fire on
+  // real Safari - a requestAnimationFrame count, then a `transitionend`
+  // listener (Safari drops transitionend outright when a transition is
+  // interrupted, backgrounded, or its element is removed mid-transition -
+  // exactly what happens here on every successful swipe, since choose()
+  // replaces this whole card). That rewrite went all the way to tap-only
+  // controls to eliminate the bug class structurally.
+  //
+  // This restores dragging as a real INPUT method without reintroducing
+  // that risk, by keeping the actual commit point synchronous and
+  // untangled from any animation:
+  //   - Pointer Events (not separate touch/mouse listeners) + explicit
+  //     setPointerCapture, so a fast or wandering finger can't "lose" the
+  //     gesture the way a plain touchmove/touchend pair can on iOS Safari
+  //     when the finger drifts outside the element's box mid-drag.
+  //   - `touch-action: pan-y` on the card (see styles.css) instead of a
+  //     manual preventDefault() dance, so Safari's own native gesture
+  //     engine (not our JS) arbitrates "this is a page scroll" vs. "this
+  //     is a horizontal swipe" - one less place for our own logic to get
+  //     that disambiguation wrong.
+  //   - The decision to advance is made directly in the pointerup handler,
+  //     synchronously, from the pointer's own final position - never from
+  //     a transition/animation callback. Any fly-off animation on commit
+  //     is purely decorative: it's started and then immediately abandoned
+  //     as choose() tears down this exact card node, so nothing downstream
+  //     ever waits on it to finish.
+  //   - pointerup, pointercancel AND lostpointercapture all route through
+  //     the same resetDrag(), so however the gesture ends (a normal
+  //     release, the OS taking the gesture back for its own use, a second
+  //     finger landing), the card is guaranteed to leave the drag state -
+  //     never left stranded mid-transform waiting for an event that might
+  //     not come.
+  const SWIPE_COMMIT_PX = 60;
+  const SWIPE_START_PX = 8;
+  let activePointerId = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragDx = 0;
+  let isHorizontalDrag = false;
+
+  function setDragTransform(dx) {
+    card.style.transition = 'none';
+    card.style.transform = `translateX(${dx}px) rotate(${dx / 28}deg)`;
+  }
+
+  function resetDrag() {
+    activePointerId = null;
+    isHorizontalDrag = false;
+    dragDx = 0;
+    card.style.transition = 'transform 180ms ease';
+    card.style.transform = '';
+  }
+
+  card.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || activePointerId != null) return;
+    if (event.target.closest('button')) return; // dots/arrows keep their own click handling
+    activePointerId = event.pointerId;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    dragDx = 0;
+    isHorizontalDrag = false;
+    // setPointerCapture is what keeps this whole gesture pinned to `card`
+    // even if the finger wanders outside its box mid-drag - a plain
+    // touchmove/touchend pair has no equivalent, and losing that tracking
+    // mid-gesture (finger drifts, a neighboring element intercepts it) is
+    // exactly the kind of thing that left the old drag implementation
+    // stuck. Best-effort: a capture failure just means this drag behaves
+    // like a live-tracked gesture without the safety net, never a thrown
+    // error that breaks rendering.
+    try { card.setPointerCapture(activePointerId); } catch { /* see above */ }
+  });
+
+  card.addEventListener('pointermove', event => {
+    if (event.pointerId !== activePointerId) return;
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    if (!isHorizontalDrag) {
+      if (Math.abs(dx) < SWIPE_START_PX && Math.abs(dy) < SWIPE_START_PX) return;
+      // A drag that turns out to be more vertical than horizontal is a
+      // page scroll, not a swipe - let go of it entirely (touch-action:
+      // pan-y already told Safari the same thing) rather than fighting it.
+      if (Math.abs(dy) > Math.abs(dx)) {
+        activePointerId = null;
+        return;
+      }
+      isHorizontalDrag = true;
+    }
+    dragDx = dx;
+    setDragTransform(dx);
+  });
+
+  function endDrag(event) {
+    if (event.pointerId !== activePointerId) return;
+    const committedDx = isHorizontalDrag ? dragDx : 0;
+    const wasHorizontalDrag = isHorizontalDrag;
+    resetDrag();
+    if (!wasHorizontalDrag || Math.abs(committedDx) < SWIPE_COMMIT_PX) return;
+    // Already at that end of the stack (e.g. swiping right on the very
+    // first card) - nothing to advance to, so this must snap back like any
+    // other below-threshold drag rather than fly off into an empty
+    // replacement that never comes (choose() below is a no-op when the
+    // target index is already the current one - see its own clamp).
+    const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
+    const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
+    if (!target || target.id === primary.id) return;
+    // Purely decorative fly-off - choose() below replaces this card
+    // outright, so nothing ever waits on this transition to complete.
+    card.style.transition = 'transform 150ms ease, opacity 150ms ease';
+    card.style.transform = `translateX(${committedDx > 0 ? 100 : -100}%) rotate(${committedDx / 12}deg)`;
+    card.style.opacity = '0';
+    choose(targetIndex);
+  }
+
+  card.addEventListener('pointerup', endDrag);
+  card.addEventListener('pointercancel', () => {
+    activePointerId = null;
+    resetDrag();
+  });
+  card.addEventListener('lostpointercapture', () => {
+    if (activePointerId != null) resetDrag();
+    activePointerId = null;
+  });
+
   const nav = document.createElement('div');
   nav.className = 'match-stack-nav';
 
