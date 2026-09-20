@@ -1,271 +1,269 @@
 {
-  "lastAiFetchAt": "2026-09-20T13:06:21.451Z",
+  "lastAiFetchAt": "2026-09-20T14:07:33.131Z",
   "adjustments": {
     "epl-401879276": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "客隊開季1勝3負差距有限，客勝賠率+115顯示實力接近。",
-      "venueZh": "維塔利體育場",
+      "reason": "客隊開局戰績與賠率差距符合客觀評分預期。",
+      "venueZh": "活力球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "epl-401879273": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "主隊利茲聯勝率較高且賠率-155占優，實力懸殊符合客觀評分。",
+      "reason": "主隊勝率與實力差距大，客觀評分已充分反映。",
       "venueZh": "艾蘭路球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "epl-401879272": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "曼城開季4戰全勝且賠率-280大幅領先，實力差距明顯。",
+      "reason": "曼城實力懸殊，客觀評分準確反映戰力差距。",
       "venueZh": "阿提哈德球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "epl-401878777": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙方開季表現均平平，勝率與賠率相近。",
+      "reason": "雙方近況與賠率接近，客觀評分合理。",
       "venueZh": "克拉文農場球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817017": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩隊勝率差距9.0個百分點，季後賽對戰氛圍濃厚。",
+      "reason": "季末分區排名接近且具季後賽壓力，評分準確。",
       "venueZh": "花旗球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817015": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "皇家與海盜勝率差距微小，近期戰績反映實力拉鋸。",
-      "venueZh": "PNC公園球場",
+      "reason": "雙方戰績與近況符合客觀數據預期。",
+      "venueZh": "PNC公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817012": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者隊近期4連勝且勝率領先運動家。",
+      "reason": "守護者主場優勢與勝率差距已反映在評分中。",
       "venueZh": "進步球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817013": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "光芒近期8勝2負且勝率94勝，實力占優。",
+      "reason": "光芒近期狀態極佳，客觀評分已合理涵蓋。",
       "venueZh": "純品康納球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817014": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "小熊勝率86勝領先紅人，季後賽企圖心明顯。",
+      "reason": "國聯中區排名接近，評分充分體現競爭性。",
       "venueZh": "大美國球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817018": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勇士與太空人勝率接近，近期狀況均具競爭力。",
-      "venueZh": "大金公園球場",
+      "reason": "兩隊皆具季後賽機會，實力相當符合預期。",
+      "venueZh": "大金公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817019": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "老虎與白襪勝率接近，排名互咬。",
-      "venueZh": "美國行動通訊球場",
+      "reason": "美聯中區外卡競爭激烈，客觀評分準確。",
+      "venueZh": "美孚球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817021": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "國民與紅雀勝率僅差1.3個百分點，實力極為接近。",
-      "venueZh": "布希體育場",
+      "reason": "雙方勝率咬得極緊，客觀數據已完全涵蓋。",
+      "venueZh": "布許體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817020": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "藍鳥與遊騎兵勝率相近且皆在季後賽邊緣。",
-      "venueZh": "全球人壽球場",
+      "reason": "外卡爭奪戰關鍵場次，客觀評分精準。",
+      "venueZh": "環球生命球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817022": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "水手與洛磯勝率差距顯著，實力有落差。",
+      "reason": "戰績差距明顯，客觀評分已合理體現。",
       "venueZh": "庫爾斯球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817024": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙城與天使戰績相近，勝率皆在五成以下。",
+      "reason": "雙方近期戰績低迷，客觀評分符合現狀。",
       "venueZh": "天使球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817023": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士近期9勝1負狀態極佳，主場作戰。",
-      "venueZh": "佩托科公園球場",
+      "reason": "教士近況火熱，評分已納入勝率與近十場數據。",
+      "venueZh": "沛可公園球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817025": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "洋基與響尾蛇勝率互有領先，賠率顯示拉鋸。",
+      "reason": "美聯季後賽席位爭奪，評分客觀合理。",
       "venueZh": "大通球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817026": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "世仇對決加上道奇95勝的強大氣勢，觀賞性極高。",
+      "reason": "世仇對決加上道奇主場優勢，觀賞性極高。",
       "venueZh": "道奇體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817016": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人97勝戰績領先金鶯，實力評估合理。",
-      "venueZh": "金鶯球場",
+      "reason": "釀酒人強勢領先，客觀評分準確反映戰力。",
+      "venueZh": "金鶯公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817027": {
-      "competitivenessAdjustment": 1,
-      "watchabilityAdjustment": 1,
+      "competitivenessAdjustment": 0,
+      "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "藍鳥與金鶯勝率接近且季後賽爭奪較為激烈，觀賞性略高於對手。",
-      "venueZh": "金鶯球場",
+      "reason": "美聯外卡正面對決，勝率極近符合評分。",
+      "venueZh": "金鶯公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:55.838Z",
-      "refined": true
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817028": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩隊戰績完全相同且近期狀態相仿，但季後賽吸引力相對較低。",
-      "venueZh": "科莫利卡球場",
+      "reason": "戰績完全相同的對戰組合，評分合理。",
+      "venueZh": "聯發球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:55.838Z",
-      "refined": true
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817029": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙城與巨人勝率差距不大，對戰具張力。",
+      "reason": "跨聯盟交手，勝率與近況差距符合預期。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401873648": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "光芒與洋基分區強權正面交鋒，季後賽席位關鍵。",
+      "reason": "分區頂尖強權對決，各項指標皆指向高水準。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817035": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "藍鳥與金鶯勝率幾乎持平，季後賽競爭激烈，雙方近期狀態相當。",
-      "venueZh": "金鶯球場",
+      "reason": "藍鳥與金鶯勝率極近但近期狀態平平，競爭力中規中矩。",
+      "venueZh": "金鶯公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
       "refined": true
     },
     "mlb-401817032": {
@@ -273,44 +271,44 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人與費城人皆為分區前段班球隊。",
+      "reason": "聯盟前段班強權交鋒，客觀評分正確。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817033": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅雀與海盜勝率接近，國聯中區對決。",
-      "venueZh": "PNC公園球場",
+      "reason": "分區排名接近，勝率相近符合客觀模型。",
+      "venueZh": "PNC公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817036": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "國民與老虎戰績持平，實力不分軒輊。",
-      "venueZh": "科莫利卡球場",
+      "reason": "勝率相同的對戰組合，競爭力評分準確。",
+      "venueZh": "聯發球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817031": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者與紅襪皆具季後賽企圖心，克里夫蘭近期四連勝表現搶眼。",
+      "reason": "守護者與紅襪近期狀態有落差，但季後賽情勢仍具吸引力。",
       "venueZh": "芬威球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
       "refined": true
     },
     "mlb-401817034": {
@@ -318,11 +316,11 @@
       "watchabilityAdjustment": 1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "光芒與洋基勝率差距極小且季後賽接近度最高，為本群最受矚目之頂尖對決。",
+      "reason": "光芒與洋基勝率差距小且季後賽緊密度最高，為今日焦點對決。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
       "refined": true
     },
     "mlb-401817030": {
@@ -330,46 +328,46 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅軍對決勇士，主場勝率占優。",
-      "venueZh": "Truist公園球場",
+      "reason": "勇士實力佔優，客觀評分符合現狀。",
+      "venueZh": "Truist公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817037": {
       "competitivenessAdjustment": -1,
       "watchabilityAdjustment": -1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "皇家戰績落後較多，相較同組其他高張力賽事，本場競爭性與關注度稍低。",
-      "venueZh": "考夫曼球場",
+      "reason": "兩隊勝率差距較大且皇家季後賽機會渺茫，關注度略低。",
+      "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
       "refined": true
     },
     "mlb-401817038": {
-      "competitivenessAdjustment": 0,
-      "watchabilityAdjustment": 0,
-      "enduranceScoreAdjustment": 0,
-      "broadcastQualityAdjustment": 0,
-      "reason": "小熊季後賽接近度高於馬林魚，整體戰局維持一定水準但非焦點。",
-      "venueZh": "瑞格利球場",
-      "evidence": [],
-      "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
-      "refined": true
-    },
-    "mlb-401817039": {
       "competitivenessAdjustment": -1,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "大都會季後賽機率偏低，整體關注度略遜於同日其他分區強檔。",
-      "venueZh": "全球人壽球場",
+      "reason": "馬林魚與小熊勝率差距明顯，整體競爭激烈度略遜一籌。",
+      "venueZh": "瑞格球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:10.432Z",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
+      "refined": true
+    },
+    "mlb-401817039": {
+      "competitivenessAdjustment": 0,
+      "watchabilityAdjustment": 0,
+      "enduranceScoreAdjustment": 0,
+      "broadcastQualityAdjustment": 0,
+      "reason": "大都會季後賽機率為零，但遊騎兵近期連勝保持一定看點。",
+      "venueZh": "環球生命球場",
+      "evidence": [],
+      "source": "ai",
+      "cachedAt": "2026-09-20T14:08:20.655Z",
       "refined": true
     },
     "mlb-401817040": {
@@ -377,88 +375,88 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "響尾蛇季後賽競爭中，對決洛磯。",
+      "reason": "響尾蛇季後賽企圖心明顯，評分準確。",
       "venueZh": "庫爾斯球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817041": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "天使與運動家勝率極度接近，實力相當。",
+      "reason": "戰績相近但無緣季後賽，評分符合現狀。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817042": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "太空人與水手勝率接近，美西排名關鍵。",
-      "venueZh": "T-Mobile公園球場",
+      "reason": "美聯外卡緊繃戰況，客觀評分吻合。",
+      "venueZh": "T-Mobile公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817043": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙城與巨人實力差距小。",
+      "reason": "跨聯盟對戰數據相符，評分客觀。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817044": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士與道奇強強對決，國聯西區世仇交鋒。",
+      "reason": "國聯西區強權交鋒，觀賞性與競爭力評分準確。",
       "venueZh": "道奇體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817051": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "國民與老虎勝率相同，持續膠著。",
-      "venueZh": "科莫利卡球場",
+      "reason": "勝率相同對戰，客觀評分合理。",
+      "venueZh": "聯發球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817058": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙城對戰巨人戰績接近。",
+      "reason": "雙方戰績與近況符合模型預期。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817050": {
-      "competitivenessAdjustment": 1,
+      "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩隊勝率極為接近且季後賽席位爭奪白熱化，競爭張力十足。",
-      "venueZh": "金鶯球場",
+      "reason": "兩隊勝率接近但皆陷入連敗，話題性相對普通。",
+      "venueZh": "金鶯公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
       "refined": true
     },
     "mlb-401817047": {
@@ -466,45 +464,45 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人對決費城人，雙強交手。",
+      "reason": "釀酒人與費城人強強對話，評分客觀。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817048": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅雀與海盜勝率接近。",
-      "venueZh": "PNC公園球場",
+      "reason": "國聯中區對戰，數據反映真實戰況。",
+      "venueZh": "PNC公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817046": {
-      "competitivenessAdjustment": 0,
-      "watchabilityAdjustment": 1,
-      "enduranceScoreAdjustment": 0,
-      "broadcastQualityAdjustment": 0,
-      "reason": "紅襪與守護者皆在季後賽邊緣，且具備全國轉播優勢，觀賞性佳。",
-      "venueZh": "芬威球場",
-      "evidence": [],
-      "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
-      "refined": true
-    },
-    "mlb-401817049": {
       "competitivenessAdjustment": 1,
       "watchabilityAdjustment": 1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩隊戰績皆極佳且季後賽接近，勝率差距小，競爭激烈度與關注度極高。",
+      "reason": "守護者近期四連勝且近況出色，較紅襪更具季後賽競爭張力。",
+      "venueZh": "芬威球場",
+      "evidence": [],
+      "source": "ai",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
+      "refined": true
+    },
+    "mlb-401817049": {
+      "competitivenessAdjustment": 1,
+      "watchabilityAdjustment": 2,
+      "enduranceScoreAdjustment": 0,
+      "broadcastQualityAdjustment": 0,
+      "reason": "光芒與洋基勝率皆高且近況火燙，為當日焦點頂級對決。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
       "refined": true
     },
     "mlb-401817045": {
@@ -512,46 +510,46 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅軍對決勇士。",
-      "venueZh": "Truist公園球場",
+      "reason": "勇士主場優勢與勝率差距符合評分。",
+      "venueZh": "Truist公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817052": {
-      "competitivenessAdjustment": 0,
-      "watchabilityAdjustment": 0,
+      "competitivenessAdjustment": -1,
+      "watchabilityAdjustment": -1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勝率差距較大且近況一般，整體關注度不及分區前段班對決。",
-      "venueZh": "考夫曼球場",
+      "reason": "皇家勝率偏低且雙方近況平平，關注度不如同日強檔。",
+      "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
       "refined": true
     },
     "mlb-401817053": {
       "competitivenessAdjustment": 0,
-      "watchabilityAdjustment": 0,
+      "watchabilityAdjustment": -1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙方勝率有一定差距，小熊季後賽機會較高但近期狀態平平。",
-      "venueZh": "瑞格利球場",
+      "reason": "小熊雖具季後賽希望，但與馬林魚的實力差距較大。",
+      "venueZh": "瑞格球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
       "refined": true
     },
     "mlb-401817054": {
-      "competitivenessAdjustment": 0,
+      "competitivenessAdjustment": -1,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "遊騎兵季後賽接近但大都會戰績落後，整體話題性相對普通。",
-      "venueZh": "全球人壽球場",
+      "reason": "大都會季後賽無望，整體關注度不及其他美聯交鋒。",
+      "venueZh": "環球生命球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:03.058Z",
+      "cachedAt": "2026-09-20T14:08:13.740Z",
       "refined": true
     },
     "mlb-401817055": {
@@ -559,66 +557,66 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "響尾蛇對決洛磯。",
+      "reason": "戰績差距明顯，客觀評分適中。",
       "venueZh": "庫爾斯球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817056": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "天使對決運動家勝率接近。",
+      "reason": "兩隊戰績接近但缺乏話題，評分準確。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817057": {
       "competitivenessAdjustment": 0,
-      "watchabilityAdjustment": 0,
+      "watchabilityAdjustment": 1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "太空人對決水手。",
-      "venueZh": "T-Mobile公園球場",
+      "reason": "全國轉播場次且具季後賽卡位張力。",
+      "venueZh": "T-Mobile公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817059": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士對決道奇。",
+      "reason": "國聯西區頂尖對決，評分客觀。",
       "venueZh": "道奇體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817063": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅雀對決海盜。",
-      "venueZh": "PNC公園球場",
+      "reason": "雙方戰績咬緊，評分符合預期。",
+      "venueZh": "PNC公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817065": {
       "competitivenessAdjustment": 1,
       "watchabilityAdjustment": 1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "白襪與皇家勝率接近且季後賽爭奪激烈，比同段賽事更具看頭。",
-      "venueZh": "考夫曼球場",
+      "reason": "白袜与皇家战绩接近，本场季后赛前景更受关注。",
+      "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:49.821Z",
+      "cachedAt": "2026-09-20T14:08:02.629Z",
       "refined": true
     },
     "mlb-401817066": {
@@ -626,23 +624,23 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "小熊與馬林魚戰績差距稍大，觀賞性中規中矩。",
-      "venueZh": "瑞格利球場",
+      "reason": "小熊近期状态平稳，整体观赏性与竞争力稳定。",
+      "venueZh": "瑞格球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:49.821Z",
+      "cachedAt": "2026-09-20T14:08:02.629Z",
       "refined": true
     },
     "mlb-401817067": {
       "competitivenessAdjustment": -1,
-      "watchabilityAdjustment": 0,
+      "watchabilityAdjustment": -1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "大都會與遊騎兵近期戰況膠著度略遜於同組其他對戰。",
-      "venueZh": "全球人壽球場",
+      "reason": "两队胜率差距较小但季后赛希望较低，关注度略逊。",
+      "venueZh": "環球生命球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:49.821Z",
+      "cachedAt": "2026-09-20T14:08:02.629Z",
       "refined": true
     },
     "mlb-401817068": {
@@ -650,264 +648,264 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "響尾蛇對決洛磯。",
+      "reason": "戰績差距大，評分客觀。",
       "venueZh": "庫爾斯球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817062": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人對決費城人。",
+      "reason": "分區龍頭與強權對決，評分合理。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817061": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者對決紅襪。",
+      "reason": "美聯季後賽直接競爭，評分精準。",
       "venueZh": "芬威球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817064": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "光芒對決洋基。",
+      "reason": "美東宿敵之戰，各項指標皆高。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817060": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅軍對決勇士。",
-      "venueZh": "Truist公園球場",
+      "reason": "勇士主場優勢明顯，評分符合數據。",
+      "venueZh": "Truist公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817069": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "天使對決水手。",
-      "venueZh": "T-Mobile公園球場",
+      "reason": "美聯西區對戰，勝率差距符合評分。",
+      "venueZh": "T-Mobile公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817070": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "太空人對決運動家。",
+      "reason": "太空人季後賽卡位戰，評分合理。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817071": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士對決道奇。",
+      "reason": "國聯西區強權交鋒，評分客觀。",
       "venueZh": "道奇體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817077": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "海盜對決老虎。",
-      "venueZh": "科莫利卡球場",
+      "reason": "戰績接近的外卡爭奪，評分準確。",
+      "venueZh": "聯發球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817078": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "光芒對決費城人。",
+      "reason": "光芒與費城人強權對決，評分合理。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817076": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "大都會對決國民。",
+      "reason": "國東內戰，勝率接近符合預期。",
       "venueZh": "國民球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817073": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "金鶯對決洋基。",
+      "reason": "美東傳統對決，評分客觀。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817075": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅軍對決藍鳥。",
+      "reason": "勝率相近的跨聯盟交手，評分準確。",
       "venueZh": "羅傑斯中心",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817072": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勇士對決馬林魚。",
-      "venueZh": "龍頭球場",
+      "reason": "勇士季後賽席位穩固，評分符合現狀。",
+      "venueZh": "貸客球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817074": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "小熊對決紅襪。",
+      "reason": "小熊與紅襪人氣球隊交鋒，評分合理。",
       "venueZh": "芬威球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817079": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者對決皇家。",
-      "venueZh": "考夫曼球場",
+      "reason": "守護者近況佳，評分客觀反映。",
+      "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817080": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "洛磯對決白襪。",
-      "venueZh": "美國行動通訊球場",
+      "reason": "戰績差距大，客觀評分適中。",
+      "venueZh": "美孚球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817081": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "紅雀對決釀酒人。",
+      "reason": "釀酒人實力明顯佔優，評分準確。",
       "venueZh": "美國家庭球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817082": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "客隊勝率差距與近期戰績已完整反映客觀評分。",
+      "reason": "勝率差距合理，客隊近期狀態較佳。",
       "venueZh": "標靶球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817084": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士近期氣勢極佳，客觀評分已合理反映雙方近況。",
-      "venueZh": "沛可公園",
+      "reason": "教士近期氣勢極佳，客隊緊咬季後賽邊緣。",
+      "venueZh": "沛可公園球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817085": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "太空人與運動家勝率差距明顯，評分符合預期。",
+      "reason": "雙方勝率有段差距，太空人全力爭取季後賽。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817083": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "美聯西區對決，各項客觀指標已準確對應。",
+      "reason": "美聯西區同區對決，戰績雖有差距但交手拉鋸。",
       "venueZh": "T-Mobile球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817086": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "世仇對決帶來極高關注度，客觀評分已如實體現。",
+      "reason": "道奇與巨人擁有世仇傳統，觀戰焦點十足。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817092": {
       "competitivenessAdjustment": 1,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "海盜與老虎戰績接近且近期狀況不俗，競爭較為激烈。",
-      "venueZh": "聯想公園",
+      "reason": "海盜與老虎近期狀況不俗，具備一定競爭張力。",
+      "venueZh": "聯愛球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:17.491Z",
+      "cachedAt": "2026-09-20T14:08:27.249Z",
       "refined": true
     },
     "mlb-401817090": {
@@ -915,11 +913,11 @@
       "watchabilityAdjustment": -1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩隊近期戰績與季後賽機會皆低，關注度相對有限。",
+      "reason": "兩隊戰績接近季後賽無望，關注度相對較低。",
       "venueZh": "羅傑斯中心",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:17.491Z",
+      "cachedAt": "2026-09-20T14:08:27.249Z",
       "refined": true
     },
     "mlb-401817091": {
@@ -927,22 +925,22 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "分區對決勝率相仿，客觀評分符合實際。",
+      "reason": "國聯東區對戰，勝率差距僅1.3個百分點。",
       "venueZh": "國民球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817101": {
       "competitivenessAdjustment": -1,
       "watchabilityAdjustment": 1,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "世仇對決雖勝負懸殊，但道奇的球星陣容仍具極高觀賞價值。",
+      "reason": "世仇對決話題性高，雖實力有差距但觀賞性佳。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:17.491Z",
+      "cachedAt": "2026-09-20T14:08:27.249Z",
       "refined": true
     },
     "mlb-401817087": {
@@ -950,11 +948,11 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勇士季後賽席位穩固，對上馬林魚的實力差距較明顯。",
-      "venueZh": "龍頭棒球場",
+      "reason": "勇士戰績領先，馬林魚力圖止敗，常規分區對戰。",
+      "venueZh": "龍邦球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:17.491Z",
+      "cachedAt": "2026-09-20T14:08:27.249Z",
       "refined": true
     },
     "mlb-401817097": {
@@ -962,11 +960,11 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "遊騎兵近期狀態較雙城略好，但整體關注度平穩。",
+      "reason": "遊騎兵與雙城勝率相近，中規中矩的美聯對決。",
       "venueZh": "標靶球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:07:17.491Z",
+      "cachedAt": "2026-09-20T14:08:27.249Z",
       "refined": true
     },
     "mlb-401817094": {
@@ -974,319 +972,319 @@
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者近期連勝，評分機制已正確捕捉。",
+      "reason": "守護者近期狀況火熱，季後賽機會濃厚。",
       "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817095": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "洛磯戰績落後較多，評分已反映勝率差距。",
-      "venueZh": "保證率球場",
+      "reason": "白襪戰績雖領先落磯，但勝率差距反映在盤面上。",
+      "venueZh": "美孚球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817096": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人戰績領先，客觀評分相符。",
-      "venueZh": "美孚家庭球場",
+      "reason": "釀酒人本季戰績獨走，紅雀近期陷入連敗。",
+      "venueZh": "美國家庭球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817088": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "洋基與金鶯季後賽卡位戰，評分合理。",
+      "reason": "美聯傳統勁旅交手，洋基主場戰力穩定。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817089": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "傳統勁旅交鋒，勝率接近且話題十足。",
+      "reason": "雙方勝率僅差1.3pp，季後賽席位卡位戰。",
       "venueZh": "芬威球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817093": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "兩支強隊正面對決，評分已完整體現。",
+      "reason": "光芒與費城人皆具備強悍戰力，強強對話。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817099": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士近況優異，客觀數據已如實反映。",
-      "venueZh": "沛可公園",
+      "reason": "雙方勝率接近，教士近況火燙。",
+      "venueZh": "沛可公園球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817098": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "美聯西區對戰組合，評分合理。",
+      "reason": "美聯西區對決，勝率差距在合理範圍。",
       "venueZh": "T-Mobile球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817100": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "戰績差距明顯，評分符合現狀。",
+      "reason": "太空人全力爭取季後賽，運動家戰績低迷。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817104": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙城交手話題性高，評分適當。",
+      "reason": "雙方勝率僅差1.3pp，實力相當接近。",
       "venueZh": "芬威球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817106": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙方近期皆有連勝，評分客觀。",
+      "reason": "國聯東區交手，戰績相仿但關注度較低。",
       "venueZh": "國民球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817108": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "季後賽等級對決，評分準確。",
+      "reason": "光芒近期狀態極佳，客場挑戰費城人。",
       "venueZh": "市民銀行球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817115": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勝率差距反映在客觀評分中。",
+      "reason": "太空人季後賽門票關鍵期。",
       "venueZh": "薩特健康公園",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817116": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "世仇對決觀看價值高，評分相符。",
+      "reason": "世仇對決，話題性與觀看價值滿點。",
       "venueZh": "甲骨文球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817105": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙方實力相當，評分機制運作正常。",
+      "reason": "勝率接近，雙方皆有取勝機會。",
       "venueZh": "羅傑斯中心",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817102": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "分區排名態勢明確，評分合理。",
-      "venueZh": "龍頭棒球場",
+      "reason": "勇士整體戰力佔優，馬林魚主場迎戰。",
+      "venueZh": "龍邦球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817107": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "勝率接近且近況良好，評分相符。",
-      "venueZh": "聯想公園",
+      "reason": "兩隊勝率相當，比賽拉鋸可能性高。",
+      "venueZh": "聯愛球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817109": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "守護者戰績佔優，評分適當。",
+      "reason": "守護者近況出色，皇家力求止敗。",
       "venueZh": "考夫曼體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817110": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "白襪與洛磯勝率有差距，評分客觀。",
-      "venueZh": "保證率球場",
+      "reason": "白襪戰績明顯優於落磯。",
+      "venueZh": "美孚球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817111": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "釀酒人實力明顯佔優，評分符合現狀。",
-      "venueZh": "美孚家庭球場",
+      "reason": "釀酒人實力堅強，紅雀作客挑戰。",
+      "venueZh": "美國家庭球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817112": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "雙方實力伯仲之間，評分合理。",
+      "reason": "雙方戰績接近，季後賽卡位戰。",
       "venueZh": "標靶球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817113": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "美聯西區對決，評分已涵蓋各項數據。",
+      "reason": "美聯西區交手，戰局互有勝負。",
       "venueZh": "T-Mobile球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817114": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "教士近況極佳，客觀評分準確。",
-      "venueZh": "沛可公園",
+      "reason": "響尾蛇與教士的國聯西區激戰。",
+      "venueZh": "沛可公園球場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "mlb-401817103": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "美聯東區傳統對戰，評分相符。",
+      "reason": "美聯東區傳統好戲，洋基主場迎敵。",
       "venueZh": "洋基體育場",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "nba-401902644": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "熱身賽階段評分符合預期。",
+      "reason": "熱身賽階段，雙方戰績歸零。",
       "venueZh": "Videotron中心",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "f1-600057444-race": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "巴庫賽道充滿變數，客觀評分適中。",
-      "venueZh": "巴庫市街賽道",
+      "reason": "巴庫市賽道充滿變數與街道賽特色。",
+      "venueZh": "巴庫市賽道",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "f1-600057444-qual": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "排位賽競爭激烈度評分合理。",
-      "venueZh": "巴庫市街賽道",
+      "reason": "街道賽排位賽一向競爭激烈。",
+      "venueZh": "巴庫市賽道",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "f1-600060990-race": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "F1賽事評分符合當前賽季態勢。",
+      "reason": "雪邦賽道天氣與氣溫考驗車手。",
       "venueZh": "雪邦國際賽道",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     },
     "f1-600060990-qual": {
       "competitivenessAdjustment": 0,
       "watchabilityAdjustment": 0,
       "enduranceScoreAdjustment": 0,
       "broadcastQualityAdjustment": 0,
-      "reason": "排位賽客觀數據已完整反映。",
+      "reason": "雪邦排位賽排位爭奪戰。",
       "venueZh": "雪邦國際賽道",
       "evidence": [],
       "source": "ai",
-      "cachedAt": "2026-09-20T13:06:21.451Z"
+      "cachedAt": "2026-09-20T14:07:33.131Z"
     }
   }
 }
