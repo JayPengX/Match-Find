@@ -936,7 +936,13 @@ function buildMatchCard(match) {
 
   const reasonEl = node.querySelector('.match-reason');
   reasonEl.textContent = match.reason || '';
-  if (match.source === 'heuristic') reasonEl.classList.add('is-heuristic');
+  // 'api-objective' means the deterministic, real-data score (see
+  // build-data.mjs's computeMatchObjectiveScore) hasn't been validated by
+  // Gemini yet - still real, current data, just missing that one extra
+  // layer of judgment, hence a lighter caveat than the old 'heuristic'
+  // source this replaced ever showed (see styles.css's own .is-api-objective
+  // rule for the actual wording).
+  if (match.source === 'api-objective') reasonEl.classList.add('is-api-objective');
 
   buildEvidenceDetails(match, reasonEl);
 
@@ -1385,7 +1391,7 @@ function pickInitialDay(days, matches) {
 
 // "Gemini last used" (see build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS) -
 // purely informational, so a viewer curious why a brand new fixture still
-// shows an "(估計，非 AI 推薦)" heuristic reason can see this isn't stuck,
+// shows an "(API 數據估計，尚未經 AI 驗證)" caveat can see this isn't stuck,
 // just waiting for the next batched Gemini call. The "重新查詢" link next
 // to it (see its href, set once above) only opens the GitHub Actions run
 // page - actually triggering a rebuild needs repo write access, which only

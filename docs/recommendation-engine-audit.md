@@ -795,3 +795,141 @@ leaves two overlapping fixtures suspiciously close.
   harness on the shared-proxy side (confirmed zero tests in that repo) -
   its effect can only be observed in real scored output after the next
   build, not asserted in CI.
+
+## Round 6 - API-data-driven scoring engine (Gemini demoted to validation)
+
+A direct request to make the recommendation engine more accurate by using
+real sports-data APIs more heavily, and to rewrite scoring so it's
+API-data-based first with AI validation/refinement second, rather than the
+other way around. This is the largest single architectural change this
+document has recorded: competitiveness/watchability/enduranceScore/
+broadcastQuality used to be asked from Gemini directly (grounded in
+context strings/odds, but ultimately Gemini's own training-data judgment
+call); they're now computed FIRST, deterministically, and Gemini only
+validates the result.
+
+### 1. The objective scoring engine
+
+Two new modules in Match Find:
+
+- `scripts/objective-score.mjs` - pure, fully unit-tested (no network)
+  per-sport formulas: `computeMlbObjectiveScore`/`computeNbaObjectiveScore`/
+  `computeEplObjectiveScore`/`computeF1ObjectiveScore`, plus shared building
+  blocks (`weightedAverage`, `closenessFromWinPctGap`,
+  `closenessFromSpread`, `playoffProximityScore`, `streakMomentum`,
+  `estimateBroadcastQualityBaseline`). Each returns
+  `{competitiveness, watchability, enduranceScore, factors}` -
+  `factors` is a plain-English list of the actual real data points that
+  produced the numbers (e.g. `"last 10: 7-3 vs 5-5"`, `"postseason game"`),
+  carried all the way through to the shared proxy's own validation prompt
+  and to a local Traditional Chinese reason
+  (`buildObjectiveReasonZh`/`describeFactorsZh` in `build-data.mjs`) for
+  when no AI validation has happened yet.
+- `scripts/sport-signals.mjs` - fetches the real, current API signals those
+  formulas consume: MLB standings/recent-form/streak from the official
+  [MLB Stats API](https://statsapi.mlb.com) (free, no key), and F1
+  championship-standings gap from the
+  [Ergast-compatible Jolpica API](https://api.jolpi.ca) (free, no key,
+  the community-run successor to Ergast, which shut down at the end of the
+  2024 season). Both are dedicated sports-data APIs, not ESPN - directly
+  answering the "explore opportunities to use sport APIs more" half of the
+  request that started this round. Every fetch is deliberately as
+  defensive as this codebase's own ESPN calls (try/catch, a hard timeout) -
+  see point 4 below for why that defensiveness specifically matters here.
+
+`scripts/build-data.mjs`'s `computeMatchObjectiveScore` dispatches each
+fixture to its own sport's formula, called once for every non-finished
+fixture on every build, whether or not the shared proxy is even
+configured - this is the PRIMARY score now, not a fallback.
+
+### 2. Gemini's role: validation and refinement, not scoring
+
+The shared proxy's (`jaypengx-collab/shared-proxy`) `/match-recommend` and
+`/match-recommend-refine` used to score each fixture from scratch. They now
+receive each fixture's own already-computed `objective` score and its
+`factors`, and are asked ONLY for a small, bounded adjustment
+(`competitivenessAdjustment`/`watchabilityAdjustment`/
+`broadcastQualityAdjustment`/`enduranceScoreAdjustment`, each -2 to +2) -
+added to, never replacing, the objective score. The prompt (see that
+repo's `buildMatchRecommendPrompt`) explicitly tells Gemini that returning
+all zeros is the expected, common answer, and that a non-zero adjustment
+needs a SPECIFIC real-world reason the formula's own factors don't already
+cover (a fresh injury, a rivalry's real history, current form) - not a
+vaguer "I'd have scored this slightly differently" impression. Both routes
+clamp every adjustment server-side (`MATCH_RECOMMEND_ADJUSTMENT_BOUND`,
+`sanitizeAdjustment`) regardless of what Gemini's own schema-constrained
+output claims, and Match Find's own `build-data.mjs` (`AI_ADJUSTMENT_BOUND`,
+`clampAdjustment`) clamps again independently - the same "never fully trust
+upstream" defense-in-depth this codebase already applied to absolute
+scores, now applied to adjustments.
+
+The evidence-gathering grounded search pass (`fetchGroundedMatchInfo`,
+Round 3's own structured evidence work) is unchanged in role - it still
+feeds current, searched facts into the validation prompt's context and is
+still returned to the caller as structured `evidence` - this round only
+changed how the SCORE itself is produced, not the evidence layer feeding
+it.
+
+### 3. Cache schema: adjustments, not absolute scores
+
+`data/ai-cache.json` used to store an absolute competitiveness/watchability/
+enduranceScore/broadcastQuality per match. Since the objective score is
+now recomputed fresh every single build (standings/form genuinely change
+day to day - caching yesterday's objective number would silently go
+stale), the cache only stores the ADJUSTMENT plus `reason`/`venueZh`/
+`evidence`. `PROMPT_VERSION` bumped to 11, which - per this document's own
+established convention - discards every existing cache entry's old
+absolute-score shape and re-validates the whole window once under the new
+schema on the next real build. A defensive `?? 0` guard was added on both
+read paths (`build-data.mjs`'s main assembly loop and its post-refine
+loop) specifically for the transition window: an older cache entry that
+hasn't been re-validated yet (a throttled run right after this deploys)
+has no `*Adjustment` fields at all, and reading `undefined` into an
+arithmetic expression would otherwise silently produce `NaN` instead of
+gracefully defaulting to a zero adjustment.
+
+### 4. `source`/`confidence`: a new middle tier, `heuristicScore` retired
+
+`heuristicScore` (the old win-rate-only, capped-at-8, no-real-sports-
+knowledge fallback for when the proxy was unreachable) is gone entirely -
+superseded by the objective score's own graceful handling of a missing
+signal (a neutral 5, still real per-sport modeling around it, not a crude
+guess). `source` on a match is now `'finished'` / `'api-objective'`
+(objective score, zero adjustment - PROXY_URL unset, the call failed, or
+still pending) / `'ai'` (validated, optionally `refined`).
+`CONFIDENCE_BY_SOURCE` (`public/lib/recommendation.mjs`) gained an
+`apiObjective: 0.55` tier between the old `heuristic: 0.35` (kept only so
+an OLDER cached/exported match still maps to a sensible value - no build
+produces it anymore) and `ai` (bumped slightly, 0.7 → 0.75, since even a
+base validation pass now sits on top of real API data, not just Gemini's
+own training knowledge). The UI's own caveat (`public/styles.css`'s
+`.is-heuristic` → `.is-api-objective`) changed from "（估計，非 AI 推薦）"
+("estimated, not an AI recommendation" - dismissive of what was, honestly,
+a weak fallback) to "（API 數據估計，尚未經 AI 驗證）" ("API data estimate,
+not yet AI-validated" - accurate to what's actually true now: real,
+current data, just missing one extra layer of judgment).
+
+### 5. Known limitations (stated in the README, not just here)
+
+- **No live verification of either new external API.** The development
+  session this was built in had no outbound network access to the MLB
+  Stats API, the Jolpica F1 API, OR ESPN's own API (a sandboxed
+  environment's own egress policy, not a statement about these APIs'
+  actual public availability) - every response shape assumed in
+  `scripts/sport-signals.mjs` comes from these APIs' own long-stable,
+  widely-documented public formats, not a confirmed live response. Both
+  fetch functions degrade to "no signal for this fixture" on any shape
+  mismatch rather than breaking the build, but the real live test is the
+  first scheduled run after this ships.
+- **NBA and Premier League have no dedicated standings-API integration.**
+  Both still score on season record + odds + the existing rivalry/derby/
+  national-broadcast detectors - real, but shallower than MLB's standings-
+  proximity/recent-form depth. The natural next round.
+- **No injury data anywhere** - left, deliberately, as exactly the kind of
+  thing Gemini's validation pass exists to catch, not something a
+  deterministic formula should try to approximate from data this build
+  doesn't have.
+- **F1's per-race modifiers (safety car, weather) aren't modeled** - ADDING
+  a weather API would mean taking on a new external dependency for a
+  modifier this build can't verify pre-race anyway; deliberately deferred
+  as a separate decision rather than folded in silently.

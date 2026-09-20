@@ -158,10 +158,13 @@ describe('computeConfidence', () => {
   test('an AI-scored match that survived the comparative refine pass is most confident', () => {
     assert.equal(computeConfidence(makeMatch({ source: 'ai', refined: true })), 0.9);
   });
-  test('a base-pass-only AI score is confident but less so', () => {
-    assert.equal(computeConfidence(makeMatch({ source: 'ai', refined: false })), 0.7);
+  test('a base-pass-only AI validation is confident but less so', () => {
+    assert.equal(computeConfidence(makeMatch({ source: 'ai', refined: false })), 0.75);
   });
-  test('the local heuristic fallback (no real AI judgment) is the least confident', () => {
+  test('the objective (API-data) score alone, not yet AI-validated, sits in the middle', () => {
+    assert.equal(computeConfidence(makeMatch({ source: 'api-objective' })), 0.55);
+  });
+  test('the old heuristic fallback source (no build produces this anymore) is the least confident', () => {
     assert.equal(computeConfidence(makeMatch({ source: 'heuristic' })), 0.35);
   });
   test('an unrecognized/missing source is treated the same as finished (null), not fabricated', () => {

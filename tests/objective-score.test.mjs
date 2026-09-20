@@ -1,0 +1,273 @@
+// Tests for scripts/objective-score.mjs - the deterministic, API-data-based
+// scoring engine that replaced asking Gemini for competitiveness/
+// watchability/enduranceScore from scratch. Every function here is pure,
+// so these tests use plain hand-built numbers rather than real API
+// responses (see scripts/sport-signals.mjs's own tests for the parsing
+// half of this pipeline).
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  clamp,
+  weightedAverage,
+  closenessFromWinPctGap,
+  closenessFromSpread,
+  playoffProximityScore,
+  streakMomentum,
+  closenessFromLastTen,
+  estimateBroadcastQualityBaseline,
+  computeMlbObjectiveScore,
+  computeNbaObjectiveScore,
+  computeEplObjectiveScore,
+  computeF1ObjectiveScore
+} from '../scripts/objective-score.mjs';
+
+describe('clamp', () => {
+  test('bounds a value inside [min, max]', () => {
+    assert.equal(clamp(15, 1, 10), 10);
+    assert.equal(clamp(-5, 1, 10), 1);
+    assert.equal(clamp(5, 1, 10), 5);
+  });
+});
+
+describe('weightedAverage', () => {
+  test('a plain weighted average when every value is present', () => {
+    assert.equal(weightedAverage([[10, 0.5], [0, 0.5]]), 5);
+  });
+
+  test('renormalizes weights when some values are missing (null/undefined/NaN)', () => {
+    // Only the first pair survives - its weight becomes 100% of the total,
+    // so the result is just that value, not pulled toward zero.
+    assert.equal(weightedAverage([[8, 0.5], [null, 0.5]]), 8);
+    assert.equal(weightedAverage([[8, 0.3], [undefined, 0.3], [NaN, 0.4]]), 8);
+  });
+
+  test('returns null when every value is missing', () => {
+    assert.equal(weightedAverage([[null, 1], [undefined, 1]]), null);
+  });
+});
+
+describe('closenessFromWinPctGap', () => {
+  test('a zero gap (dead-even records) scores a perfect 10', () => {
+    assert.equal(closenessFromWinPctGap(0), 10);
+  });
+
+  test('a large gap bottoms out at 1, never below', () => {
+    assert.equal(closenessFromWinPctGap(0.9), 1);
+  });
+
+  test('the sign of the gap does not matter, only its magnitude', () => {
+    assert.equal(closenessFromWinPctGap(0.2), closenessFromWinPctGap(-0.2));
+  });
+
+  test('returns null for a non-finite input rather than throwing', () => {
+    assert.equal(closenessFromWinPctGap(null), null);
+    assert.equal(closenessFromWinPctGap(undefined), null);
+    assert.equal(closenessFromWinPctGap(NaN), null);
+  });
+});
+
+describe('closenessFromSpread', () => {
+  test('a zero spread (a pick\'em) scores a perfect 10', () => {
+    assert.equal(closenessFromSpread(0, 3), 10);
+  });
+
+  test('a spread at the lopsided threshold scores near the bottom', () => {
+    assert.equal(closenessFromSpread(3, 3), 1);
+  });
+
+  test('a spread beyond the threshold still clamps at 1, never negative', () => {
+    assert.equal(closenessFromSpread(20, 3), 1);
+  });
+
+  test('returns null when the spread or threshold is missing/invalid', () => {
+    assert.equal(closenessFromSpread(null, 3), null);
+    assert.equal(closenessFromSpread(1, 0), null);
+    assert.equal(closenessFromSpread(1, null), null);
+  });
+});
+
+describe('playoffProximityScore', () => {
+  test('leading a race (0 games back) scores a perfect 10', () => {
+    assert.equal(playoffProximityScore(0, 0), 10);
+  });
+
+  test('takes the SMALLER of division/wild-card deficits (either keeps the race alive)', () => {
+    assert.equal(playoffProximityScore(8, 0.5), playoffProximityScore(0.5, 0.5));
+  });
+
+  test('a large deficit floors at 0, not 1 (a genuinely decided race contributes nothing)', () => {
+    assert.equal(playoffProximityScore(20, 20), 0);
+  });
+
+  test('returns null when neither figure is known', () => {
+    assert.equal(playoffProximityScore(null, undefined), null);
+  });
+});
+
+describe('streakMomentum', () => {
+  test('a winning streak scores above the neutral midpoint', () => {
+    assert.ok(streakMomentum('W5') > 5);
+  });
+
+  test('a losing streak scores below the neutral midpoint', () => {
+    assert.ok(streakMomentum('L4') < 5);
+  });
+
+  test('a longer streak in either direction moves further from neutral, capped at 8 games', () => {
+    assert.ok(streakMomentum('W8') > streakMomentum('W2'));
+    assert.equal(streakMomentum('W20'), streakMomentum('W8')); // capped
+  });
+
+  test('returns null for a missing or malformed streak code', () => {
+    assert.equal(streakMomentum(null), null);
+    assert.equal(streakMomentum(''), null);
+    assert.equal(streakMomentum('bogus'), null);
+  });
+});
+
+describe('closenessFromLastTen', () => {
+  test('identical last-10 records score a perfect 10', () => {
+    assert.equal(closenessFromLastTen({ wins: 6, losses: 4 }, { wins: 6, losses: 4 }), 10);
+  });
+
+  test('a large last-10 gap scores low', () => {
+    const close = closenessFromLastTen({ wins: 9, losses: 1 }, { wins: 1, losses: 9 });
+    assert.ok(close <= 2);
+  });
+
+  test('returns null when either side\'s last-10 record is missing', () => {
+    assert.equal(closenessFromLastTen(null, { wins: 5, losses: 5 }), null);
+    assert.equal(closenessFromLastTen({ wins: 5, losses: 5 }, null), null);
+  });
+});
+
+describe('estimateBroadcastQualityBaseline', () => {
+  test('a known flagship network scores above neutral', () => {
+    assert.equal(estimateBroadcastQualityBaseline('ESPN'), 7);
+    assert.equal(estimateBroadcastQualityBaseline('apple tv'), 7); // case-insensitive
+  });
+
+  test('an empty or unrecognized broadcaster scores neutral', () => {
+    assert.equal(estimateBroadcastQualityBaseline(''), 5);
+    assert.equal(estimateBroadcastQualityBaseline('Bally Sports Some Region'), 5);
+  });
+});
+
+describe('computeMlbObjectiveScore', () => {
+  test('two evenly-matched teams with no other signals score high competitiveness', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
+    assert.ok(result.competitiveness >= 9);
+  });
+
+  test('a lopsided season record scores low competitiveness', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: 0.75, homeWinPct: 0.25, away: null, home: null, isPostseason: false });
+    assert.ok(result.competitiveness <= 3);
+  });
+
+  test('a postseason game always gets maximum stakes, regardless of the records', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: 0.75, homeWinPct: 0.25, away: null, home: null, isPostseason: true });
+    // Watchability blends stakes(=10) with the (low) competitiveness, so it
+    // should still land meaningfully above a non-postseason equivalent.
+    const regularSeason = computeMlbObjectiveScore({ awayWinPct: 0.75, homeWinPct: 0.25, away: null, home: null, isPostseason: false });
+    assert.ok(result.watchability > regularSeason.watchability);
+  });
+
+  test('two teams both close to a playoff spot raises watchability over two teams far from one', () => {
+    const closeRace = computeMlbObjectiveScore({
+      awayWinPct: 0.5,
+      homeWinPct: 0.5,
+      away: { gamesBack: 0.5, wildCardGamesBack: 0.5, lastTen: null, streakCode: null },
+      home: { gamesBack: 1, wildCardGamesBack: 0.5, lastTen: null, streakCode: null },
+      isPostseason: false
+    });
+    const decidedRace = computeMlbObjectiveScore({
+      awayWinPct: 0.5,
+      homeWinPct: 0.5,
+      away: { gamesBack: 20, wildCardGamesBack: 20, lastTen: null, streakCode: null },
+      home: { gamesBack: 20, wildCardGamesBack: 20, lastTen: null, streakCode: null },
+      isPostseason: false
+    });
+    assert.ok(closeRace.watchability > decidedRace.watchability);
+  });
+
+  test('a team on a hot streak raises watchability over otherwise-identical teams with no streak data', () => {
+    const withStreak = computeMlbObjectiveScore({
+      awayWinPct: 0.5,
+      homeWinPct: 0.5,
+      away: { gamesBack: null, wildCardGamesBack: null, lastTen: null, streakCode: 'W8' },
+      home: null,
+      isPostseason: false
+    });
+    const withoutStreak = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
+    assert.ok(withStreak.watchability >= withoutStreak.watchability);
+  });
+
+  test('a real odds spread contributes to competitiveness even with no record signal at all', () => {
+    const result = computeMlbObjectiveScore({
+      awayWinPct: null,
+      homeWinPct: null,
+      away: null,
+      home: null,
+      isPostseason: false,
+      oddsSpread: 0.5
+    });
+    assert.ok(result.competitiveness >= 8);
+  });
+
+  test('every score is always within [1, 10] and factors is always an array', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
+    for (const key of ['competitiveness', 'watchability', 'enduranceScore']) {
+      assert.ok(result[key] >= 1 && result[key] <= 10, `${key} out of range: ${result[key]}`);
+    }
+    assert.ok(Array.isArray(result.factors));
+  });
+
+  test('with literally no signals at all, every score falls back to a neutral 5', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: null, homeWinPct: null, away: null, home: null, isPostseason: false });
+    assert.equal(result.competitiveness, 5);
+    assert.equal(result.watchability, 5);
+  });
+});
+
+describe('computeNbaObjectiveScore', () => {
+  test('a rivalry and a national broadcast both raise watchability', () => {
+    const plain = computeNbaObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    const rivalryAndNational = computeNbaObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: true, isNationalBroadcast: true });
+    assert.ok(rivalryAndNational.watchability > plain.watchability);
+  });
+
+  test('a postseason game raises watchability', () => {
+    const regularSeason = computeNbaObjectiveScore({ awayWinPct: 0.6, homeWinPct: 0.4, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    const postseason = computeNbaObjectiveScore({ awayWinPct: 0.6, homeWinPct: 0.4, isPostseason: true, isRivalry: false, isNationalBroadcast: false });
+    assert.ok(postseason.watchability > regularSeason.watchability);
+  });
+});
+
+describe('computeEplObjectiveScore', () => {
+  test('a derby raises watchability over an otherwise-identical non-derby fixture', () => {
+    // Win rates deliberately not identical (which would already max out
+    // competitiveness at 10 and leave no room for the derby bonus to show)
+    // - a realistic, moderately-close gap instead.
+    const plain = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: false });
+    const derby = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: true });
+    assert.ok(derby.watchability > plain.watchability);
+  });
+});
+
+describe('computeF1ObjectiveScore', () => {
+  test('a live, dead-heat title race scores near the top', () => {
+    const result = computeF1ObjectiveScore({ titleRaceIntensity: 1 });
+    assert.ok(result.watchability >= 9);
+  });
+
+  test('a fully decided title race scores near the bottom', () => {
+    const result = computeF1ObjectiveScore({ titleRaceIntensity: 0 });
+    assert.ok(result.watchability <= 5);
+  });
+
+  test('missing intensity data falls back to a neutral middle score', () => {
+    const result = computeF1ObjectiveScore({ titleRaceIntensity: null });
+    assert.equal(result.competitiveness, 5);
+    assert.equal(result.watchability, 5);
+  });
+});

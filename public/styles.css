@@ -601,8 +601,8 @@ main#app {
   font-size: 0.87rem;
   color: var(--text-muted);
 }
-.match-reason.is-heuristic::after {
-  content: "（估計，非 AI 推薦）";
+.match-reason.is-api-objective::after {
+  content: "（API 數據估計，尚未經 AI 驗證）";
   font-style: italic;
   color: var(--text-faint);
 }

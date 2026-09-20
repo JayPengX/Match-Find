@@ -170,27 +170,40 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
 //   - 'finished': no score was ever computed (see build-data.mjs) - null,
 //     not a number, since "how confident is this score" is meaningless
 //     when there isn't one.
-//   - 'ai' + refined: the base pass PLUS a second, comparative pass
-//     against its specific contested neighbors (see build-data.mjs's
+//   - 'ai' + refined: a deterministic, real-data objective score (see
+//     build-data.mjs's computeMatchObjectiveScore/scripts/objective-score.mjs)
+//     validated by Gemini PLUS a second, comparative pass against its
+//     specific contested neighbors (see build-data.mjs's
 //     refineContestedClusters) - the strongest evidence this pipeline ever
 //     produces for a match.
-//   - 'ai', not refined: one independent Gemini judgment, grounded in real
-//     signals (current odds, win-loss record, postseason flag - see
-//     build-data.mjs's oddsContext/context) but never cross-checked against
-//     its own neighbors.
-//   - 'heuristic': PROXY_URL was unset or the call failed - a local
-//     win-loss-record-only stand-in with no real sports judgment behind it
-//     at all (see build-data.mjs's heuristicScore).
+//   - 'ai', not refined: the same objective score, validated by one
+//     independent Gemini pass, but never cross-checked against its own
+//     neighbors.
+//   - 'api-objective': the objective score on its own, with a zero
+//     adjustment - PROXY_URL was unset, the call failed, or this fixture is
+//     still waiting its turn (see build-data.mjs's needsScoring/throttling).
+//     Real, current, statistically-grounded data (season record, recent
+//     form, standings proximity, betting odds - see
+//     scripts/objective-score.mjs), just without Gemini's own validation
+//     pass on top yet - meaningfully more trustworthy than the OLD
+//     win-loss-only 'heuristic' fallback this replaced (see below), but
+//     still a notch below anything Gemini has actually looked at.
+//   - 'heuristic': retained only so an OLDER cached/exported match (from
+//     before this pipeline's API-data rewrite) still maps to a sensible
+//     confidence value rather than falling through to null - no build
+//     produces this source value anymore.
 export const CONFIDENCE_BY_SOURCE = {
   finished: null,
   aiRefined: 0.9,
-  ai: 0.7,
+  ai: 0.75,
+  apiObjective: 0.55,
   heuristic: 0.35
 };
 
 export function computeConfidence(match) {
   if (!match || match.source === 'finished' || match.source == null) return CONFIDENCE_BY_SOURCE.finished;
   if (match.source === 'ai') return match.refined ? CONFIDENCE_BY_SOURCE.aiRefined : CONFIDENCE_BY_SOURCE.ai;
+  if (match.source === 'api-objective') return CONFIDENCE_BY_SOURCE.apiObjective;
   if (match.source === 'heuristic') return CONFIDENCE_BY_SOURCE.heuristic;
   return null;
 }

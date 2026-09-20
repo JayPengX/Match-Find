@@ -1,19 +1,22 @@
 // Tests for the pure helper functions exported from scripts/build-data.mjs
-// (isTimeTbd/parseOverallRecord/oddsContext/heuristicScore). Importing this
-// file does NOT run a live build - see build-data.mjs's own entry-module
-// guard at the bottom (`if (isMain) { main()... }`), added specifically so
-// these helpers could be unit-tested without a network call.
+// (isTimeTbd/parseOverallRecord/oddsContext/computeMatchObjectiveScore/...).
+// Importing this file does NOT run a live build - see build-data.mjs's own
+// entry-module guard at the bottom (`if (isMain) { main()... }`), added
+// specifically so these helpers could be unit-tested without a network call.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isTimeTbd,
   parseOverallRecord,
   oddsContext,
-  heuristicScore,
+  parseOddsSignal,
   isEvidenceStale,
   sanitizeCachedEvidenceItem,
   resolveWhereToWatchTw,
-  computeDurationMinutes
+  computeDurationMinutes,
+  computeMatchObjectiveScore,
+  describeFactorsZh,
+  buildObjectiveReasonZh
 } from '../scripts/build-data.mjs';
 
 describe('isTimeTbd', () => {
@@ -57,30 +60,93 @@ describe('oddsContext', () => {
   });
 });
 
-describe('heuristicScore (the local, no-AI fallback)', () => {
-  test('a closer win-loss gap between two teams scores more competitive', () => {
-    const close = heuristicScore({ competitors: [{ record: { wins: 50, losses: 50 } }, { record: { wins: 51, losses: 49 } }] });
-    const lopsided = heuristicScore({ competitors: [{ record: { wins: 90, losses: 10 } }, { record: { wins: 10, losses: 90 } }] });
-    assert.ok(close.competitiveness > lopsided.competitiveness);
+describe('parseOddsSignal', () => {
+  test('extracts spread/overUnder as plain numbers', () => {
+    assert.deepEqual(parseOddsSignal({ odds: [{ spread: -1.5, overUnder: 8.5 }] }), { spread: -1.5, overUnder: 8.5 });
   });
-
-  test('never scores above 8 (deliberately conservative, per this function\'s own comment)', () => {
-    const bothStrong = heuristicScore({ competitors: [{ record: { wins: 100, losses: 0 } }, { record: { wins: 100, losses: 0 } }] });
-    assert.ok(bothStrong.competitiveness <= 8);
-    assert.ok(bothStrong.watchability <= 8);
+  test('returns nulls (never NaN) when no provider has posted odds', () => {
+    assert.deepEqual(parseOddsSignal({}), { spread: null, overUnder: null });
+    assert.deepEqual(parseOddsSignal({ odds: [] }), { spread: null, overUnder: null });
   });
+});
 
-  test('falls back to neutral scores with a Traditional Chinese caveat when records are missing', () => {
-    const noRecords = heuristicScore({ competitors: [{ record: null }, { record: null }] });
-    assert.equal(noRecords.competitiveness, 5);
-    assert.equal(noRecords.watchability, 5);
-    assert.match(noRecords.reason, /戰績資料/);
-  });
-
-  test('always returns a broadcastQuality/enduranceScore, never leaving them undefined', () => {
-    const result = heuristicScore({ competitors: [{ record: { wins: 1, losses: 1 } }, { record: { wins: 2, losses: 2 } }] });
+describe('computeMatchObjectiveScore (the API-data-driven primary score)', () => {
+  test('dispatches an MLB fixture to the MLB formula, using its own competitor records', () => {
+    const match = {
+      sport: 'MLB',
+      broadcast: 'Fox',
+      isPostseason: false,
+      oddsSpread: null,
+      oddsOverUnder: null,
+      competitors: [
+        { name: 'New York Yankees', record: { wins: 70, losses: 30 } },
+        { name: 'Tampa Bay Rays', record: { wins: 30, losses: 70 } }
+      ]
+    };
+    const result = computeMatchObjectiveScore(match, { mlbStandings: new Map(), f1TitleRaceIntensity: null });
+    assert.ok(result.competitiveness <= 3); // a genuinely lopsided record (0.7 vs 0.3 win%)
     assert.equal(typeof result.broadcastQuality, 'number');
-    assert.equal(typeof result.enduranceScore, 'number');
+    assert.ok(Array.isArray(result.factors));
+  });
+
+  test('looks up MLB standings signals by team display name from the provided map', () => {
+    const withStreak = {
+      sport: 'MLB',
+      broadcast: '',
+      isPostseason: false,
+      competitors: [
+        { name: 'New York Yankees', record: { wins: 50, losses: 50 } },
+        { name: 'Tampa Bay Rays', record: { wins: 50, losses: 50 } }
+      ]
+    };
+    const mlbStandings = new Map([
+      ['New York Yankees', { gamesBack: null, wildCardGamesBack: null, lastTen: null, streakCode: 'W8' }]
+    ]);
+    const withoutSignal = computeMatchObjectiveScore(withStreak, { mlbStandings: new Map(), f1TitleRaceIntensity: null });
+    const withSignal = computeMatchObjectiveScore(withStreak, { mlbStandings, f1TitleRaceIntensity: null });
+    assert.ok(withSignal.watchability >= withoutSignal.watchability);
+  });
+
+  test('dispatches F1 to the title-race formula regardless of competitors (F1 has none)', () => {
+    const match = { sport: 'F1', broadcast: 'Apple TV', competitors: [] };
+    const result = computeMatchObjectiveScore(match, { mlbStandings: new Map(), f1TitleRaceIntensity: 1 });
+    assert.ok(result.watchability >= 9);
+  });
+
+  test('an unrecognized sport falls back to a neutral score rather than throwing', () => {
+    const result = computeMatchObjectiveScore({ sport: 'Curling', broadcast: '', competitors: [] }, {});
+    assert.equal(result.competitiveness, 5);
+    assert.equal(result.watchability, 5);
+  });
+
+  test('broadcastQuality is always a number, derived from the broadcast field', () => {
+    const match = { sport: 'NBA', broadcast: 'ESPN', competitors: [{ record: null }, { record: null }] };
+    const result = computeMatchObjectiveScore(match, {});
+    assert.equal(result.broadcastQuality, 7);
+  });
+});
+
+describe('describeFactorsZh', () => {
+  test('maps recognized English factor strings to short Traditional Chinese labels', () => {
+    const labels = describeFactorsZh(['season win% gap 5.0pp', 'postseason game']);
+    assert.deepEqual(labels, ['雙方戰績', '季後賽']);
+  });
+  test('deduplicates labels and ignores unrecognized factors', () => {
+    const labels = describeFactorsZh(['season win% gap 1pp', 'season win% gap 2pp', 'some unrecognized thing']);
+    assert.deepEqual(labels, ['雙方戰績']);
+  });
+  test('returns an empty array for no/empty factors, never throws', () => {
+    assert.deepEqual(describeFactorsZh([]), []);
+    assert.deepEqual(describeFactorsZh(undefined), []);
+  });
+});
+
+describe('buildObjectiveReasonZh', () => {
+  test('builds a sentence grounded in the real factors behind the score', () => {
+    assert.match(buildObjectiveReasonZh(['season win% gap 5pp']), /雙方戰績/);
+  });
+  test('falls back to an honest "no data" sentence when there are no factors at all', () => {
+    assert.match(buildObjectiveReasonZh([]), /沒有足夠的客觀數據/);
   });
 });
 
