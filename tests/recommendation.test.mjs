@@ -621,6 +621,35 @@ describe('Test 5 - MLB continuation respects the real overrun-padded end, not ju
     // (transition buffer) minutes = 22:07:30.
     const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T22:10:00.000Z', effectiveScore: 7 });
     assert.ok(canWatchSequentially(game, next));
+  });
+
+  test('a FINISHED match is never padded with the overrun buffer - its own durationMinutes is already the real observed length', () => {
+    // The exact reported bug: a game that dropped 30-60 minutes off its own
+    // predicted length still had ANOTHER 25% padded on top once it was
+    // already over, keeping an obviously-fine continuation blocked. Once
+    // build-data.mjs marks a match isFinished, its durationMinutes is
+    // already real (see build-data.mjs's finishedDurationMinutes) - there
+    // is no more forward uncertainty left to hedge.
+    const liveUncertain = mlbMatch({ durationMinutes: 150 });
+    const finished = mlbMatch({ durationMinutes: 150, isFinished: true });
+    assert.equal(schedulingDurationMinutes(finished), 150);
+    assert.ok(schedulingDurationMinutes(liveUncertain) > 150);
+  });
+
+  test('a later match CAN immediately follow a finished MLB game that ran shorter than its own nominal length', () => {
+    const game = mlbMatch({
+      id: 'mlb',
+      startTimeUtc: '2026-09-19T18:00:00.000Z',
+      durationMinutes: 150,
+      isFinished: true,
+      effectiveScore: 7
+    });
+    // 18:00 + 150 min (no overrun, isFinished) + 10 min transition = 20:40.
+    // The OLD (still-padded) model would have needed 18:00 + 150*1.25 + 10
+    // = 21:17:30 before allowing this, which is exactly the reported
+    // "obvious continuation" bug.
+    const next = footballMatch({ id: 'next', startTimeUtc: '2026-09-19T20:45:00.000Z', effectiveScore: 7 });
+    assert.ok(canWatchSequentially(game, next));
     const plan = computeDayPlan('2026-09-19', [game, next]);
     assert.deepEqual(plan.map(m => m.id).sort(), ['mlb', 'next']);
   });
@@ -690,6 +719,42 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
     assert.equal(daysBetweenDayKeys('2026-09-20', '2026-09-19'), 1);
     assert.equal(daysBetweenDayKeys('2026-09-22', '2026-09-19'), 3);
     assert.equal(daysBetweenDayKeys('2026-09-19', '2026-09-19'), 0);
+  });
+
+  test('a matchup repeated on 3 consecutive days is penalized on day 2 AND day 3 - a later occurrence must never mask an earlier one', () => {
+    // Reproduces the exact reported bug: three real consecutive days of the
+    // same MLB matchup (a genuine short back-to-back series). Day 2 needs
+    // to see gap=1 from day 1, and day 3 needs to see gap=1 from day 2 -
+    // NOT "gap computed against whichever day happens to be LAST in the
+    // whole window" (day 3 itself, for day 3's own query - gap 0, silently
+    // ignored) or "day 3, for day 2's own query" (a NEGATIVE, and
+    // therefore also silently ignored, gap) - which is what reusing one
+    // flat end-of-window map for every day's own re-query produces.
+    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
+    const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
+    const day3 = [mlbMatch({ id: 'd3', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
+    computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-20', day2],
+        ['2026-09-21', day3]
+      ])
+    );
+    assert.equal(day2[0].recentRepeatPenalty, 2.5); // gap=1 from day1
+    assert.equal(day3[0].recentRepeatPenalty, 2.5); // gap=1 from day2, not 0
+  });
+
+  test('historyByDayKey holds each day\'s OWN pre-that-day snapshot, not the final whole-window map', () => {
+    const day1 = [footballMatch({ id: 'd1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8, name: 'M' })];
+    const day2 = [footballMatch({ id: 'd2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'M' })];
+    const { historyByDayKey } = computeWindowPlan(
+      new Map([
+        ['2026-09-19', day1],
+        ['2026-09-20', day2]
+      ])
+    );
+    assert.equal(historyByDayKey.get('2026-09-19').size, 0); // nothing recommended before the first day
+    assert.equal(historyByDayKey.get('2026-09-20').get(matchupKey(day2[0])), '2026-09-19');
   });
 
   test('applyRecentRepeatPenalties never touches effectiveScore itself, only the new planningScore field', () => {

@@ -263,7 +263,18 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   only decides how much time the PLAN reserves before offering something
   else. A small fixed buffer (`TRANSITION_BUFFER_MINUTES`) also sits
   between any two back-to-back picks, so "ends at 8:00, starts at 8:00" no
-  longer counts as a real gap.
+  longer counts as a real gap. **The overrun buffer only ever applies
+  before a match is over.** Once ESPN's own status confirms a fixture is
+  finished, `durationMinutes` (see `scripts/build-data.mjs`'s
+  `finishedDurationMinutes`) stops being a pre-game guess and becomes the
+  REAL elapsed broadcast time as of that fetch, and
+  `schedulingDurationMinutes` stops padding it any further - there's no
+  forward uncertainty left to hedge once the real length is already known.
+  This is the direct fix for a reported bug: a finished MLB game that
+  genuinely ran 30-60 minutes SHORTER than its own pre-game prediction
+  still had another 25% padded on top of that longer, now-known-wrong
+  guess, which kept blocking a next match that could obviously,
+  actually follow it.
 - **The same matchup doesn't default to winning every day of a series.**
   `computeWindowPlan` walks the whole fetched window in date order and
   applies a small, decaying penalty (`applyRecentRepeatPenalties`) to a
@@ -271,7 +282,18 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   let a close alternative win instead, never strong enough to override a
   genuinely much better repeat (see `RECENT_REPEAT_PENALTY_BY_GAP_DAYS`).
   This only affects which fixture wins the plan, never the underlying
-  score shown on the card.
+  score shown on the card. Each day is penalized against its own correct
+  history - `computeWindowPlan` exposes a `historyByDayKey` snapshot taken
+  BEFORE that day's own picks are folded in, and app.js's
+  `dayCandidatesForPlan`/`pinSlotChoice` (which re-derive a single day's
+  candidates outside the original chronological pass) read from that, not
+  from the flat whole-window `lastRecommendedDayKey`. A flat map only
+  remembers one occurrence per matchup - the LAST one anywhere in the
+  fetched window - which for a real short back-to-back series is often a
+  day AFTER the one being re-queried, silently zeroing out the penalty for
+  every earlier occurrence too (a negative or same-day gap is treated as
+  "no history"). This was the direct cause of a reported bug: the same MLB
+  matchup recommended three days running with no visible penalty at all.
 - **Nor does one sport get to dominate the plan by default.** The same
   function ALSO tracks the last few days' own picks by sport
   (`SPORT_CONCENTRATION_LOOKBACK_DAYS`) and applies a small penalty once
@@ -363,7 +385,15 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   the day's plan around it (`pinSlotChoice`). A card whose start overlaps
   an earlier match - whether or not either one made the plan - gets a
   small note naming that match and how long they overlap
-  (`computeOverlapRange` in `buildMatchCard`).
+  (`computeOverlapRange` in `buildMatchCard`). The pin re-render reuses the
+  exact DOM node the viewer's finger just settled on rather than rebuilding
+  it (see `interactedStack`/`renderRecommendedSection` in `app.js`) - but
+  reusing the node still means detaching and reattaching it once, which by
+  itself is enough to reset a scrollable element's own scroll position back
+  to its first card on at least some mobile WebKit builds. The reused
+  node's scroll position is explicitly captured before that move and
+  restored after, so a completed swipe can't snap back to (and get stuck
+  on) the wrong card.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day

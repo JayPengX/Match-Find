@@ -241,6 +241,27 @@ export function computeDurationMinutes(league, away, home, venue, broadcast, odd
   }
 }
 
+// Once ESPN itself confirms a fixture is over (isFinished), its real
+// length is simply how long ago it started, as of this fetch - exact
+// modulo this workflow's own 15-minute cron cadence, and categorically
+// better than the PRE-GAME estimate computeDurationMinutes above returns
+// for a fixture that hasn't started yet. This is the direct fix for a
+// reported bug: a finished MLB game whose broadcast genuinely ran 30-60
+// minutes SHORTER than its own pre-game prediction still reserved a
+// schedule block sized to that longer, now-known-wrong guess (see
+// recommendation.mjs's schedulingDurationMinutes, which also stops adding
+// its own overrun buffer once isFinished is true - there's no forward
+// uncertainty left to hedge once the real length is already known), which
+// kept blocking a next match that could obviously, actually follow it.
+// Floored well below any realistic finished-game length so a data glitch
+// (ESPN marking a fixture 'post' almost immediately, e.g. a postponement)
+// can't produce a laughably tiny reserved block.
+export const MIN_FINISHED_DURATION_MINUTES = 30;
+export function finishedDurationMinutes(startTimeUtc, now) {
+  const elapsedMinutes = Math.round((now.getTime() - Date.parse(startTimeUtc)) / 60_000);
+  return Math.max(MIN_FINISHED_DURATION_MINUTES, elapsedMinutes);
+}
+
 // ---- Taiwan broadcast source (a hardcoded rule, not an AI guess) --------
 //
 // Product decision: 愛爾達體育台 carries nearly everything this site
@@ -442,14 +463,16 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         isPostseason,
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
-        durationMinutes: computeDurationMinutes(
-          league,
-          away,
-          home,
-          competition.venue?.fullName || '',
-          broadcast || '',
-          oddsSignal.overUnder
-        ),
+        durationMinutes: isFinished
+          ? finishedDurationMinutes(new Date(startMs).toISOString(), now)
+          : computeDurationMinutes(
+              league,
+              away,
+              home,
+              competition.venue?.fullName || '',
+              broadcast || '',
+              oddsSignal.overUnder
+            ),
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
@@ -513,8 +536,11 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
       // Only the main Race gets a circuit-specific prediction - see
       // sport-duration.mjs's own comment for why Qualifying/Sprint keep
       // their flat session.durationMinutes instead.
-      const durationMinutes =
-        sessionType.abbreviation === 'Race' ? predictF1RaceDurationMinutes(venue) : sessionType.durationMinutes;
+      const durationMinutes = isFinished
+        ? finishedDurationMinutes(new Date(startMs).toISOString(), now)
+        : sessionType.abbreviation === 'Race'
+          ? predictF1RaceDurationMinutes(venue)
+          : sessionType.durationMinutes;
 
       matches.push({
         id: `f1-${event.id}-${sessionType.abbreviation.toLowerCase()}`,

@@ -87,14 +87,23 @@ const state = {
   // prunePinnedChoices) rather than kept forever, since a day that's aged
   // out of the fetched window can never be looked up again anyway.
   pinnedChoices: loadPinnedChoices(),
-  // Map<matchupKey, dayKey> - the most recent day, across the WHOLE fetched
-  // window regardless of the current sport filter, that matchup actually
-  // won its day's plan. Recomputed by renderSections (see
+  // Map<dayKey, Map<matchupKey, dayKey>> - computeWindowPlan's
+  // historyByDayKey: for each day, the most recent EARLIER day (across the
+  // WHOLE fetched window, regardless of the current sport filter) that
+  // matchup actually won its day's plan. Recomputed by renderSections (see
   // computeWindowPlan) before every render, so a soft cross-day repeat
   // penalty (applyRecentRepeatPenalties) can see "did we already
   // recommend this exact matchup on an earlier day" no matter which day
   // or sport filter the viewer currently has open - see docs/
   // recommendation-engine-audit.md's "cross-day repetition" finding.
+  //
+  // Keyed per-day (not one flat Map<matchupKey, dayKey>) because a flat
+  // map can only remember one occurrence per matchup - the LAST one
+  // processed across the whole window - which for a real short
+  // back-to-back series is very often a day AFTER the one being asked
+  // about, silently hiding every earlier occurrence from that day's own
+  // repeat penalty (see computeWindowPlan's own comment on historyByDayKey
+  // for the exact "same matchup recommended 3 days running" bug this was).
   recommendationHistory: new Map(),
   // Map<dayKey, matches[]> - the rolling window of recently-recommended
   // matches (see computeWindowPlan's own comment) each day's soft
@@ -728,7 +737,12 @@ function dayLabelFor(date, { short = false } = {}) {
 // computation that could disagree with what's on screen.
 function dayCandidatesForPlan(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyRecentRepeatPenalties(dayCandidates, dayKey, state.recommendationHistory, state.recentPicksByDayKey.get(dayKey) || []);
+  // state.recommendationHistory.get(dayKey) - NOT the whole-window flat
+  // map - see that field's own comment for why: it has to be "what was
+  // recommended before THIS day", not "each matchup's last occurrence
+  // anywhere in the fetched window".
+  const history = state.recommendationHistory.get(dayKey) || new Map();
+  applyRecentRepeatPenalties(dayCandidates, dayKey, history, state.recentPicksByDayKey.get(dayKey) || []);
   return dayCandidates;
 }
 
@@ -1385,6 +1399,10 @@ function renderRecommendedSection() {
   const pendingReuse = interactedStack;
   interactedStack = null;
   const fragment = document.createDocumentFragment();
+  // Set at most once below, by the single reused stack's own branch (see
+  // its comment) - captured here, restored after the fragment is actually
+  // back in the live document.
+  let reusedScrollerToRestore = null;
   ordered.forEach((match, index) => {
     const alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
     if (alternatives.length) {
@@ -1398,9 +1416,27 @@ function renderRecommendedSection() {
         pendingReuse.memberOrderKey === slotMemberOrderKey(members)
       ) {
         // The viewer's own gesture already scrolled this exact node to
-        // exactly the right card - reuse it as-is (same live element, so
-        // its scrollLeft is untouched) and only patch the small bit of
-        // state a pin actually changes.
+        // exactly the right card - reuse it and only patch the small bit
+        // of state a pin actually changes, rather than tearing it down and
+        // rebuilding it (see interactedStack's own comment for the original
+        // "flashes back to the previous card" bug this fixes).
+        //
+        // Moving it into `fragment` and then into recommendedListEl below
+        // is still a real DOM detach+reattach of this exact node, though -
+        // on at least some mobile WebKit builds that alone is enough to
+        // reset a scrollable element's own scrollLeft back to 0, which
+        // showed up as an even worse regression than the original bug:
+        // every completed swipe snapped the stack straight back to its
+        // first (highest-scored) card and stayed there, with nothing left
+        // to correct it since (unlike buildMatchStack's own
+        // requestAnimationFrame call for a freshly built stack) this reuse
+        // path never re-applied the viewer's own scroll position after the
+        // move. Capturing it before the move and restoring it after -
+        // synchronously and, in case the reset only happens after layout,
+        // once more on the next frame - closes that gap without giving up
+        // the node-reuse fix itself.
+        const scrollerEl = pendingReuse.node.querySelector('.match-stack-scroller');
+        reusedScrollerToRestore = scrollerEl ? { scrollerEl, scrollLeft: scrollerEl.scrollLeft } : null;
         patchStackSelectionTags(pendingReuse.node, members, isTopOfDay, match.id);
         fragment.appendChild(pendingReuse.node);
       } else {
@@ -1413,6 +1449,20 @@ function renderRecommendedSection() {
     }
   });
   recommendedListEl.replaceChildren(fragment);
+  // Only NOW is the reused node actually back in the live document - see
+  // its own comment above for why the detach+reattach above can reset its
+  // scrollLeft on some mobile WebKit builds, and why restoring it has to
+  // happen after this insertion (setting scrollLeft on a node still sitting
+  // in a detached DocumentFragment doesn't reliably stick once it's moved
+  // again right after). Set synchronously and once more next frame, in
+  // case the reset only actually happens after layout settles.
+  if (reusedScrollerToRestore) {
+    const { scrollerEl, scrollLeft } = reusedScrollerToRestore;
+    scrollerEl.scrollLeft = scrollLeft;
+    requestAnimationFrame(() => {
+      scrollerEl.scrollLeft = scrollLeft;
+    });
+  }
 }
 
 function renderAllMatchesSection() {
@@ -1441,7 +1491,7 @@ function renderSections() {
   // unfiltered plan, not necessarily what actually renders below.
   const matchesByDayKey = new Map(state.days.map(day => [day.key, matchesForDay(day.key)]));
   const windowPlan = computeWindowPlan(matchesByDayKey, state.pinnedChoices);
-  state.recommendationHistory = windowPlan.lastRecommendedDayKey;
+  state.recommendationHistory = windowPlan.historyByDayKey;
   state.recentPicksByDayKey = windowPlan.recentPicksByDayKey;
   state.sportConcentration = windowPlan.sportConcentration;
   renderRecommendedSection();

@@ -13,6 +13,8 @@ import {
   sanitizeCachedEvidenceItem,
   resolveWhereToWatchTw,
   computeDurationMinutes,
+  finishedDurationMinutes,
+  MIN_FINISHED_DURATION_MINUTES,
   computeMatchObjectiveScore,
   describeFactorsZh,
   buildObjectiveReasonZh
@@ -214,6 +216,20 @@ describe('computeDurationMinutes', () => {
   test('falls back to the league\'s own flat duration for an unrecognized league id', () => {
     const duration = computeDurationMinutes({ id: 'mls', durationMinutes: 120 }, { name: 'A' }, { name: 'B' }, '', '');
     assert.equal(duration, 120);
+  });
+});
+
+describe('finishedDurationMinutes', () => {
+  test('returns the real elapsed minutes between kickoff and this fetch', () => {
+    const start = '2026-09-19T18:00:00.000Z';
+    const now = new Date('2026-09-19T20:30:00.000Z'); // 150 real minutes later
+    assert.equal(finishedDurationMinutes(start, now), 150);
+  });
+
+  test('floors an implausibly tiny reading (e.g. a fixture marked post almost immediately)', () => {
+    const start = '2026-09-19T18:00:00.000Z';
+    const now = new Date('2026-09-19T18:05:00.000Z');
+    assert.equal(finishedDurationMinutes(start, now), MIN_FINISHED_DURATION_MINUTES);
   });
 });
 

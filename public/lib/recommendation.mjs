@@ -438,7 +438,21 @@ export const TRANSITION_BUFFER_MINUTES = 10;
 // (see schedulingInterval) - there is no second, separately-tuned notion
 // of "how long is this event" anywhere else in the planner.
 export function schedulingDurationMinutes(match) {
-  const overrun = DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
+  // A FINISHED match's own durationMinutes (see build-data.mjs's
+  // finishedDurationMinutes) is already the real observed elapsed time as
+  // of the last fetch, not a pre-game guess - there is no forward
+  // uncertainty left to hedge once ESPN itself confirms the fixture is
+  // over, so the overrun buffer below only ever applies to a match that
+  // HASN'T finished yet. Without this, a no-clock sport's game that
+  // genuinely ran SHORT (the reported "obvious continuation" bug: a game
+  // that dropped 30-60 minutes off its own predicted length) still got its
+  // already-real, already-short duration padded by another 25% on top,
+  // reserving time for overrun risk that had already definitively NOT
+  // happened - exactly what kept blocking a next match that could clearly,
+  // obviously follow it in real life.
+  const overrun = match.isFinished
+    ? 0
+    : DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
   return effectiveDurationMinutes(match) * (1 + overrun);
 }
 
@@ -1120,8 +1134,27 @@ export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDa
 //
 // Returns:
 //   - `plan`: Map<dayKey, picks>
-//   - `lastRecommendedDayKey`: the matchup-repeat history (see
-//     applyRecentRepeatPenalties)
+//   - `lastRecommendedDayKey`: the FINAL matchup-repeat history, as it
+//     stands after every day in the window has been processed - useful as
+//     a whole-window summary/diagnostic, but NOT what a later per-day
+//     re-query (app.js's dayCandidatesForPlan/pinSlotChoice) should use as
+//     "history" for that day - see historyByDayKey below for why.
+//   - `historyByDayKey`: Map<dayKey, Map<matchupKey, dayKey>> - the
+//     matchup-repeat history AS IT STOOD immediately BEFORE that day's own
+//     picks were folded in, i.e. exactly what applyRecentRepeatPenalties
+//     actually used to score that day's candidates the one time this
+//     function computed them. This is the one a caller re-deriving a
+//     SINGLE day's candidates later (outside this same chronological pass)
+//     must use instead of the flat `lastRecommendedDayKey` above: that flat
+//     map only holds each matchup's LAST occurrence across the ENTIRE
+//     window, which for a real short back-to-back series (the reported
+//     "same MLB matchup recommended 3 days running" bug) is very often a
+//     day AFTER the one being re-queried - daysBetweenDayKeys(dayKey,
+//     future-day) is negative, so applyRecentRepeatPenalties's own `gap > 0`
+//     guard silently treats it as "no history at all" and the repeat
+//     penalty this whole mechanism exists for never actually applies,
+//     however many times that same matchup was already recommended on
+//     earlier days in the window.
 //   - `recentPicksByDayKey`: Map<dayKey, matches[]> - exactly the rolling
 //     "last few days' picks" this function itself used to weigh THAT day's
 //     sport-concentration penalty, reusable as-is by a caller scoped to
@@ -1136,6 +1169,7 @@ export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
   const lastRecommendedDayKey = new Map();
   const plan = new Map();
   const recentPicksByDayKey = new Map();
+  const historyByDayKey = new Map();
   const recentDayPicks = []; // rolling [{dayKey, picks}], oldest first
   dayKeys.forEach(dayKey => {
     const dayMatches = matchesByDayKey.get(dayKey) || [];
@@ -1143,6 +1177,9 @@ export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
       .filter(entry => daysBetweenDayKeys(dayKey, entry.dayKey) <= SPORT_CONCENTRATION_LOOKBACK_DAYS)
       .flatMap(entry => entry.picks);
     recentPicksByDayKey.set(dayKey, recentPicks);
+    // Snapshotted BEFORE this day's own picks are folded into
+    // lastRecommendedDayKey below - see historyByDayKey's own comment.
+    historyByDayKey.set(dayKey, new Map(lastRecommendedDayKey));
     applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks);
     const picks = computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
     picks.forEach(match => lastRecommendedDayKey.set(matchupKey(match), dayKey));
@@ -1152,6 +1189,7 @@ export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
   return {
     plan,
     lastRecommendedDayKey,
+    historyByDayKey,
     recentPicksByDayKey,
     sportConcentration: computeSportConcentration(recentDayPicks.flatMap(entry => entry.picks))
   };
