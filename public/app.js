@@ -1220,12 +1220,33 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   requestAnimationFrame(() => {
     scroller.scrollLeft = primaryIndex * scroller.clientWidth;
   });
-  // One listener does both jobs: the dots update on every scroll tick
-  // (cheap, purely visual), while the actual pin+rebuild only fires once
-  // the gesture SETTLES - a short debounce after scrolling stops, not on
-  // every intermediate tick mid-swipe, which would otherwise re-pin (and
-  // re-render the whole page) dozens of times during one swipe.
+  // Reads which card is actually centered right now, clamped to a real
+  // index - scroll-snap's own momentum/rubber-banding can briefly push
+  // scrollLeft a little negative or past the last card's offset (an
+  // overscroll bounce at either end), which without clamping rounded to an
+  // out-of-bounds index and, worse, drifted the settle handler's read of
+  // "which card is this" away from where the browser had actually snapped.
+  function currentIndex() {
+    const width = Math.max(1, scroller.clientWidth);
+    return Math.min(ordered.length - 1, Math.max(0, Math.round(scroller.scrollLeft / width)));
+  }
+  // The actual pin+rebuild only fires once the gesture SETTLES, not on
+  // every intermediate tick mid-swipe (which would otherwise re-pin, and
+  // re-render the whole page, dozens of times during one swipe). Native
+  // 'scrollend' (Chrome/Firefox/Edge, Safari 18.2+) fires exactly once
+  // scrolling - including snap settling and any momentum/rubber-band
+  // bounce - has genuinely finished, so it's used when available instead of
+  // guessing a fixed debounce: reading scrollLeft before the snap has fully
+  // settled is what previously made a plain forward swipe occasionally
+  // resolve to a card one or two positions away from the one it actually
+  // stopped on.
+  const supportsScrollEnd = 'onscrollend' in window;
   let settleTimer = null;
+  function settle() {
+    const activeIndex = currentIndex();
+    const chosen = ordered[activeIndex];
+    if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
+  }
   scroller.addEventListener(
     'scroll',
     () => {
@@ -1234,16 +1255,16 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // gesture start - the periodic 60s re-render this guards against can
       // land at any point during a swipe that takes longer than one tick.
       markStackInteraction();
-      const activeIndex = Math.round(scroller.scrollLeft / Math.max(1, scroller.clientWidth));
+      const activeIndex = currentIndex();
       dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        const chosen = ordered[activeIndex];
-        if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
-      }, 180);
+      if (!supportsScrollEnd) {
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(settle, 180);
+      }
     },
     { passive: true }
   );
+  if (supportsScrollEnd) scroller.addEventListener('scrollend', settle, { passive: true });
 
   wrapper.append(hint, scroller, dots);
   return wrapper;

@@ -10,7 +10,6 @@ import {
   parseOverallRecord,
   oddsContext,
   parseOddsSignal,
-  isEvidenceStale,
   sanitizeCachedEvidenceItem,
   resolveWhereToWatchTw,
   computeDurationMinutes,
@@ -218,37 +217,3 @@ describe('computeDurationMinutes', () => {
   });
 });
 
-describe('isEvidenceStale', () => {
-  const now = new Date('2026-09-19T12:00:00.000Z');
-
-  test('an entry with no evidence at all is never flagged stale', () => {
-    assert.equal(isEvidenceStale({ evidence: [] }, now), false);
-    assert.equal(isEvidenceStale({}, now), false);
-    assert.equal(isEvidenceStale(null, now), false);
-  });
-
-  test('evidence retrieved within the freshness window is not stale', () => {
-    const cached = { evidence: [{ retrievedAt: '2026-09-19T00:00:00.000Z' }] }; // 12h ago
-    assert.equal(isEvidenceStale(cached, now), false);
-  });
-
-  test('evidence older than EVIDENCE_MAX_AGE_HOURS (24h) is stale', () => {
-    const cached = { evidence: [{ retrievedAt: '2026-09-18T00:00:00.000Z' }] }; // 36h ago
-    assert.equal(isEvidenceStale(cached, now), true);
-  });
-
-  test('uses the MOST RECENT item when an entry has several evidence items', () => {
-    const cached = {
-      evidence: [
-        { retrievedAt: '2026-09-01T00:00:00.000Z' }, // very old
-        { retrievedAt: '2026-09-19T06:00:00.000Z' } // 6h ago - recent
-      ]
-    };
-    assert.equal(isEvidenceStale(cached, now), false);
-  });
-
-  test('a malformed/missing retrievedAt never throws or crashes staleness detection', () => {
-    assert.equal(isEvidenceStale({ evidence: [{ retrievedAt: 'not a date' }] }, now), false);
-    assert.equal(isEvidenceStale({ evidence: [{}] }, now), false);
-  });
-});

@@ -32,16 +32,21 @@
 // real, current, data-grounded number either way, just without that one
 // extra layer of judgment.
 //
-// Gemini is only ever asked to validate a given match ONCE, the first
-// build where that match appears inside the fetch window and its objective
-// score is ready - see the AI score cache section below.
+// There is no persistent per-match cache. Every unthrottled run (see
+// AI_FETCH_MIN_INTERVAL_HOURS below) sends EVERY currently non-finished
+// fixture in the fetch window to Gemini fresh - not just newly-appeared
+// ones - since the objective score itself is also recomputed fresh every
+// run and a stale validation from hours ago is worth less than re-checking
+// against today's actual data. A throttled scheduled run in between just
+// leaves every fixture on its objective score alone until the next
+// unthrottled one.
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
-// Confidence is computed from exactly the same source/refined signals this
-// script's own AI score cache already tracks (see computeConfidence's own
-// comment) - shared with public/app.js's resolveViewingPlan (which
+// Confidence is computed from exactly the same source/refined fields this
+// script sets on each match below (see computeConfidence's own comment) -
+// shared with public/app.js's resolveViewingPlan (which
 // recomputes the same number client-side purely for display, since a
 // finished match's confidence can't be baked in once and stay correct
 // forever the way an already-computed score can) so there's exactly one
@@ -86,44 +91,15 @@ const PROXY_URL = (process.env.PROXY_URL || '').trim().replace(/\/+$/, '');
 const BUILD_ID = (process.env.BUILD_ID || 'local').trim();
 const OUTPUT_PATH = new URL('../public/data/matches.json', import.meta.url);
 // Committed to the repo (unlike matches.json, which is fully regenerated
-// every run) - this is the persistent record of which matches have already
-// been validated by Gemini, so it has to survive between separate workflow
-// runs. See .github/workflows/deploy.yml's "Commit updated AI score cache"
-// step for how it gets pushed back.
-const CACHE_PATH = new URL('../data/ai-cache.json', import.meta.url);
-// Sibling to CACHE_PATH, committed the same way (see .github/workflows/
-// deploy.yml's "Commit updated AI score cache" step) - holds the one thing
-// that isn't keyed by match id: when Gemini was last actually called. Kept
-// out of ai-cache.json itself so that file stays a pure match-id map.
+// every run) - NOT a cache of match data (see the top-of-file comment: this
+// pipeline no longer keeps a persistent per-match AI cache at all, so every
+// unthrottled run revalidates everything fresh). The one thing that
+// genuinely needs to survive between separate workflow runs is a plain
+// timestamp: when Gemini was last actually called, which
+// AI_FETCH_MIN_INTERVAL_HOURS below reads to decide whether a routine
+// scheduled run should call it again. See .github/workflows/deploy.yml's
+// "Commit AI fetch timestamp" step for how it gets pushed back.
 const AI_META_PATH = new URL('../data/ai-meta.json', import.meta.url);
-
-// Bumped whenever a change to the shared proxy's /match-recommend prompt/
-// schema, or to this script's own scoring pipeline, is worth re-validating
-// already-cached matches for - every cache entry stamps the PROMPT_VERSION
-// it was scored under, and needsScoring below retries anything scored
-// under an older one.
-// v6-v10: see this repo's git history - broadcastQuality, real-signal
-// context (odds/live search), enduranceScore, structured evidence, and
-// cross-fixture comparison were added one at a time to the old
-// "Gemini scores from scratch" pipeline.
-// v11: complete architectural rewrite. competitiveness/watchability/
-// enduranceScore/broadcastQuality are now computed FIRST, deterministically
-// (scripts/objective-score.mjs + scripts/sport-signals.mjs) from real
-// sports-data APIs - MLB Stats API standings/recent form, the Ergast-
-// compatible Jolpica F1 championship standings, and season records/betting
-// odds already fetched from ESPN - rather than asked from Gemini's own
-// training-data impression of two teams. The shared proxy's
-// /match-recommend and /match-recommend-refine now VALIDATE that objective
-// score and return a small, bounded adjustment (see AI_ADJUSTMENT_BOUND
-// below), never a score from scratch. heuristicScore is gone entirely -
-// the objective score's own graceful handling of a missing signal (a
-// neutral 5, not a crude win-rate-only guess) already covers what it used
-// to be for. Every cache entry now stores an ADJUSTMENT, not an absolute
-// score (the objective score itself is recomputed fresh every run, since
-// standings/form genuinely change day to day) - this bump discards every
-// existing cache entry's old absolute-score shape and re-validates the
-// whole window once under the new schema.
-const PROMPT_VERSION = 11;
 
 // A validation adjustment from the shared proxy is clamped to this range in
 // EITHER direction, regardless of what it actually returns (the proxy
@@ -149,35 +125,12 @@ function clampAdjustment(value) {
 // already-sanitized response blindly).
 const EVIDENCE_CATEGORIES = ['competitiveness', 'mediaAttention', 'eventImportance', 'recentContext'];
 
-// How stale a cached match's own evidence is allowed to get before a run
-// retries it even though its promptVersion is already current - online
-// public/media attention can change within hours in a way a team's
-// underlying quality never does, so evidence gets its own, shorter refresh
-// cadence instead of waiting on the next unrelated PROMPT_VERSION bump.
-const EVIDENCE_MAX_AGE_HOURS = 24;
-
-// True when a cached match's OWN evidence (not its adjustment) is old
-// enough to be worth a fresh search pass on the next eligible run - see
-// EVIDENCE_MAX_AGE_HOURS. An entry with no evidence at all (a genuine
-// "search found nothing worth adding" result) is never flagged stale here -
-// retrying it belongs to needsScoring's own `source !== 'ai'` check
-// instead, so a fixture with reliably boring news coverage doesn't get
-// re-sent to Gemini forever just because it has nothing to go stale.
-export function isEvidenceStale(cached, now) {
-  if (!Array.isArray(cached?.evidence) || !cached.evidence.length) return false;
-  const retrievedAtMs = Math.max(
-    ...cached.evidence.map(item => Date.parse(item.retrievedAt || '')).filter(Number.isFinite)
-  );
-  if (!Number.isFinite(retrievedAtMs)) return false;
-  return now.getTime() - retrievedAtMs > EVIDENCE_MAX_AGE_HOURS * 60 * 60 * 1000;
-}
-
 // Bounds/re-validates one evidence item pulled from the shared proxy's
-// /match-recommend response before it's written into the durable cache -
-// the proxy already sanitizes its own response (see that repo's
+// /match-recommend response before it's written into matches.json - the
+// proxy already sanitizes its own response (see that repo's
 // sanitizeEvidence), but this is still a network response crossing a repo
-// boundary into a file this script commits back to git, so it gets the
-// same "never fully trust upstream" treatment as every adjustment above.
+// boundary, so it gets the same "never fully trust upstream" treatment as
+// every adjustment above.
 export function sanitizeCachedEvidenceItem(item) {
   return {
     category: EVIDENCE_CATEGORIES.includes(item?.category) ? item.category : 'recentContext',
@@ -235,14 +188,10 @@ const REFINE_CLUSTER_MAX_ITEMS = 6;
 // everything through DAYS_AHEAD is already baked into matches.json by the
 // time anyone opens the page. 14 gives that click something real to reveal.
 const DAYS_AHEAD = 14;
-// Cache entries for matches that started more than this long ago are
-// dropped on every run - once a match has aired there's no reason to keep
-// re-shipping its adjustment in the cache file forever.
-const CACHE_RETENTION_HOURS = 12;
 // The shared proxy's /match-recommend route caps a single request at 80
-// fixtures (see that repo's worker.js) - a 14-day window's first ever
-// build can easily find several hundred NEW fixtures at once (nothing is
-// cached yet), so those get sent in sequential batches under that cap
+// fixtures (see that repo's worker.js) - an unthrottled run against a
+// 14-day window sends EVERY non-finished fixture (there's no cache to
+// shrink that list), so those get sent in sequential batches under that cap
 // rather than in one oversized request.
 const AI_SCORE_BATCH_SIZE = 75;
 
@@ -671,29 +620,19 @@ export function buildObjectiveReasonZh(factors) {
   return `依${labels.slice(0, 3).join('、')}計算。`;
 }
 
-// ---- AI score cache ---------------------------------------------------
-// Keyed by match id (stable across runs), so a match already validated BY
-// GEMINI on an earlier run is never re-sent. Stores an ADJUSTMENT (a small
-// number added to whatever the objective score computes THIS run), not an
-// absolute score - the objective score itself is recomputed fresh every
-// build (standings/form change daily), so caching an old absolute number
-// would silently go stale in a way caching the AI's own small, rarely-
-// changing opinion doesn't.
+// ---- AI validation (no persistent per-match cache) --------------------
+// picks (built fresh in main(), per run, keyed by match id) holds an
+// ADJUSTMENT - a small number added to whatever the objective score
+// computes THIS run, never an absolute score - but it lives only in memory
+// for the duration of one build. Nothing about a fixture's AI validation
+// survives to the next run: every unthrottled run (see
+// AI_FETCH_MIN_INTERVAL_HOURS) re-sends every currently non-finished
+// fixture to Gemini, whether or not an earlier run already validated it.
 //
-// A cached entry with source:'api-objective' is deliberately NOT treated
-// as done (see needsScoring in main()) - it means an earlier run couldn't
-// reach the proxy (PROXY_URL unset, or the call failed) and the fixture is
-// running on its objective score alone, not that Gemini actually validated
-// it. Every build keeps retrying any match that hasn't been validated by
-// Gemini yet, for as long as it's still in the fetch window.
-async function loadCache() {
-  try {
-    return JSON.parse(await readFile(CACHE_PATH, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
+// The one thing that DOES need to survive between separate workflow runs
+// is a plain timestamp - when Gemini was last actually called - so a
+// routine scheduled run can tell "we just called it" apart from "it's been
+// hours, call it again" without needing a full per-match record.
 async function loadMeta() {
   try {
     const parsed = JSON.parse(await readFile(AI_META_PATH, 'utf8'));
@@ -701,15 +640,6 @@ async function loadMeta() {
   } catch {
     return {};
   }
-}
-
-function pruneCache(cache, now) {
-  const cutoff = now.getTime() - CACHE_RETENTION_HOURS * 60 * 60 * 1000;
-  const pruned = {};
-  for (const [id, entry] of Object.entries(cache)) {
-    if (Date.parse(entry.startTimeUtc) >= cutoff) pruned[id] = entry;
-  }
-  return pruned;
 }
 
 function chunk(array, size) {
@@ -741,11 +671,12 @@ function toRecommendPayloadItem(m) {
   };
 }
 
-// Sends only the fixtures NOT already validated to the shared Cloudflare
+// Sends every fixture that needs scoring this run to the shared Cloudflare
 // Worker (jaypengx-collab/shared-proxy), which owns the actual Gemini
 // prompt/schema (see that repo's worker.js, route /match-recommend) and
-// holds the real API key. Batched under AI_SCORE_BATCH_SIZE so a cold
-// cache across a 14-day window never exceeds the proxy's per-request cap.
+// holds the real API key. Batched under AI_SCORE_BATCH_SIZE so a full
+// 14-day window's worth of fixtures never exceeds the proxy's per-request
+// cap.
 async function fetchAiScores(matchesNeedingScore) {
   if (!PROXY_URL || !matchesNeedingScore.length) return new Map();
   const picks = new Map();
@@ -785,12 +716,10 @@ function intervalsOverlap(a, b) {
 // Groups fixtures into connected clusters of "genuinely contesting the
 // same slot" - pairwise time overlap AND a close final score, unioned
 // transitively (union-find) so a three- or four-way pileup becomes one
-// cluster rather than several overlapping pairs. TBD fixtures and anything
-// already marked `refined` in the cache are excluded up front.
-function findContestedClusters(matches, cache) {
-  const candidates = matches.filter(
-    m => !m.timeTbd && m.score >= CONTESTED_MIN_SCORE && !(cache[m.id] && cache[m.id].refined)
-  );
+// cluster rather than several overlapping pairs. TBD fixtures are excluded
+// up front.
+function findContestedClusters(matches) {
+  const candidates = matches.filter(m => !m.timeTbd && m.score >= CONTESTED_MIN_SCORE);
   const intervalById = new Map(candidates.map(m => [m.id, matchInterval(m)]));
   const parent = new Map(candidates.map(m => [m.id, m.id]));
   function find(id) {
@@ -828,18 +757,20 @@ function findContestedClusters(matches, cache) {
 
 // Sends each contested cluster (see findContestedClusters) to the shared
 // proxy's /match-recommend-refine as its own small request - mutates
-// `cache` directly (competitiveness/watchability adjustment + reason only;
+// `adjustments` (the in-memory Map main() built from the base validation
+// pass) directly: competitiveness/watchability adjustment + reason only;
 // enduranceScore/broadcastQuality/venueZh stay whatever the base pass
-// already decided, since re-litigating those isn't what this pass is for).
-// Every fixture actually sent is stamped `refined: true` so a persistently
-// malformed response can't cause the same cluster to be resent forever.
+// already decided, since re-litigating those isn't what this pass is for.
+// Every fixture actually sent is stamped `refined: true` so this same run's
+// own final assembly loop knows to use the refined numbers over the base
+// pass's.
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function refineContestedClusters(matches, cache) {
+async function refineContestedClusters(matches, adjustments) {
   if (!PROXY_URL) return false;
-  const clusters = findContestedClusters(matches, cache)
+  const clusters = findContestedClusters(matches)
     // Closest, highest-scoring contests first - if the per-run cap leaves
     // some clusters for next time, it's the lower-stakes ones that wait.
     .sort((a, b) => {
@@ -872,10 +803,10 @@ async function refineContestedClusters(matches, cache) {
         continue;
       }
       const data = await response.json();
-      const picks = new Map((Array.isArray(data.picks) ? data.picks : []).map(p => [p.id, p]));
+      const refinePicks = new Map((Array.isArray(data.picks) ? data.picks : []).map(p => [p.id, p]));
       for (const match of picked) {
-        const pick = picks.get(match.id);
-        const entry = cache[match.id];
+        const pick = refinePicks.get(match.id);
+        const entry = adjustments.get(match.id);
         if (!entry) continue;
         if (pick) {
           entry.competitivenessAdjustment = clampAdjustment(pick.competitivenessAdjustment);
@@ -931,29 +862,17 @@ async function main() {
     }
   }
 
-  let cache = pruneCache(await loadCache(), now);
   const meta = await loadMeta();
 
-  // Retries a cached entry that either was never validated by Gemini
-  // (source !== 'ai') or was validated under an older PROMPT_VERSION - the
-  // latter is what makes an already-cached match benefit from a pipeline
-  // fix instead of keeping a stale adjustment forever.
-  const needsScoring = matches.filter(m => {
-    if (m.isFinished) return false;
-    const cached = cache[m.id];
-    return (
-      !cached ||
-      cached.source !== 'ai' ||
-      cached.promptVersion !== PROMPT_VERSION ||
-      isEvidenceStale(cached, now)
-    );
-  });
+  // No persisted cache - EVERY currently non-finished fixture in the fetch
+  // window is sent to Gemini again this run (see the "AI validation"
+  // section above), not just newly-appeared ones.
+  const needsScoring = matches.filter(m => !m.isFinished);
 
   // A routine scheduled run skips calling Gemini at all when the last real
-  // call was recent (see AI_FETCH_MIN_INTERVAL_HOURS) - matches that still
-  // need validation just run on their objective score alone for now and
-  // get retried on a later run. A push or manual dispatch (or a local run)
-  // always calls it.
+  // call was recent (see AI_FETCH_MIN_INTERVAL_HOURS) - fixtures just run
+  // on their objective score alone for now and get validated on a later
+  // run. A push or manual dispatch (or a local run) always calls it.
   const lastAiFetchMs = Date.parse(meta.lastAiFetchAt || '');
   const throttled =
     GITHUB_EVENT_NAME === 'schedule' &&
@@ -962,52 +881,34 @@ async function main() {
   const toFetchNow = throttled ? [] : needsScoring;
   if (throttled && needsScoring.length) {
     console.log(
-      `Skipping Gemini this run (throttled, last called ${meta.lastAiFetchAt}) - ${needsScoring.length} match(es) still pending.`
+      `Skipping Gemini this run (throttled, last called ${meta.lastAiFetchAt}) - ${needsScoring.length} match(es) pending for the next unthrottled run.`
     );
   }
 
   if (toFetchNow.length && PROXY_URL) meta.lastAiFetchAt = now.toISOString();
   const freshPicks = await fetchAiScores(toFetchNow);
 
+  // In-memory only, for the duration of this one run - see the "AI
+  // validation" section above for why nothing here is written back to
+  // disk.
+  const adjustments = new Map();
   for (const match of toFetchNow) {
     const pick = freshPicks.get(match.id);
-    if (pick) {
-      cache[match.id] = {
-        startTimeUtc: match.startTimeUtc,
-        competitivenessAdjustment: clampAdjustment(pick.competitivenessAdjustment),
-        watchabilityAdjustment: clampAdjustment(pick.watchabilityAdjustment),
-        enduranceScoreAdjustment: clampAdjustment(pick.enduranceScoreAdjustment),
-        broadcastQualityAdjustment: clampAdjustment(pick.broadcastQualityAdjustment),
-        reason: String(pick.reason || '').slice(0, 300),
-        venueZh: String(pick.venueZh || '').slice(0, 100),
-        // Structured, durable evidence - kept even when empty (a genuine
-        // "search found nothing current" is real information, not a
-        // missing field).
-        evidence: Array.isArray(pick.evidence)
-          ? pick.evidence.slice(0, 5).map(sanitizeCachedEvidenceItem).filter(item => item.finding)
-          : [],
-        source: 'ai',
-        promptVersion: PROMPT_VERSION
-      };
-    } else if (!cache[match.id]) {
-      // Only seeds a zero-adjustment entry for a match that's never been
-      // validated at all - a match that already has an older AI answer
-      // keeps that answer (still real validation) until Gemini is
-      // reachable again, rather than regressing it just because this
-      // run's re-validation attempt didn't come back.
-      cache[match.id] = {
-        startTimeUtc: match.startTimeUtc,
-        competitivenessAdjustment: 0,
-        watchabilityAdjustment: 0,
-        enduranceScoreAdjustment: 0,
-        broadcastQualityAdjustment: 0,
-        reason: '',
-        venueZh: '',
-        evidence: [],
-        source: 'api-objective',
-        promptVersion: PROMPT_VERSION
-      };
-    }
+    if (!pick) continue; // no matching pick this run - stays on its objective score alone below
+    adjustments.set(match.id, {
+      competitivenessAdjustment: clampAdjustment(pick.competitivenessAdjustment),
+      watchabilityAdjustment: clampAdjustment(pick.watchabilityAdjustment),
+      enduranceScoreAdjustment: clampAdjustment(pick.enduranceScoreAdjustment),
+      broadcastQualityAdjustment: clampAdjustment(pick.broadcastQualityAdjustment),
+      reason: String(pick.reason || '').slice(0, 300),
+      venueZh: String(pick.venueZh || '').slice(0, 100),
+      // Structured evidence - kept even when empty (a genuine "search found
+      // nothing current" is real information, not a missing field).
+      evidence: Array.isArray(pick.evidence)
+        ? pick.evidence.slice(0, 5).map(sanitizeCachedEvidenceItem).filter(item => item.finding)
+        : [],
+      source: 'ai'
+    });
   }
 
   let usedAi = false;
@@ -1032,7 +933,7 @@ async function main() {
       match.confidence = computeConfidence(match);
       continue;
     }
-    const adjustment = cache[match.id] || {
+    const adjustment = adjustments.get(match.id) || {
       competitivenessAdjustment: 0,
       watchabilityAdjustment: 0,
       enduranceScoreAdjustment: 0,
@@ -1043,17 +944,10 @@ async function main() {
       source: 'api-objective'
     };
     const objective = match.objectiveScore;
-    // `?? 0` guards against an OLDER cache entry (from before this
-    // pipeline's own PROMPT_VERSION 11 rewrite) that has absolute
-    // competitiveness/watchability values but no *Adjustment fields at
-    // all - it'll be re-validated into the new shape on the next
-    // unthrottled run (see needsScoring's promptVersion check), but a
-    // throttled run in between must not compute `objective + undefined`
-    // (NaN) in the meantime.
-    match.competitiveness = clamp(Math.round(objective.competitiveness + (adjustment.competitivenessAdjustment ?? 0)), 1, 10);
-    match.watchability = clamp(Math.round(objective.watchability + (adjustment.watchabilityAdjustment ?? 0)), 1, 10);
-    match.enduranceScore = clamp(Math.round(objective.enduranceScore + (adjustment.enduranceScoreAdjustment ?? 0)), 1, 10);
-    match.broadcastQuality = clamp(Math.round(objective.broadcastQuality + (adjustment.broadcastQualityAdjustment ?? 0)), 1, 10);
+    match.competitiveness = clamp(Math.round(objective.competitiveness + adjustment.competitivenessAdjustment), 1, 10);
+    match.watchability = clamp(Math.round(objective.watchability + adjustment.watchabilityAdjustment), 1, 10);
+    match.enduranceScore = clamp(Math.round(objective.enduranceScore + adjustment.enduranceScoreAdjustment), 1, 10);
+    match.broadcastQuality = clamp(Math.round(objective.broadcastQuality + adjustment.broadcastQualityAdjustment), 1, 10);
     // A locally-built, data-grounded reason (see buildObjectiveReasonZh)
     // until Gemini's own validated one arrives - real and specific to this
     // fixture's actual numbers, not a placeholder.
@@ -1081,18 +975,14 @@ async function main() {
   // Same throttle as the base validation pass above - a comparative
   // re-check is still a Gemini call (a Pro-tier one, at that).
   if (!throttled) {
-    const refined = await refineContestedClusters(matches, cache);
+    const refined = await refineContestedClusters(matches, adjustments);
     if (refined) {
       meta.lastAiFetchAt = now.toISOString();
       for (const match of matches) {
-        const entry = cache[match.id];
+        const entry = adjustments.get(match.id);
         if (!entry?.refined || !match.objectiveScore) continue;
-        // Same `?? 0` guard as the main assembly loop above - a refine
-        // response with no matching pick for this id leaves entry.refined
-        // true but its *Adjustment fields untouched, which could still be
-        // an older cache entry's shape.
-        match.competitiveness = clamp(Math.round(match.objectiveScore.competitiveness + (entry.competitivenessAdjustment ?? 0)), 1, 10);
-        match.watchability = clamp(Math.round(match.objectiveScore.watchability + (entry.watchabilityAdjustment ?? 0)), 1, 10);
+        match.competitiveness = clamp(Math.round(match.objectiveScore.competitiveness + entry.competitivenessAdjustment), 1, 10);
+        match.watchability = clamp(Math.round(match.objectiveScore.watchability + entry.watchabilityAdjustment), 1, 10);
         match.reason = entry.reason;
         match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
         match.refined = true;
@@ -1131,11 +1021,10 @@ async function main() {
 
   await mkdir(new URL('.', OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, JSON.stringify(output, null, 2));
-  await mkdir(new URL('.', CACHE_PATH), { recursive: true });
-  await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2) + '\n');
+  await mkdir(new URL('.', AI_META_PATH), { recursive: true });
   await writeFile(AI_META_PATH, JSON.stringify(meta, null, 2) + '\n');
   console.log(
-    `Wrote ${matches.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source}, ${toFetchNow.length} sent to Gemini this run, ${needsScoring.length - toFetchNow.length} still pending, ${Object.keys(cache).length} cached)`
+    `Wrote ${matches.length} matches to ${OUTPUT_PATH.pathname} (source: ${output.source}, ${toFetchNow.length} sent to Gemini this run, ${needsScoring.length - toFetchNow.length} throttled)`
   );
 }
 

@@ -52,22 +52,24 @@ Scoring and picking are split across two different places, deliberately:
    national-broadcast detectors `scripts/sport-duration.mjs` uses for
    duration. This objective score is computed every build, for every
    fixture, whether or not the shared proxy below is even configured.
-3. It sends only fixtures it hasn't already had validated (see "AI score
-   cache" below) to a `/match-recommend` endpoint on a shared Cloudflare
-   Worker (see "AI recommendations" below) - along with each fixture's own
-   objective score and the real factors that produced it. Gemini's job here
-   is narrower than it used to be: VALIDATE that score against real-world
-   knowledge no formula has access to (a fresh injury, a rivalry's real
-   history, a player's current form, genuine current media attention) and
-   return a small, bounded *adjustment* (-2 to +2 per dimension) - never a
-   score invented from scratch. Most fixtures get an adjustment of 0, which
-   is the expected, common outcome, not a failure to engage - it means the
-   deterministic score already looks right. See "AI-data-driven scoring
-   engine" below for the full reasoning, and "Duration and Taiwan broadcast
-   source are deterministic, not AI-guessed" for the two things this build
-   decides with a plain formula/rule instead of asking Gemini at all. None
-   of this depends on who's looking at the page or when, so it's all
-   computed once, at build time, and cached.
+3. It sends every currently non-finished fixture (see "AI validation"
+   below - there is no per-match cache, so this is genuinely everything in
+   the window, every unthrottled run) to a `/match-recommend` endpoint on a
+   shared Cloudflare Worker (see "AI recommendations" below) - along with
+   each fixture's own objective score and the real factors that produced
+   it. Gemini's job here is narrower than it used to be: VALIDATE that
+   score against real-world knowledge no formula has access to (a fresh
+   injury, a rivalry's real history, a player's current form, genuine
+   current media attention) and return a small, bounded *adjustment* (-2 to
+   +2 per dimension) - never a score invented from scratch. Most fixtures
+   get an adjustment of 0, which is the expected, common outcome, not a
+   failure to engage - it means the deterministic score already looks
+   right. See "AI-data-driven scoring engine" below for the full reasoning,
+   and "Duration and Taiwan broadcast source are deterministic, not
+   AI-guessed" for the two things this build decides with a plain
+   formula/rule instead of asking Gemini at all. None of this depends on
+   who's looking at the page or when, so it's all computed once, at build
+   time.
 4. The result — every fixture, scored, nothing filtered or picked yet — is
    written to `public/data/matches.json`.
 5. **`public/app.js`'s `resolveViewingPlan`**, running in *your* browser,
@@ -132,7 +134,7 @@ instead of validating one at a time.
 
 **If the shared proxy is unreachable or unconfigured**, a fixture simply
 keeps its objective score with a zero adjustment (`source: 'api-objective'`
-- see "AI score cache" below) - still a real, current, statistically-
+- see "AI validation" below) - still a real, current, statistically-
 grounded number, not the old crude win-rate-only `heuristicScore` this
 replaced (which is gone entirely). The reason text in that case
 (`buildObjectiveReasonZh`) is built from the actual factors behind the
@@ -153,9 +155,9 @@ unaddressed, same posture as `docs/recommendation-engine-audit.md`):
   defensively enough that a shape mismatch degrades to "no signal for this
   fixture" rather than breaking the build, but the very first real
   scheduled run after this shipped is the actual live test - watch
-  `data/ai-cache.json`/the build log for whether MLB/F1 fixtures are
-  picking up real `factors` (e.g. `"last 10: ..."`) or falling back to
-  season-record-only.
+  `public/data/matches.json`'s `objectiveFactors`/the build log for whether
+  MLB/F1 fixtures are picking up real factors (e.g. `"last 10: ..."`) or
+  falling back to season-record-only.
 - **NBA and Premier League have no dedicated standings-API integration
   yet.** Both score on season record + odds + the existing rivalry/derby/
   national-broadcast detectors - real signals, but shallower than MLB's
@@ -523,56 +525,46 @@ deploy.yml` passes `github.sha`) to tell two cases apart:
 The two manual Settings buttons (檢查更新/重新整理資料) call the exact same
 function, so "how a refresh happens" only ever exists in one place.
 
-## AI score cache (keeping Gemini usage flat)
+## AI validation (no persistent per-match cache)
 
-The workflow itself now runs every 15 minutes (see "Deployment" below) so
-the free ESPN half of the build stays as fresh as possible - a scheduled
-run that naively re-scored the same heavily-overlapping 14-day window of
-fixtures on every one of THOSE runs would be a real problem. Instead,
-`data/ai-cache.json` (a file *committed to the repo*, unlike the
-fully-regenerated `public/data/matches.json`) records every match Gemini has
-already VALIDATED, keyed by a stable match id, along with the
-`PROMPT_VERSION` it was validated under. Since the rewrite described in
-"API-data-driven scoring engine" above, each cache entry stores an
-**adjustment** (`competitivenessAdjustment`/`watchabilityAdjustment`/
+There is no per-match AI cache. Every unthrottled run sends **every
+currently non-finished fixture** in the 14-day window to Gemini fresh via
+the shared proxy's `/match-recommend`, not just newly-appeared ones - the
+objective score itself is also recomputed fresh every run (standings/form
+genuinely change day to day), so a validation from hours or days ago isn't
+worth preserving over just asking again. The response is an **adjustment**
+(`competitivenessAdjustment`/`watchabilityAdjustment`/
 `enduranceScoreAdjustment`/`broadcastQualityAdjustment`, each -2 to +2,
-plus `reason`/`venueZh`/`evidence`) rather than an absolute score — the
-objective score itself is recomputed fresh every single run (standings/
-form genuinely change day to day), so only Gemini's own comparatively
-stable opinion is worth caching at all. Each build only sends fixtures that
-either aren't in that cache yet or were validated under an older
-`PROMPT_VERSION` — so a given match is validated by Gemini exactly once
-*per meaningful pipeline change*, not once ever, which is what lets an
-already-cached match still pick up a real fix instead of keeping a stale
-answer forever. Requests are batched under the shared Worker's
-80-fixtures-per-call cap (see `AI_SCORE_BATCH_SIZE` — matters most on the
-very first run, and on any run right after a `PROMPT_VERSION` bump, when a
-large batch of previously-cached fixtures all need re-validating at once).
-Entries older than 12 hours past kickoff are pruned automatically so the
-file doesn't grow forever.
+plus `reason`/`venueZh`/`evidence`), held in memory for the duration of one
+build and applied on top of that run's own objective score - never written
+back to disk, so there's nothing to go stale or need a schema-version bump
+for. Requests are batched under the shared Worker's 80-fixtures-per-call
+cap (see `AI_SCORE_BATCH_SIZE`), since an unthrottled run against a full
+14-day window can easily mean a few hundred fixtures at once.
 
-**Throttling how often Gemini gets called**: even with per-match caching, a
-routine run can still find a couple of newly-in-window fixtures almost
-every time, meaning several small Gemini calls a day for no real benefit -
-especially now that the workflow itself fires every 15 minutes rather than
-every 6 hours (see "Deployment" below). `data/ai-meta.json` (committed the
-same way as `ai-cache.json`) records `lastAiFetchAt` — the last time this
-build actually called the proxy — and a `schedule`-triggered run (as
-opposed to a `push` or manual `workflow_dispatch` run — see
-`GITHUB_EVENT_NAME` in the workflow) skips calling Gemini entirely if that
-was less than `AI_FETCH_MIN_INTERVAL_HOURS` (8 — a few times a day, not
-once, so a genuinely new pick still shows up same-day) ago; anything still
-pending just waits for the next eligible run. A
-push or a manual run always calls it, since either one means someone
-specifically wants fresh data now. The footer shows this same timestamp
-("AI 最後查詢於 ...") with a "重新查詢" link straight to the Actions run page,
-for exactly that manual case — there's no client-safe way for a static page
-to trigger a rebuild itself, so the link is as far as the page itself can
-take it; actually running it needs the repo owner's GitHub sign-in.
+**Throttling how often Gemini gets called**: the workflow itself runs
+every 15 minutes so the free ESPN half of the build stays fresh (see
+"Deployment" below), but calling Gemini for every fixture on every one of
+THOSE runs would burn quota for no benefit. `data/ai-meta.json` (the one
+file this pipeline still commits back to the repo) records
+`lastAiFetchAt` — the last time a build actually called the proxy — and a
+`schedule`-triggered run (as opposed to a `push` or manual
+`workflow_dispatch` run — see `GITHUB_EVENT_NAME` in the workflow) skips
+calling Gemini entirely if that was less than `AI_FETCH_MIN_INTERVAL_HOURS`
+(8) ago; every fixture just runs on its objective score alone
+(`source: 'api-objective'`) until the next eligible run. A push or a
+manual run always calls it, since either one means someone specifically
+wants fresh data now — which is also why pushing to `main` is the fastest
+way to see the API-driven pipeline's real output. The footer shows this
+same timestamp ("AI 最後查詢於 ...") with a "重新查詢" link straight to the
+Actions run page, for exactly that manual case — there's no client-safe
+way for a static page to trigger a rebuild itself, so the link is as far
+as the page itself can take it; actually running it needs the repo owner's
+GitHub sign-in.
 
-The workflow commits both files back to the repo only when something
-actually changed (see `.github/workflows/deploy.yml`'s "Commit updated AI
-score cache" step).
+The workflow commits `data/ai-meta.json` back to the repo only when its
+timestamp actually changed (see `.github/workflows/deploy.yml`'s "Commit
+AI fetch timestamp" step).
 
 **Contested-cluster refinement (a second, comparative pass for close
 calls)**: the base validation call above adjusts each fixture independently
@@ -589,8 +581,8 @@ a Pro-tier model specifically because it only ever sees a handful of
 fixtures a day this way. Only `competitivenessAdjustment`/
 `watchabilityAdjustment`/`reason` get overwritten by the refined answer;
 `broadcastQualityAdjustment`/`enduranceScoreAdjustment`/`venueZh` stay
-whatever the base pass already decided. Every fixture actually sent gets
-cache-stamped `refined: true` so the same cluster isn't resent forever, and
+whatever the base pass already decided. Every fixture actually sent is
+marked `refined: true` for the rest of this same run, and
 `MAX_REFINE_CLUSTERS_PER_RUN` bounds worst-case Pro-tier spend per run -
 refinement runs on the same throttle as the base pass (see above), so it
 costs nothing extra on a routine scheduled run that's already within the
@@ -624,7 +616,7 @@ This repo deploys itself: `.github/workflows/deploy.yml` runs
 - on every push to `main`,
 - on a schedule (every 15 minutes), so live status/newly-scheduled fixtures
   stay fresh even with no code changes - this only costs a free ESPN fetch
-  on most runs, since `AI_FETCH_MIN_INTERVAL_HOURS` (see "AI score cache"
+  on most runs, since `AI_FETCH_MIN_INTERVAL_HOURS` (see "AI validation"
   above) is what actually keeps Gemini calls down to a few times a day
   regardless of how often the workflow itself fires,
 - and on-demand via the Actions tab ("Run workflow"), or the "檢查更新"/
@@ -689,16 +681,17 @@ objective score alone (zero adjustment) for every fixture - see
 ## Running locally
 
 ```bash
-node scripts/build-data.mjs        # writes public/data/matches.json, updates data/ai-cache.json
+node scripts/build-data.mjs        # writes public/data/matches.json, updates data/ai-meta.json
 npx serve public                   # or any static file server
 ```
 
 Set `PROXY_URL` in your shell first if you want Gemini-validated results
-locally instead of the objective score alone. Delete `data/ai-cache.json`
-(or an entry in it) if you want a match re-validated. The MLB/F1 API
-signal fetches (`scripts/sport-signals.mjs`) need no key or setup at all -
-they run unconditionally whenever there's a live MLB/F1 fixture in the
-window.
+locally instead of the objective score alone - a local run always calls it
+(no `GITHUB_EVENT_NAME` set, treated the same as a `push`), and since
+there's no per-match cache, every non-finished fixture gets sent every
+time you run it. The MLB/F1 API signal fetches
+(`scripts/sport-signals.mjs`) need no key or setup at all - they run
+unconditionally whenever there's a live MLB/F1 fixture in the window.
 
 ## Tests
 

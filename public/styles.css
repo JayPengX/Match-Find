@@ -386,11 +386,25 @@ main#app {
   overflow-x: auto;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
+  /* Without this, a fast swipe at either end of the stack chains into
+     whatever scrolls next - a sibling stack, or the page's own vertical
+     scroll - instead of just stopping at this stack's own first/last card
+     (the "no swipe border" bug: a boundary swipe would visibly land on an
+     unrelated card elsewhere on the page). Containing it here keeps the
+     gesture inside this one stack. */
+  overscroll-behavior-x: contain;
 }
 .match-stack-scroller::-webkit-scrollbar { display: none; }
 .match-stack-scroller > .match-card {
   flex: 0 0 100%;
   scroll-snap-align: start;
+  /* Forces the browser to stop at EVERY card in a fast flick instead of
+     letting momentum carry it past the next snap point straight to a card
+     two or three away - without this, a normal "swipe forward one card"
+     gesture could land one or two cards further than intended (and,
+     combined with buildMatchStack's own scroll listener, get pinned there
+     as if that had been a deliberate choice). */
+  scroll-snap-stop: always;
   margin-bottom: 0;
 }
 .match-stack-dots {

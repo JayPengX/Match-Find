@@ -933,3 +933,87 @@ current data, just missing one extra layer of judgment).
   a weather API would mean taking on a new external dependency for a
   modifier this build can't verify pre-race anyway; deliberately deferred
   as a separate decision rather than folded in silently.
+
+## Round 7 - swipeable card-stack fixes, removing the per-match AI cache
+
+Two independent reported problems: the swipeable match-stack cards
+(`buildMatchStack` in `public/app.js`, see Round 5's "1" for why it's a
+scroll-snap stack rather than custom drag handling) sometimes landed on
+the wrong card after a swipe, and the shared proxy's AI validation was
+being masked by a per-match cache that had to be manually cleared to
+actually see fresh results.
+
+### 1. Card-stack swipe fixes
+
+Three concrete bugs, all in `public/app.js`/`public/styles.css`, none in
+the recommendation math itself:
+
+- **A fast flick could skip past the intended card.** Native scroll-snap
+  without `scroll-snap-stop: always` lets momentum carry a fast swipe past
+  the very next snap point straight to one two or three cards away -
+  exactly the reported "swiping forward brings me one or even two cards
+  before [further than intended]." Added to `.match-stack-scroller >
+  .match-card` in `public/styles.css`, forcing the browser to stop at
+  every card in sequence regardless of swipe speed.
+- **No boundary containment.** Swiping past the first or last card in a
+  stack had nowhere configured to absorb the gesture, so it could chain
+  into whatever scrolled next - a sibling stack elsewhere on the page, or
+  the page's own vertical scroll - which is what the report described as
+  landing on "some random card." Added `overscroll-behavior-x: contain` to
+  `.match-stack-scroller`.
+- **The settle handler could read `scrollLeft` before scroll-snap had
+  actually finished settling.** The previous code used a flat 180ms
+  debounce after the last `scroll` event to decide which card the gesture
+  landed on, computed as `Math.round(scrollLeft / clientWidth)` with no
+  clamping - a momentum/rubber-band bounce at either end could briefly
+  push `scrollLeft` negative or past the last card's offset, and reading
+  it 180ms after the last tick is a guess, not a guarantee the browser was
+  actually done settling. `buildMatchStack` now uses the native
+  `scrollend` event (Chrome/Firefox/Edge, Safari 18.2+) when available,
+  which fires exactly once scrolling - including any snap/bounce
+  correction - has genuinely finished, falling back to the old debounce
+  only where `scrollend` isn't supported; the index read is now clamped to
+  `[0, ordered.length - 1]` either way.
+
+### 2. Removing the per-match AI cache
+
+A direct request to stop caching AI validation results per match and
+instead run the full objective-score + Gemini-validation pipeline against
+**every** currently non-finished fixture on every unthrottled build, so a
+push to `main` actually exercises the whole live pipeline rather than
+mostly replaying whatever `data/ai-cache.json` already had recorded from
+an earlier run.
+
+`data/ai-cache.json` is gone entirely - deleted from the repo, and
+`scripts/build-data.mjs` no longer reads or writes a persistent per-match
+record at all. `loadCache`/`pruneCache`/`isEvidenceStale`/`PROMPT_VERSION`
+are gone with it: there's nothing to prune, nothing to go stale relative
+to a previous run, and no schema version to compare against, since nothing
+survives between runs to compare. In their place, `main()` builds a plain
+in-memory `Map` (`adjustments`) fresh every run, populated only for
+fixtures the shared proxy actually returned a pick for THIS run;
+`refineContestedClusters` mutates that same map instead of a persisted
+cache object. `needsScoring` is now simply "every non-finished fixture,"
+not "every fixture not already validated."
+
+`data/ai-meta.json` (just the one `lastAiFetchAt` timestamp) is kept - it
+is not a cache of match data, only a rate-limit control, and
+`AI_FETCH_MIN_INTERVAL_HOURS` still throttles routine *scheduled* reruns
+so a 15-minute cron doesn't call Gemini for the whole window every time.
+A `push` or manual `workflow_dispatch` run - including the push that
+shipped this change - always bypasses that throttle, which is what makes
+"push to main" the actual live test of this round's change: the very next
+build sends every current fixture to Gemini fresh rather than short-
+circuiting on cached answers. `.github/workflows/deploy.yml`'s "Commit
+updated AI score cache" step was renamed "Commit AI fetch timestamp" and
+now only tracks `data/ai-meta.json`.
+
+The tradeoff, stated plainly: an unthrottled run (a push, a manual
+dispatch, or the first eligible scheduled run after 8 hours) now makes one
+Gemini call per batch of up to 80 fixtures for the ENTIRE window every
+time, rather than only for newly-appeared ones - meaningfully more Gemini
+quota use per unthrottled run than before. `AI_FETCH_MIN_INTERVAL_HOURS`
+is what keeps this bounded to a few times a day rather than every 15
+minutes; if quota pressure shows up in practice, the next round's fix
+would be to raise that interval or reintroduce a lighter-weight cache, not
+to silently reduce which fixtures get validated.
