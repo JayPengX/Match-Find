@@ -142,18 +142,34 @@ export function sanitizeCachedEvidenceItem(item) {
 
 // Which GitHub Actions event triggered this run - 'schedule' for the
 // routine rerun, 'push' for a real commit landing on main, or
-// 'workflow_dispatch' for someone manually clicking "Run workflow" (see
-// .github/workflows/deploy.yml). Empty string for a local run, which is
-// treated the same as an explicit request below - there's no "routine
-// background job" to throttle when a person is sitting there running it.
+// 'workflow_dispatch' for a manual "Run workflow" click OR the shared
+// proxy's own /match-dispatch route (see that repo's worker.js - both
+// ordinary viewers' "重新整理資料"/"AI 重新評估" Settings buttons and this
+// site's own owner manually running the workflow land here). Empty string
+// for a local run.
 const GITHUB_EVENT_NAME = (process.env.GITHUB_EVENT_NAME || '').trim();
-// A scheduled run only actually calls Gemini if it's been at least this
-// long since the last real call - the ESPN-only refresh (and the objective
-// score recompute, which is free and local) runs far more often than this
-// (see .github/workflows/deploy.yml's cron), so this constant alone is
-// what keeps the actual Gemini-validation cadence down to "a few times a
-// day" regardless of how often the workflow itself fires.
-const AI_FETCH_MIN_INTERVAL_HOURS = 8;
+// A run only actually calls Gemini if it's been at least this long since
+// the last real call - the ESPN-only refresh (and the objective score
+// recompute, which is free and local) runs far more often than this (see
+// .github/workflows/deploy.yml's cron), so this constant alone is what
+// keeps the actual Gemini-validation cadence down regardless of how often
+// the workflow itself fires OR what triggered any one run.
+//
+// Applied UNIFORMLY to every event type now, not just 'schedule' - an
+// earlier version let push/workflow_dispatch always bypass this throttle
+// ("someone specifically wants fresh data now"), which made sense back when
+// the only way to trigger either was a real code push or this site's own
+// owner manually running the workflow from the Actions tab. Now that
+// ordinary VIEWERS can also trigger a workflow_dispatch (the shared proxy's
+// /match-dispatch, wired to Settings' "重新整理資料"/"AI 重新評估" buttons),
+// that bypass would have meant mashing a button burns a fresh Gemini call
+// every single time - exactly the "AI reevaluation limited to once per
+// hour, applied everywhere, to save quota" this site's own design now
+// promises. One shared clock, one shared rule, regardless of who or what
+// triggered the run - a genuine code push doesn't need special treatment
+// either, since ESPN data (the actually time-sensitive half) is refetched
+// unconditionally on every run no matter what this throttle decides.
+const AI_FETCH_MIN_INTERVAL_HOURS = 1;
 
 // ---- Contested-cluster refinement (the shared proxy's /match-recommend-refine) ------
 //
@@ -212,10 +228,10 @@ const TEAM_LEAGUES = [
 // the league's own flat average for anything else. away/home are this
 // function's own buildCompetitor objects (`.name` is ESPN's team
 // displayName, exactly what sport-duration.mjs's tables are keyed by).
-export function computeDurationMinutes(league, away, home, venue, broadcast) {
+export function computeDurationMinutes(league, away, home, venue, broadcast, oddsOverUnder) {
   switch (league.id) {
     case 'mlb':
-      return predictMlbDurationMinutes({ awayTeam: away.name, homeTeam: home.name, venue });
+      return predictMlbDurationMinutes({ awayTeam: away.name, homeTeam: home.name, venue, oddsOverUnder });
     case 'nba':
       return predictNbaDurationMinutes({ awayTeam: away.name, homeTeam: home.name, broadcast });
     case 'epl':
@@ -426,7 +442,14 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead) {
         isPostseason,
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
-        durationMinutes: computeDurationMinutes(league, away, home, competition.venue?.fullName || '', broadcast || ''),
+        durationMinutes: computeDurationMinutes(
+          league,
+          away,
+          home,
+          competition.venue?.fullName || '',
+          broadcast || '',
+          oddsSignal.overUnder
+        ),
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
@@ -716,10 +739,13 @@ function intervalsOverlap(a, b) {
 // Groups fixtures into connected clusters of "genuinely contesting the
 // same slot" - pairwise time overlap AND a close final score, unioned
 // transitively (union-find) so a three- or four-way pileup becomes one
-// cluster rather than several overlapping pairs. TBD fixtures are excluded
-// up front.
+// cluster rather than several overlapping pairs. TBD and already-finished
+// fixtures are excluded up front - a finished fixture's own place in the
+// day's plan is settled history now (see this file's own comment on why it
+// still gets a real objective score), never worth spending refine quota
+// re-litigating which of two ALREADY-OVER games was the bigger deal.
 function findContestedClusters(matches) {
-  const candidates = matches.filter(m => !m.timeTbd && m.score >= CONTESTED_MIN_SCORE);
+  const candidates = matches.filter(m => !m.timeTbd && !m.isFinished && m.score >= CONTESTED_MIN_SCORE);
   const intervalById = new Map(candidates.map(m => [m.id, matchInterval(m)]));
   const parent = new Map(candidates.map(m => [m.id, m.id]));
   function find(id) {
@@ -852,14 +878,20 @@ async function main() {
     hasActiveF1 ? fetchF1TitleRaceIntensity() : Promise.resolve(null)
   ]);
 
-  // The PRIMARY score - computed for every non-finished fixture before
-  // Gemini ever sees any of them (a finished match never gets one at all,
-  // same reasoning as the old pipeline: "is this worth watching" is moot
-  // once it's over).
+  // The PRIMARY score - computed for EVERY fixture, finished or not, before
+  // Gemini ever sees any of them. A finished fixture's own real underlying
+  // data (final record, that day's odds/standings context) doesn't stop
+  // being real once the game ends, and this pipeline runs the recommended
+  // lineup as ONE calendar-day plan, decided once, not a moving "what's
+  // left as of right now" - see recommendation.mjs's computeDayPlan and its
+  // own comment on why a finished fixture is a normal scheduling candidate.
+  // A viewer opening the page mid-afternoon should see the SAME whole-day
+  // plan a viewer this morning would have (this morning's game shown as
+  // 已結束 in its own rightful slot, not silently dropped from the lineup),
+  // rather than a plan that keeps shrinking to "only what's still ahead"
+  // depending purely on when it happens to be loaded.
   for (const match of matches) {
-    if (!match.isFinished) {
-      match.objectiveScore = computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceIntensity });
-    }
+    match.objectiveScore = computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceIntensity });
   }
 
   const meta = await loadMeta();
@@ -869,13 +901,17 @@ async function main() {
   // section above), not just newly-appeared ones.
   const needsScoring = matches.filter(m => !m.isFinished);
 
-  // A routine scheduled run skips calling Gemini at all when the last real
-  // call was recent (see AI_FETCH_MIN_INTERVAL_HOURS) - fixtures just run
-  // on their objective score alone for now and get validated on a later
-  // run. A push or manual dispatch (or a local run) always calls it.
+  // Skips calling Gemini at all when the last real call was recent (see
+  // AI_FETCH_MIN_INTERVAL_HOURS's own comment on why this now applies to
+  // EVERY event type uniformly, not just 'schedule') - fixtures just run on
+  // their objective score alone for now and get validated on the next
+  // eligible run, whatever triggers it. A local run (no GITHUB_EVENT_NAME
+  // at all) is the one exception - there's no "someone might mash the
+  // button" concern to throttle against when a person is sitting at a
+  // terminal running this directly themselves.
   const lastAiFetchMs = Date.parse(meta.lastAiFetchAt || '');
   const throttled =
-    GITHUB_EVENT_NAME === 'schedule' &&
+    GITHUB_EVENT_NAME !== '' &&
     Number.isFinite(lastAiFetchMs) &&
     now.getTime() - lastAiFetchMs < AI_FETCH_MIN_INTERVAL_HOURS * 60 * 60 * 1000;
   const toFetchNow = throttled ? [] : needsScoring;
@@ -913,26 +949,14 @@ async function main() {
 
   let usedAi = false;
   for (const match of matches) {
-    // A finished match never gets a "worth watching" score at all. score: 0
-    // keeps it out of findContestedClusters (CONTESTED_MIN_SCORE) without
-    // needing a separate isFinished check there too.
-    if (match.isFinished) {
-      match.competitiveness = null;
-      match.watchability = null;
-      match.broadcastQuality = null;
-      match.enduranceScore = null;
-      match.reason = '';
-      match.venueZh = '';
-      match.whereToWatchTw = '';
-      match.evidence = [];
-      match.evidenceRetrievedAt = null;
-      match.objectiveFactors = [];
-      match.source = 'finished';
-      match.score = 0;
-      match.refined = false;
-      match.confidence = computeConfidence(match);
-      continue;
-    }
+    // A finished match is never sent to Gemini (see needsScoring above), so
+    // `adjustments` never has an entry for one - it always falls through to
+    // this same api-objective default, same as any other not-yet-validated
+    // fixture. That's deliberate: its objectiveScore above is computed the
+    // exact same way as any other match, so it gets a real, stable score
+    // here too instead of being zeroed out - see this function's own
+    // comment above on why a finished match still needs a real score to
+    // stay a normal candidate in computeDayPlan's whole-day plan.
     const adjustment = adjustments.get(match.id) || {
       competitivenessAdjustment: 0,
       watchabilityAdjustment: 0,
@@ -1005,6 +1029,19 @@ async function main() {
     buildId: BUILD_ID,
     daysAhead: DAYS_AHEAD,
     lastAiFetchAt: meta.lastAiFetchAt || null,
+    // The shared proxy's own base URL, plain (no path suffix) - so the
+    // BROWSER can build its own `${proxyUrl}/sports-proxy`/`/match-dispatch`
+    // requests for live-score polling and the on-demand refresh/reevaluate
+    // buttons (see app.js), without this ever having to be hardcoded into
+    // app.js itself or shipped as a second, separately-configured setting.
+    // Not a secret - this is the exact same public Worker base URL
+    // scripts/build-data.mjs already reads from PROXY_URL to call
+    // /match-recommend; a static site's own client bundle can't keep
+    // anything truly hidden anyway (see this repo's README on PROXY_URL
+    // being a plain GitHub Actions Variable, not a Secret). null when
+    // PROXY_URL isn't configured - app.js already treats every feature that
+    // depends on it as optional, degrading gracefully with it unset.
+    proxyUrl: PROXY_URL || null,
     // 'finished' matches are excluded from this "is everything AI-validated"
     // check - they're never scored at all, so counting them here would
     // report 'mixed' the instant even one match on the page has ended.

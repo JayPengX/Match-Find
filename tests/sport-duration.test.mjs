@@ -8,6 +8,9 @@ import {
   MLB_TEAM_PACE_OFFSET_MINUTES,
   isCoorsField,
   predictMlbDurationMinutes,
+  mlbOddsDurationModifier,
+  MLB_LEAGUE_AVG_OVER_UNDER,
+  MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES,
   NBA_BASELINE_MINUTES,
   isNationalBroadcast,
   isNbaRivalry,
@@ -43,6 +46,30 @@ describe('MLB duration prediction', () => {
     const atCoors = predictMlbDurationMinutes({ awayTeam: 'Houston Astros', homeTeam: 'Colorado Rockies', venue: 'Coors Field' });
     const elsewhere = predictMlbDurationMinutes({ awayTeam: 'Houston Astros', homeTeam: 'Colorado Rockies', venue: 'Some Other Park' });
     assert.equal(atCoors - elsewhere, 10);
+  });
+
+  test('mlbOddsDurationModifier is 0 at the league-average total, positive above it, negative below', () => {
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER), 0);
+    assert.ok(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 1) > 0);
+    assert.ok(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 1) < 0);
+  });
+
+  test('mlbOddsDurationModifier is capped in both directions and neutral for a missing line', () => {
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 100), MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES);
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 100), -MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES);
+    assert.equal(mlbOddsDurationModifier(null), 0);
+    assert.equal(mlbOddsDurationModifier(undefined), 0);
+  });
+
+  test('predictMlbDurationMinutes folds the odds modifier into the total when given one', () => {
+    const withHighTotal = predictMlbDurationMinutes({
+      awayTeam: 'Unknown Team A',
+      homeTeam: 'Unknown Team B',
+      venue: '',
+      oddsOverUnder: MLB_LEAGUE_AVG_OVER_UNDER + 2
+    });
+    const withoutOdds = predictMlbDurationMinutes({ awayTeam: 'Unknown Team A', homeTeam: 'Unknown Team B', venue: '' });
+    assert.ok(withHighTotal > withoutOdds);
   });
 
   test('isCoorsField only matches the exact venue name', () => {

@@ -1,10 +1,24 @@
 # Recommendation engine audit — response and changes
 
+**This is a historical, point-in-time record, not current documentation.**
+Several things it describes as "already enforced"/"unchanged" have since
+changed deliberately - most notably, a finished match is no longer excluded
+from `computeDayPlan`'s candidates (§20/P0 #2 below): the recommendation
+model moved to running one whole calendar day as a single unit, so a
+finished fixture stays in its own rightful slot in 推薦賽事 rather than
+being dropped the moment it ends (see README's "The viewing plan" and
+`recommendation.mjs`'s own comment on `computeDayPlan`'s candidate filter
+for the current, correct behavior). The "匯出資料" Settings button this
+document's own dataset came from is also gone (see README's "No developer
+tools in the UI"). Left as-is below rather than rewritten, since this
+document's value is as a record of what the audit claimed and how it was
+evaluated at the time - always trust the current source/README over this
+file for present-day behavior.
+
 This documents what changed in response to a recommendation-engine audit
-report (dataset: a `match-find-export-*.json` produced by this repo's own
-"匯出資料" Settings button, i.e. `exportRecommendationData` in
-`public/app.js`), and — just as importantly — which of the audit's claims
-don't actually apply to this codebase, and why.
+report (dataset: a `match-find-export-*.json` produced by this repo's own,
+since-removed "匯出資料" Settings button), and — just as importantly —
+which of the audit's claims don't actually apply to this codebase, and why.
 
 ## How the audit's claims line up with the real code
 

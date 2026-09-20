@@ -194,10 +194,19 @@ There's also only ever ONE recommendation system, not a choice between
 competing ones: `bestMatchScore` (`public/lib/recommendation.mjs`) is the
 single blend every viewer's 推薦賽事 is built from - an earlier version let
 you pick between two subtly different "recommendation styles"; that choice
-added confusion without adding real value, so it's gone. The one place your
-own taste actually overrides the algorithm is **Prefer** - swiping a card
-stack to commit to a specific alternative (see "The viewing plan" below) -
-which is local, explicit, and per-match, not a blanket ranking toggle.
+added confusion without adding real value, so it's gone. `bestMatchScore`
+itself is a weighted blend of competitiveness (skill/closeness),
+watchability (entertainment/mainstream attention), enduranceScore (does the
+contest actually stay meaningful all the way through), and broadcastQuality
+(`BEST_MATCH_WEIGHTS`) - deliberately never anchored on just one of those
+axes, so a match that's exceptional on only one dimension while mediocre on
+the rest doesn't automatically win over a well-rounded one; renormalized
+over whichever of the four a fixture actually has (a finished/never-scored
+match with fewer of them still gets a real number built from what IS
+known). The one place your own taste actually overrides the algorithm is
+**Prefer** - swiping a card stack to commit to a specific alternative (see
+"The viewing plan" below) - which is local, explicit, and per-match, not a
+blanket ranking toggle.
 
 ## The viewing plan
 
@@ -271,7 +280,10 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   expected, MLB winning literally every day when a comparable alternative
   exists isn't. `computeWindowPlan`'s own `sportConcentration` return
   value exposes the whole window's actual sport split for anyone
-  inspecting the data (also in the Settings "匯出資料" export).
+  inspecting `public/data/matches.json` directly, or a copy of it fed to
+  `scripts/evaluate-recommendations.mjs` (see "Evaluating a historical
+  export" below) - there is no in-app export button for this anymore (see
+  "No developer tools in the UI" below).
 - **Swiping a stack is a real commitment, not just a peek - this IS
   "Prefer".** Settling on a different card pins that match as the slot's
   fixed choice (`pinSlotChoice`) and rebuilds the WHOLE day's plan around
@@ -389,31 +401,45 @@ closing the panel or reloading.
 ## Duration and Taiwan broadcast source are deterministic, not AI-guessed
 
 Two things that used to be either a flat guess or a per-fixture Gemini
-judgment call are now plain, auditable rules computed entirely from ESPN's
-own fixture data - no network call, no dependence on Gemini being
-reachable, same answer every time for the same input:
+judgment call are plain, auditable rules computed entirely from ESPN's own
+fixture data (plus, for duration, ESPN's own betting-odds field and,
+LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
 
 - **Per-fixture predicted duration** (`scripts/sport-duration.mjs`) — every
   fixture used to get one flat per-league average (every MLB game: 190
   minutes, regardless of which two teams were playing). Real per-team pace
   varies by roughly 20 minutes across MLB alone, so this is now a real
   formula per sport: MLB averages each team's own documented pace offset
-  (plus a Coors Field venue modifier and a fixed 2026 Automated
-  Ball-Strike challenge-review padding), NBA adds an expected-value
-  overtime term plus a rivalry/national-broadcast modifier, EPL adds a
-  derby modifier (clamped to a realistic min/max), and F1's race session
-  uses a per-circuit baseline (fuzzy-matched from ESPN's own circuit name)
-  capped at the sport's real regulatory maximum. Every input is a fact
-  already available pre-game from ESPN's own scoreboard (team names,
-  venue, national broadcaster) - nothing here is knowable only after the
-  fact (a blowout margin, a safety car, actual weather), and nothing here
-  is a guess: an unrecognized team/circuit just contributes a neutral
-  default rather than skewing the estimate or failing the build. This
-  feeds every scheduling decision downstream (`public/lib/
+  (plus a Coors Field venue modifier, a fixed 2026 Automated Ball-Strike
+  challenge-review padding, and a bounded modifier from the betting
+  market's own total-runs line - `mlbOddsDurationModifier`, more total runs
+  means more baserunners/pitching changes and real additional broadcast
+  time), NBA adds an expected-value overtime term plus a rivalry/national-
+  broadcast modifier, EPL adds a derby modifier (clamped to a realistic
+  min/max), and F1's race session uses a per-circuit baseline (fuzzy-matched
+  from ESPN's own circuit name) capped at the sport's real regulatory
+  maximum. Every input here is a fact already available PRE-GAME from
+  ESPN's own scoreboard (team names, venue, national broadcaster, betting
+  odds) - nothing here is a guess: an unrecognized team/circuit just
+  contributes a neutral default rather than skewing the estimate or failing
+  the build. This feeds every scheduling decision downstream (`public/lib/
   recommendation.mjs`'s `effectiveDurationMinutes`/
   `schedulingDurationMinutes`/overrun buffer), not just the on-card time
   range, so a more accurate per-fixture number improves the whole viewing
   plan, not just what's printed on one card.
+
+  Once a fixture is actually LIVE, `estimateLiveDurationMinutes`
+  (`public/lib/recommendation.mjs`, called from `public/app.js`'s
+  `pollLiveMatches` - see "Live score/odds polling" above) further corrects
+  this SAME `durationMinutes` field from ESPN's own real-time progress
+  (current inning/quarter+clock/match-minute), blended with the pre-game
+  estimate rather than replacing it outright. This is the direct answer to
+  MLB's own reported "estimate drops out by 30-60 real minutes" gap: the
+  pre-game formula above is still a genuine prediction with real
+  uncertainty (extra innings and rain delays are not knowable in advance),
+  but a live game's own actual pace can now correct that estimate in real
+  time instead of the schedule staying pinned to a single guess for the
+  whole broadcast.
 - **Taiwan broadcast source** (`resolveWhereToWatchTw` in
   `scripts/build-data.mjs`) — 愛爾達體育台 is the hardcoded default for
   every sport this site covers. The one exception is MLB's Apple TV
@@ -480,22 +506,25 @@ actually watch live right now.
 
 ## AI runs in the background, not on page load
 
-Nothing in the browser ever calls Gemini or the proxy Worker, and nothing
-in the browser ever calls any other network endpoint either - there is no
-server-side sync of any kind (see "Local-only, no accounts" below). The
-only network request this page ever makes is `fetch('./data/matches.json')`
-- once on load, and again at exactly two later moments (see "One update
-path" below), never on a blind timer. All AI scoring happened earlier,
-unattended, in the scheduled build (see "Deployment" below) — by the time
-anyone opens the page, every fixture in the window is already scored and
-sitting in a static file.
+Nothing in the browser ever calls Gemini directly - that stays entirely
+server-side, in the scheduled build (see "Deployment" below), unattended;
+by the time anyone opens the page, every fixture in the window is already
+scored and sitting in a static file. The browser DOES now talk to two other
+read-only/trigger-only endpoints on the shared proxy - `/sports-proxy` (live
+score/odds polling, see "Live score/odds polling" below) and
+`/match-dispatch` (the manual "重新整理資料"/"AI 重新評估" buttons, see
+"On-demand refresh and AI reevaluation" below) - both entirely optional
+(silently unavailable if `PROXY_URL` isn't configured at build time, same
+graceful-degradation posture the AI validation pass itself already had) and
+neither one holds or needs a Gemini key of its own; the actual Gemini call
+still only ever happens inside the scheduled/dispatched build.
 
 ## One update path: on load, and exactly when a relevant match starts or ends
 
-No polling, no fixed-interval timers, no hidden background refreshes - a
-tab left open re-fetches `matches.json` at exactly three kinds of moment,
-never on a blind "check again in N minutes" schedule regardless of whether
-anything relevant is actually about to change:
+Fetching `public/data/matches.json` itself still follows exactly one path,
+no blind polling - a tab left open re-fetches it at exactly three kinds of
+moment, never on a "check again in N minutes" schedule regardless of
+whether anything relevant is actually about to change:
 
 1. **On load.**
 2. **When a currently-loaded match's own start time arrives.**
@@ -523,7 +552,92 @@ deploy.yml` passes `github.sha`) to tell two cases apart:
   (`location.replace`) instead of trying to patch itself up in place.
 
 The two manual Settings buttons (檢查更新/重新整理資料) call the exact same
-function, so "how a refresh happens" only ever exists in one place.
+function, so "how a matches.json refresh happens" only ever exists in one
+place - though 重新整理資料 now ALSO fires an on-demand rebuild (see below),
+which is what actually gets fresh ESPN data into that file sooner than the
+next scheduled cron tick.
+
+## Live score/odds polling
+
+The one update path above is deliberately event-driven, never a blind
+timer - but a genuinely LIVE match's own real-time score is the one thing
+that design can't provide by itself (`matches.json` is only ever as fresh as
+the last build, at most every 15 minutes). `pollLiveMatches`
+(`public/app.js`) is a narrowly-scoped exception: while at least one
+currently-loaded match is actually live, it polls the shared proxy's
+`/sports-proxy` route (a thin, host-allowlisted CORS passthrough to ESPN's
+own public scoreboard - browsers can't read ESPN's response directly, it
+sets no CORS headers for arbitrary origins) every 30 seconds for just that
+match's own league, and merges the real score/status straight into memory.
+Paused while the tab is hidden or a card stack is mid-swipe (same
+`isStackBeingInteractedWith` guard the scheduled update path already uses),
+and silently unavailable when `PROXY_URL`/`state.proxyUrl` isn't
+configured.
+
+This never re-runs objective scoring or AI validation - it only updates the
+same `competitors[].score`/`isFinished`/odds fields ESPN itself already
+reports, plus two further, real-time-only refinements built from them:
+
+- **`liveExcitementBonus`** (`public/lib/recommendation.mjs`) - a small,
+  bounded bonus added to a live match's `planningScore` (never its true
+  `effectiveScore`, same "adjustment, not override" posture as every other
+  nudge in this file) from how close its REAL current score is, weighted by
+  how far into the game it already is. A live match that turns out to be a
+  genuine nail-biter can win a scheduling slot a pre-game prediction alone
+  wouldn't have given it - the whole day's plan is recomputed after every
+  live poll that actually changed something, so this can visibly reshuffle
+  what's recommended next.
+- **`estimateLiveDurationMinutes`** (`public/lib/recommendation.mjs`) -
+  live-corrects the pre-game broadcast-length estimate from ESPN's own
+  current inning (MLB)/quarter+clock (NBA)/match-minute (Premier League),
+  extrapolating the REAL pace observed so far forward to the sport's full
+  length and blending it with the original estimate. F1 has no live per-lap
+  timing feed available from this build's own APIs, so it always keeps its
+  pre-race estimate. This directly narrows the reported "MLB's estimate can
+  drop out by 30-60 real minutes" gap - a live game's own actual pace now
+  corrects its schedule-blocking length in real time instead of staying
+  pinned to a single pre-game guess for its whole broadcast.
+
+## On-demand refresh and AI reevaluation
+
+Two Settings buttons trigger a real rebuild now, not just a re-read of
+whatever the last scheduled run already published:
+
+- **重新整理資料** - also fires the shared proxy's `/match-dispatch` route
+  (see that repo's worker.js), which runs a `workflow_dispatch` against this
+  repo's own `deploy.yml` - the exact same build the 15-minute cron runs,
+  just sooner. This is what actually gets fresh ESPN/live data without
+  waiting for the next cron tick.
+- **AI 重新評估** - fires the identical dispatch. There is no separate
+  "AI-only" build path - whether the resulting run actually calls Gemini is
+  decided entirely by `data/ai-meta.json`'s own shared clock (see "AI
+  validation" below), same as every other trigger (cron, a push, this
+  site's own owner manually running the workflow). This button's own
+  Settings text reads that same clock client-side first, so mashing it
+  tells you honestly "still on cooldown, ~N minutes left" without needing a
+  network round-trip just to find out.
+
+Both need the shared proxy's `MATCH_FIND_DISPATCH_TOKEN` secret configured
+(see that repo's README) - a GitHub PAT scoped narrowly to this repo's own
+Actions, unrelated to `GEMINI_API_KEY`. Silently unavailable (buttons
+explain why) when `PROXY_URL` isn't configured, or when that secret isn't
+set (the dispatch request itself just fails, same as any other network
+error this page already handles gracefully). A best-effort, silent ping on
+every page load also fires the same dispatch when it's genuinely been over
+an hour since the last real Gemini call (see
+`AI_REEVALUATE_MIN_INTERVAL_MS`/`maybePingAiReevaluate` in `app.js`) - so
+ordinary traffic, not just someone clicking a button, can trigger the next
+scheduled-feeling reevaluation in the background.
+
+## No developer tools in the UI
+
+An earlier version of Settings had a "開發者工具" section with a "匯出推薦
+資料" button (a client-side JSON download of the current plan, for
+inspecting `scripts/evaluate-recommendations.mjs` against). It's gone -
+that's not a viewer-facing feature, and `scripts/evaluate-recommendations.mjs`
+still works fine against a `public/data/matches.json` copy saved any other
+way (a browser's own devtools, or straight from a GitHub Actions run).
+Settings now shows only what an ordinary viewer would actually use.
 
 ## AI validation (no persistent per-match cache)
 
@@ -544,23 +658,25 @@ cap (see `AI_SCORE_BATCH_SIZE`), since an unthrottled run against a full
 
 **Throttling how often Gemini gets called**: the workflow itself runs
 every 15 minutes so the free ESPN half of the build stays fresh (see
-"Deployment" below), but calling Gemini for every fixture on every one of
-THOSE runs would burn quota for no benefit. `data/ai-meta.json` (the one
-file this pipeline still commits back to the repo) records
-`lastAiFetchAt` — the last time a build actually called the proxy — and a
-`schedule`-triggered run (as opposed to a `push` or manual
-`workflow_dispatch` run — see `GITHUB_EVENT_NAME` in the workflow) skips
+"Deployment" below), but calling Gemini on every one of THOSE runs would
+burn quota for no benefit. `data/ai-meta.json` (the one file this pipeline
+still commits back to the repo) records `lastAiFetchAt` — the last time a
+build actually called the proxy — and ANY run (`schedule`, `push`, or
+`workflow_dispatch` — see `GITHUB_EVENT_NAME` in the workflow) skips
 calling Gemini entirely if that was less than `AI_FETCH_MIN_INTERVAL_HOURS`
-(8) ago; every fixture just runs on its objective score alone
-(`source: 'api-objective'`) until the next eligible run. A push or a
-manual run always calls it, since either one means someone specifically
-wants fresh data now — which is also why pushing to `main` is the fastest
-way to see the API-driven pipeline's real output. The footer shows this
-same timestamp ("AI 最後查詢於 ...") with a "重新查詢" link straight to the
-Actions run page, for exactly that manual case — there's no client-safe
-way for a static page to trigger a rebuild itself, so the link is as far
-as the page itself can take it; actually running it needs the repo owner's
-GitHub sign-in.
+(1) ago; every fixture just runs on its objective score alone
+(`source: 'api-objective'`) until the next eligible run. This throttle is
+now applied uniformly regardless of what triggered the run — see that
+constant's own comment for why an earlier version's "push/dispatch always
+calls it" exception had to go once ordinary viewers, not just this site's
+own owner, gained a way to trigger a `workflow_dispatch` themselves (see
+"On-demand refresh and AI reevaluation" below): a shared hourly cap that a
+manual trigger could freely bypass wouldn't really be a cap at all. A local
+run (no `GITHUB_EVENT_NAME`) is the one exception, since there's nothing to
+throttle against when a person is running this directly themselves. The
+footer shows this same timestamp ("AI 最後查詢於 ...") alongside the
+Settings panel's own "重新整理資料"/"AI 重新評估" buttons — see "On-demand
+refresh and AI reevaluation" below for what those actually do now.
 
 The workflow commits `data/ai-meta.json` back to the repo only when its
 timestamp actually changed (see `.github/workflows/deploy.yml`'s "Commit
@@ -717,9 +833,10 @@ writeup of what's covered and why.
 ## Evaluating a historical export
 
 `node scripts/evaluate-recommendations.mjs <export.json> [more.json ...]`
-reads one or more `public/data/matches.json`-shaped files (including
-whatever the Settings panel's own "匯出資料" button downloads) and reports
-recommended count/rate, sport concentration, score/confidence
+reads one or more `public/data/matches.json`-shaped files - a copy saved
+straight from the live site (or a GitHub Actions build artifact/log) works
+fine; there is no in-app export button anymore (see "No developer tools in
+the UI" below) - and reports recommended count/rate, sport concentration, score/confidence
 distributions, and how often the same two teams (or F1 session) get
 recommended across multiple distinct dates in the export - reported as a
 descriptive rate, not flagged as a bug, since a real multi-game series is

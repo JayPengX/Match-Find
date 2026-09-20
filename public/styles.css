@@ -262,6 +262,29 @@ main#app {
 .section-label span { color: var(--text); }
 #recommended-section .section-label { margin-top: 4px; }
 
+/* Groups the day-picker + sport-filter row into one persistent mobile
+   control header instead of two plain sections that scroll away with the
+   rest of the page - the two controls a viewer reaches for over and over
+   (which day, which sport) staying reachable without scrolling back to the
+   top is the actual "centric UX for mobile" fix here, not just a visual
+   restyle. Sticks to the viewport top (this page has no other scrolling
+   ancestor, so `position: sticky` resolves against the document itself); a
+   solid, non-transparent background (not a blur) keeps it simple and
+   guaranteed-correct across browsers while still fully occluding cards
+   scrolling underneath it, and the bottom border reads as a real edge once
+   content is behind it instead of the bar looking like it's floating with
+   nothing to separate it. */
+.control-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-top: 10px;
+  margin: 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+  border-bottom: 1px solid var(--border);
+}
 .day-scroller {
   display: flex;
   gap: 8px;
@@ -296,7 +319,7 @@ main#app {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 10px;
 }
 /* Keeps #sport-filters as a real element (app.js's renderFilters targets it
    with replaceChildren without disturbing the settings button, a fixed
@@ -311,8 +334,8 @@ main#app {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-muted);
@@ -330,8 +353,8 @@ main#app {
   background: transparent;
   color: var(--text-muted);
   border-radius: 999px;
-  padding: 8px 14px;
-  min-height: 38px;
+  padding: 9px 15px;
+  min-height: 42px;
   font-size: 0.84rem;
   font-weight: 600;
   cursor: pointer;
@@ -619,50 +642,6 @@ main#app {
   content: "（API 數據估計，尚未經 AI 驗證）";
   font-style: italic;
   color: var(--text-faint);
-}
-
-/* The AI reason's own structured evidence (see app.js's buildEvidenceDetails)
-   - a collapsed drill-down, deliberately understated (small, faint,
-   indented) so it never competes with the card's own primary content;
-   opening it is an explicit choice, not something skimming the list ever
-   has to look past. */
-.match-evidence {
-  margin: 8px 0 0;
-  font-size: 0.76rem;
-  color: var(--text-faint);
-}
-.match-evidence summary {
-  cursor: pointer;
-  color: var(--text-muted);
-  font-weight: 600;
-  list-style: none;
-}
-.match-evidence summary::-webkit-details-marker { display: none; }
-.match-evidence summary::before {
-  content: "▸ ";
-}
-.match-evidence[open] summary::before {
-  content: "▾ ";
-}
-.match-evidence ul {
-  margin: 6px 0 0;
-  padding-left: 16px;
-  list-style: disc;
-}
-.match-evidence li {
-  margin: 3px 0;
-  line-height: 1.4;
-}
-.match-evidence-label {
-  font-weight: 700;
-  color: var(--text-muted);
-}
-.match-evidence-label::after {
-  content: "：";
-}
-.match-evidence-source {
-  color: var(--text-faint);
-  font-style: italic;
 }
 
 /* Bold + a saturated color (not the muted/faint text tones used elsewhere)

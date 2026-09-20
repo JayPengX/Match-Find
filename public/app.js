@@ -17,9 +17,14 @@
 // NOT one of those AI answers anymore - it's a hardcoded rule
 // (`resolveWhereToWatchTw`, also in build-data.mjs): 愛爾達體育台 for
 // everything except an MLB fixture ESPN itself reports as Apple TV.
-// Nothing here ever calls Gemini, and nothing here ever calls any other
-// network endpoint either - the ONLY network request this page makes is
-// one `fetch('./data/matches.json')` (see "One update path" below).
+// Nothing here ever calls Gemini directly, and the only OTHER network
+// endpoints this page ever talks to are the shared proxy's own read-only
+// `/sports-proxy` (live score/odds polling, see pollLiveMatches) and
+// `/match-dispatch` (the manual "重新整理資料"/"AI 重新評估" buttons, see
+// requestMatchDispatch) - both entirely optional (see state.proxyUrl,
+// sourced from matches.json's own `proxyUrl` field, null and both features
+// silently unavailable when PROXY_URL isn't configured at build time, same
+// graceful-degradation posture as the AI validation pass itself).
 // Everything else - sport priority, enabled sports, and which swiped match
 // a viewer prefers - is local-only, in this browser's own localStorage,
 // with no server-side sync of any kind (see README's "Local-only, no
@@ -51,14 +56,14 @@ import {
   computeOverlapRange,
   computeWindowPlan,
   applyRecentRepeatPenalties,
-  describeEvidence,
-  isEvidenceFresh,
   naturalSlotChoice,
   matchLifecycleState,
   LIFECYCLE_STATES,
-  estimatedDurationMinutes
+  estimatedDurationMinutes,
+  estimateLiveDurationMinutes
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
+import { TEAM_LEAGUE_ESPN, liveScoreboardUrl, extractLiveUpdates } from './lib/espn.mjs';
 
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
@@ -99,9 +104,11 @@ const state = {
   recentPicksByDayKey: new Map(),
   // Map<sport, share 0..1> over the whole fetched window's own final
   // picks - docs/recommendation-engine-audit.md section 15's "the planner
-  // should expose that concentration" (team/league concentration), not
-  // itself used for any scheduling decision - purely a diagnostic
-  // surfaced in exportRecommendationData's own payload.
+  // should expose that concentration" (team/league concentration) - not
+  // itself used for any scheduling decision, and (since the developer-only
+  // export button that used to surface this was removed) currently only
+  // ever inspected via public/data/matches.json directly or
+  // scripts/evaluate-recommendations.mjs (see README).
   sportConcentration: new Map()
 };
 
@@ -298,7 +305,8 @@ const settingsEnabledSports = document.getElementById('settings-enabled-sports')
 const updateStatusText = document.getElementById('update-status-text');
 const checkUpdateBtn = document.getElementById('check-update-btn');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
-const exportDataBtn = document.getElementById('export-data-btn');
+const aiReevaluateStatusText = document.getElementById('ai-reevaluate-status-text');
+const aiReevaluateBtn = document.getElementById('ai-reevaluate-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -327,10 +335,11 @@ const exportDataBtn = document.getElementById('export-data-btn');
 // just split feedback and testing across two subtly different rankings for
 // no real benefit - "worth watching" doesn't need two competing answers,
 // just one well-reasoned one. resolveViewingPlan (./lib/recommendation.mjs)
-// now always uses the single blend that used to be the "entertainment"
-// default (watchability, nudged by broadcastQuality - see
-// BROADCAST_QUALITY_WEIGHT there) - the one that needs no familiarity with
-// a sport's standings or current form to make sense of. The viewer's own
+// now always uses the single "Best Matches" blend - skill/closeness
+// (competitiveness), sustained competitive stakes (enduranceScore), and
+// entertainment/public attention (watchability, nudged by broadcastQuality)
+// combined, see BEST_MATCH_WEIGHTS there - deliberately never anchored on
+// just one of those axes. The viewer's own
 // preference is expressed a different way instead: swiping a card stack to
 // commit to a specific alternative (see "Prefer" below) - that's the ONE
 // place personal taste overrides the algorithm's own judgment, and it's
@@ -536,6 +545,7 @@ function renderEnabledSportsPanel() {
 
 function openSettingsPanel() {
   renderSettingsPanel();
+  renderAiReevaluateStatus();
   settingsPanel.hidden = false;
   settingsBackdrop.hidden = false;
 }
@@ -625,6 +635,11 @@ function dayLabelFor(date, { short = false } = {}) {
   const diffDays = Math.round((startOfDay(date) - startOfDay(today)) / 86_400_000);
   if (diffDays === 0) return '今天';
   if (diffDays === 1) return '明天';
+  // Yesterday is a real, explicitly reachable day now (see build-data.mjs's
+  // own one-day lookback and computeDayPlan treating a finished match as a
+  // normal candidate) - it deserves the same clear "昨天" label 今天/明天
+  // already get, not just falling through to a bare weekday/date.
+  if (diffDays === -1) return '昨天';
   return (short ? shortDayFormatter() : localDayFormatter()).format(date);
 }
 
@@ -781,53 +796,13 @@ function renderVenue(el, match) {
   el.textContent = match.venueZh ? `${match.venue}（${match.venueZh}）` : match.venue;
 }
 
-// Grounds the one-sentence AI "reason" in the actual structured evidence
-// (see recommendation.mjs's describeEvidence/isEvidenceFresh) it was
-// scored from, per docs/recommendation-engine-audit.md's "explanations
-// should be grounded in evidence" - rather than trying to auto-assemble
-// Chinese prose from raw findings (a real risk of reading worse than
-// Gemini's own directly-generated reason), this lets a viewer see the
-// actual current facts behind that sentence and judge for themselves.
-// Collapsed by default (a <details> element, no JS needed to toggle it) -
-// this is a "how was this decided" drill-down, not something that belongs
-// competing for attention with the card's own primary content. Inserted
-// directly after `reasonEl` in the DOM rather than living in the card
-// template itself, since most matches (no evidence at all) render nothing
-// here.
-function buildEvidenceDetails(match, reasonEl) {
-  const items = describeEvidence(match);
-  if (!items.length) return;
-
-  const details = document.createElement('details');
-  details.className = 'match-evidence';
-
-  const summary = document.createElement('summary');
-  summary.textContent = isEvidenceFresh(match) ? '評分依據' : '評分依據（較舊）';
-  details.appendChild(summary);
-
-  const list = document.createElement('ul');
-  items.forEach(item => {
-    const li = document.createElement('li');
-    const label = document.createElement('span');
-    label.className = 'match-evidence-label';
-    label.textContent = item.label;
-    li.appendChild(label);
-    li.appendChild(document.createTextNode(` ${item.finding}`));
-    if (item.source) {
-      const source = document.createElement('span');
-      source.className = 'match-evidence-source';
-      source.textContent = `（${item.source}）`;
-      li.appendChild(source);
-    }
-    list.appendChild(li);
-  });
-  details.appendChild(list);
-
-  reasonEl.insertAdjacentElement('afterend', details);
-}
-
 function buildMatchCard(match) {
   const node = cardTemplate.content.firstElementChild.cloneNode(true);
+  // Lets a later render find and patch THIS exact card by id without
+  // rebuilding it from scratch - see buildMatchStack's own reuse mechanism,
+  // which relies on this to update just the recommended-tag/is-pinned state
+  // on an already-correctly-scrolled stack instead of tearing it down.
+  node.dataset.matchId = match.id;
   const start = Date.parse(match.startTimeUtc);
   const end = start + match.durationMinutes * 60_000;
 
@@ -943,8 +918,6 @@ function buildMatchCard(match) {
   // source this replaced ever showed (see styles.css's own .is-api-objective
   // rule for the actual wording).
   if (match.source === 'api-objective') reasonEl.classList.add('is-api-objective');
-
-  buildEvidenceDetails(match, reasonEl);
 
   // A plain fact, independent of recommendation state entirely (see
   // resolveViewingPlan's own top comment on why overlap no longer decides
@@ -1073,13 +1046,30 @@ function renderDayLabels() {
   dayLabelEls.forEach(el => { el.textContent = label; });
 }
 
+// A day genuinely worth showing as a clickable pill at all - state.days
+// itself stays the FULL fetched window (every other piece of logic that
+// walks it, e.g. ensureSelectedDayHasActiveSport's "jump to the nearest day
+// that actually has a match", still needs the complete list to jump
+// through) - this is only the UI-facing subset: a day with nothing to show
+// isn't worth a tap target, and that's just as true when a sport filter is
+// active (a day empty of MLB specifically shouldn't get a pill while "MLB"
+// is the active filter, even though it might have other sports going on).
+function visibleDays() {
+  return state.days.filter(day => {
+    const dayMatches = matchesForDay(day.key);
+    return state.activeSport === 'all'
+      ? dayMatches.length > 0
+      : dayMatches.some(m => m.sport === state.activeSport);
+  });
+}
+
 function renderDayScroller() {
-  // Every fetched day up front, no "load more" click - the whole window is
-  // already baked into matches.json at build time (see build-data.mjs's
-  // own comment on DAYS_AHEAD), so there's no cost to showing all of it
-  // right away; a click-to-reveal step here only ever hid days that were
-  // already sitting in memory.
-  const nodes = state.days.map(day => {
+  // Every day that actually has something to show, up front, no "load
+  // more" click - the whole window is already baked into matches.json at
+  // build time (see build-data.mjs's own comment on DAYS_AHEAD), so
+  // there's no cost to showing all of it right away; a click-to-reveal
+  // step here only ever hid days that were already sitting in memory.
+  const nodes = visibleDays().map(day => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'day-pill';
@@ -1148,6 +1138,62 @@ function isStackBeingInteractedWith() {
   return Date.now() - lastStackInteractionAt < STACK_INTERACTION_COOLDOWN_MS;
 }
 
+// The stack DOM node the viewer just swiped, kept alive across the very next
+// render triggered by that same swipe's own pin (see buildMatchStack's
+// settle() and renderRecommendedSection's reuse check below) - one-shot,
+// cleared the instant a render pass either consumes or fails to match it.
+// This is the actual fix for "swiping next flashes the previous card": a
+// pin used to call renderSections(), which tore down and rebuilt EVERY
+// stack from scratch, including the one the viewer's finger had just
+// settled on - a freshly built stack always starts at scrollLeft 0 (its
+// first, highest-scored card) and only gets corrected to the real pinned
+// position on the next animation frame, so for one paint the viewer saw
+// the WRONG (often the previous/default) card before it snapped to the one
+// they'd actually chosen - worse the slower/gentler the swipe, since a
+// fixed 180ms settle timeout (see the old settleTimer below) could fire
+// while native momentum scrolling was still carrying the gesture further,
+// pinning a transient mid-flight position and then fighting the still-
+// ongoing native scroll with its own corrective jump. Reusing the exact
+// same DOM node (not a clone - scrollLeft is a live property of the actual
+// element) means there is nothing left to correct: the viewer's own
+// gesture already put it exactly where it belongs.
+let interactedStack = null;
+
+function slotMemberOrderKey(members) {
+  return members
+    .slice()
+    .sort((a, b) => b.viewerScore - a.viewerScore)
+    .map(m => m.id)
+    .join('|');
+}
+
+// Updates only what a pin can change on an already-built, already-correctly
+// -scrolled stack (recommended-tag text/class, is-recommended, and which
+// card counts as "pinned to the top of the day") without touching layout,
+// scroll position, or any card this pin didn't actually change the
+// recommendation state of.
+function patchStackSelectionTags(stackNode, members, isTopOfDay, primaryId) {
+  members.forEach(match => {
+    const card = stackNode.querySelector(`[data-match-id="${CSS.escape(match.id)}"]`);
+    if (!card) return;
+    const tag = card.querySelector('.recommended-tag');
+    if (match.isPreferred) {
+      tag.hidden = false;
+      tag.textContent = '偏好';
+      tag.classList.add('is-preferred');
+    } else if (match.recommended) {
+      tag.hidden = false;
+      tag.textContent = '推薦';
+      tag.classList.remove('is-preferred');
+    } else {
+      tag.hidden = true;
+      tag.classList.remove('is-preferred');
+    }
+    card.classList.toggle('is-recommended', !!match.recommended);
+    card.classList.toggle('is-pinned', isTopOfDay && match.id === primaryId);
+  });
+}
+
 // A slot with more than one near-total-overlapping member (see
 // groupIntoSlots) - a horizontally swipeable card stack, native CSS
 // scroll-snap, same touch mechanism the day picker already uses. Unlike an
@@ -1171,6 +1217,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   const slotKey = primary.slotKey || slotKeyFromMembers(members);
   const wrapper = document.createElement('div');
   wrapper.className = 'match-stack';
+  wrapper.dataset.slotKey = slotKey;
 
   const hint = document.createElement('p');
   hint.className = 'match-stack-hint';
@@ -1196,6 +1243,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // name for "this viewer's own judgment of the match", the one this
   // stack's card order should actually reflect).
   const ordered = members.slice().sort((a, b) => b.viewerScore - a.viewerScore);
+  // Stamped so a LATER render (see renderRecommendedSection's reuse check)
+  // can confirm this exact node still represents the same members in the
+  // same order before reusing it - if membership or order genuinely
+  // changed, this key won't match and the caller correctly falls back to a
+  // full rebuild instead of reusing something stale.
+  wrapper.dataset.memberOrderKey = slotMemberOrderKey(ordered);
   const primaryIndex = ordered.findIndex(m => m.id === primary.id);
   ordered.forEach((match, index) => {
     const card = buildMatchCard(match);
@@ -1232,20 +1285,50 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   }
   // The actual pin+rebuild only fires once the gesture SETTLES, not on
   // every intermediate tick mid-swipe (which would otherwise re-pin, and
-  // re-render the whole page, dozens of times during one swipe). Native
-  // 'scrollend' (Chrome/Firefox/Edge, Safari 18.2+) fires exactly once
-  // scrolling - including snap settling and any momentum/rubber-band
-  // bounce - has genuinely finished, so it's used when available instead of
-  // guessing a fixed debounce: reading scrollLeft before the snap has fully
-  // settled is what previously made a plain forward swipe occasionally
-  // resolve to a card one or two positions away from the one it actually
-  // stopped on.
-  const supportsScrollEnd = 'onscrollend' in window;
-  let settleTimer = null;
+  // re-render the whole page, dozens of times during one swipe).
+  //
+  // Settling is detected by POLLING scrollLeft across animation frames
+  // until it stops changing, rather than a fixed debounce or relying on
+  // native 'scrollend' (unsupported on pre-18.2 Safari, a very real chunk
+  // of this site's own iOS PWA audience). A fixed timeout is fundamentally
+  // the wrong tool here: native momentum/snap scrolling can keep moving the
+  // scroll position for anywhere from under 100ms (a short, decisive flick)
+  // to several hundred ms (a slow, gentle drag) depending on gesture speed
+  // and device - a timeout tuned for the fast case fires WHILE a slow
+  // swipe's momentum is still carrying it, reading a transient mid-flight
+  // index and pinning the wrong card; a timeout long enough for the slow
+  // case makes every swipe feel sluggish. Polling naturally waits exactly
+  // as long as the actual scroll takes, however long that is, on every
+  // browser that supports requestAnimationFrame.
+  const SETTLE_STABLE_FRAMES = 3; // ~50ms at 60fps with no change - reliably past a snap's own final micro-adjustment
+  let settlePollId = null;
+  let settleStableCount = 0;
+  let lastPolledScrollLeft = null;
   function settle() {
     const activeIndex = currentIndex();
     const chosen = ordered[activeIndex];
-    if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
+    if (chosen && chosen.id !== primary.id) {
+      // Recorded BEFORE pinSlotChoice triggers its own render, so that
+      // render can find and reuse this exact node - see interactedStack's
+      // own comment.
+      interactedStack = { dayKey, slotKey, memberOrderKey: wrapper.dataset.memberOrderKey, node: wrapper };
+      pinSlotChoice(dayKey, slotKey, chosen.id);
+    }
+  }
+  function pollSettle() {
+    settlePollId = null;
+    const current = scroller.scrollLeft;
+    if (current === lastPolledScrollLeft) {
+      settleStableCount += 1;
+    } else {
+      settleStableCount = 0;
+      lastPolledScrollLeft = current;
+    }
+    if (settleStableCount >= SETTLE_STABLE_FRAMES) {
+      settle();
+      return;
+    }
+    settlePollId = requestAnimationFrame(pollSettle);
   }
   scroller.addEventListener(
     'scroll',
@@ -1257,14 +1340,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       markStackInteraction();
       const activeIndex = currentIndex();
       dotEls.forEach((dot, index) => dot.classList.toggle('is-active', index === activeIndex));
-      if (!supportsScrollEnd) {
-        clearTimeout(settleTimer);
-        settleTimer = setTimeout(settle, 180);
-      }
+      settleStableCount = 0;
+      lastPolledScrollLeft = null;
+      if (settlePollId == null) settlePollId = requestAnimationFrame(pollSettle);
     },
     { passive: true }
   );
-  if (supportsScrollEnd) scroller.addEventListener('scrollend', settle, { passive: true });
 
   wrapper.append(hint, scroller, dots);
   return wrapper;
@@ -1297,11 +1378,34 @@ function renderRecommendedSection() {
   // full state.matches, not just today's bucket, so that edge case doesn't
   // just silently drop the alternative.
   const byId = new Map(state.matches.map(m => [m.id, m]));
+  // One-shot: consumed (matched or not) by this pass alone, so a stale
+  // reference never lingers into an unrelated later render (a day switch,
+  // the periodic tick, a real data poll) - see interactedStack's own
+  // comment for why this exists at all.
+  const pendingReuse = interactedStack;
+  interactedStack = null;
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
     const alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
     if (alternatives.length) {
-      fragment.appendChild(buildMatchStack(dayKey, [match, ...alternatives], match, index === 0));
+      const members = [match, ...alternatives];
+      const slotKey = match.slotKey || slotKeyFromMembers(members);
+      const isTopOfDay = index === 0;
+      if (
+        pendingReuse &&
+        pendingReuse.dayKey === dayKey &&
+        pendingReuse.slotKey === slotKey &&
+        pendingReuse.memberOrderKey === slotMemberOrderKey(members)
+      ) {
+        // The viewer's own gesture already scrolled this exact node to
+        // exactly the right card - reuse it as-is (same live element, so
+        // its scrollLeft is untouched) and only patch the small bit of
+        // state a pin actually changes.
+        patchStackSelectionTags(pendingReuse.node, members, isTopOfDay, match.id);
+        fragment.appendChild(pendingReuse.node);
+      } else {
+        fragment.appendChild(buildMatchStack(dayKey, members, match, isTopOfDay));
+      }
     } else {
       const card = buildMatchCard(match);
       if (index === 0) card.classList.add('is-pinned');
@@ -1444,6 +1548,8 @@ function applyMatchData(data) {
     const generated = new Date(data.generatedAt);
     generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
   }
+  state.proxyUrl = data.proxyUrl || null;
+  state.lastAiFetchAt = data.lastAiFetchAt || null;
   renderAiStatus(data.lastAiFetchAt);
   renderTbdSection();
 
@@ -1661,57 +1767,248 @@ async function checkForUpdate({ silent = false } = {}) {
   }
 }
 checkUpdateBtn.addEventListener('click', () => checkForUpdate());
-// Same underlying check either way (this is a static site - there's no
-// separate "just the ESPN data" endpoint to hit) - a distinct second button
-// purely because the two read as different requests to a viewer ("is the
-// app itself updated" vs "get me whatever's fresh right now"), matching how
-// build-data.mjs itself separates a quota-free ESPN refresh from the
-// quota-throttled Gemini one (see that script's own AI_FETCH_MIN_INTERVAL_HOURS).
-refreshDataBtn.addEventListener('click', () => checkForUpdate());
 
-// A developer tool, not a viewer-facing feature (see its own Settings
-// section) - downloads the CURRENT recommendation plan as JSON, entirely
-// client-side. state.matches (post-resolveViewingPlan), not
-// state.rawMatches, is deliberately what's exported: the whole point is to
-// inspect the actual .recommended/.score decision this build made, not
-// just the raw fetched fixtures behind it.
+// ---- On-demand refresh / AI reevaluation (shared proxy's /match-dispatch) --
 //
-// .recommended/.alternativeIds are now computed on demand per day (see
-// computeDayPlan's own comment) rather than for the whole window at once,
-// so only the currently-viewed day's matches would otherwise carry an
-// accurate flag here. Runs computeDayPlan once per fetched day first
-// (unfiltered by the viewer's own current sport filter - a dev inspecting
-// this wants the full picture, not whatever one filter happens to be
-// showing on screen), respecting whatever's already pinned, so every
-// day's matches carry a real decision by the time this serializes them.
-function exportRecommendationData() {
-  // computeWindowPlan (not a bare per-day computeDayPlan loop) so the
-  // exported .recommended/.planningScore/.recentRepeatPenalty reflect the
-  // SAME cross-day repeat-penalty-aware decision renderRecommendedSection
-  // itself makes, chronologically ordered - see that function's own comment.
-  const windowPlan = computeWindowPlan(new Map(state.days.map(day => [day.key, matchesForDay(day.key)])), state.pinnedChoices);
-  const payload = {
-    exportedAt: new Date().toISOString(),
-    dataGeneratedAt: state.generatedAt || null,
-    priorityOrder: state.priorityOrder,
-    enabledSports: [...state.enabledSports],
-    // docs/recommendation-engine-audit.md section 15's "the planner should
-    // expose that concentration" (team/league concentration) - a plain
-    // object since Map doesn't survive JSON.stringify on its own.
-    sportConcentration: Object.fromEntries(windowPlan.sportConcentration),
-    matches: state.matches
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `match-find-export-${localDateKey(new Date())}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+// "重新整理資料" and "AI 重新評估" both fire the exact same GitHub Actions
+// workflow_dispatch (see the shared proxy's own worker.js /match-dispatch
+// route) - there is still no separate "just the ESPN half" endpoint to
+// trigger, same reasoning checkForUpdate's own comment already gives for
+// why checkUpdateBtn/refreshDataBtn share one function. Which one actually
+// happens (a fresh ESPN pull always; a fresh Gemini validation pass only if
+// it's been at least AI_REEVALUATE_MIN_INTERVAL_MS - see build-data.mjs's
+// own AI_FETCH_MIN_INTERVAL_HOURS) is decided entirely SERVER-SIDE by
+// data/ai-meta.json's one shared clock, the same clock every trigger (this
+// page's two buttons, the page-load ping below, this site's own owner
+// manually running the workflow, the 15-minute cron) reads - never by which
+// button was clicked. The two buttons exist only because "get me fresh
+// scores now" and "ask AI to re-check everything now" read as different
+// REQUESTS to a viewer, not because they do different things once they
+// reach GitHub.
+const AI_REEVALUATE_MIN_INTERVAL_MS = 60 * 60_000; // mirrors build-data.mjs's AI_FETCH_MIN_INTERVAL_HOURS (1)
+// A plain client-side courtesy debounce (this page's own two buttons, and
+// the page-load ping, all share it) - the shared proxy enforces the REAL
+// global cooldown/rate limits server-side regardless; this only avoids an
+// obviously-redundant second request while the first is still in flight or
+// was just sent.
+const MATCH_DISPATCH_CLIENT_COOLDOWN_MS = 60_000;
+let lastDispatchRequestAt = 0;
+
+async function requestMatchDispatch({ statusEl, button, pendingText, successText, failureText } = {}) {
+  if (!state.proxyUrl) {
+    if (statusEl) statusEl.textContent = '此站台尚未設定共用 Worker，無法觸發重新整理。';
+    return;
+  }
+  if (Date.now() - lastDispatchRequestAt < MATCH_DISPATCH_CLIENT_COOLDOWN_MS) {
+    if (statusEl) statusEl.textContent = '剛請求過，請稍候再試一次。';
+    return;
+  }
+  lastDispatchRequestAt = Date.now();
+  if (button) button.disabled = true;
+  if (statusEl && pendingText) statusEl.textContent = pendingText;
+  try {
+    const response = await fetch(`${state.proxyUrl}/match-dispatch`, { method: 'POST' });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body?.error?.message || `HTTP ${response.status}`);
+    }
+    if (statusEl && successText) statusEl.textContent = successText;
+    // The dispatched build takes roughly half a minute to run and deploy -
+    // these are the only two extra fetches this triggers, both going
+    // through the exact same checkForUpdate() every other trigger already
+    // uses (see that function's own comment) - not a second, competing
+    // polling loop.
+    setTimeout(() => checkForUpdate({ silent: true }), 45_000);
+    setTimeout(() => checkForUpdate({ silent: true }), 90_000);
+  } catch (error) {
+    console.error('match-dispatch failed', error);
+    if (statusEl && failureText) statusEl.textContent = failureText;
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
-exportDataBtn.addEventListener('click', exportRecommendationData);
+
+refreshDataBtn.addEventListener('click', () => {
+  // Still does the ordinary "read whatever's already published" check
+  // immediately too (free, instant, no proxy needed) - a viewer gets
+  // whatever's already there right away, on top of a genuinely fresh build
+  // landing shortly after.
+  checkForUpdate();
+  requestMatchDispatch({
+    statusEl: updateStatusText,
+    button: refreshDataBtn,
+    pendingText: '已請求重新整理資料，建置完成後會自動套用…',
+    successText: '已請求重新整理，請稍候約 30-60 秒。',
+    failureText: '請求失敗，請稍後再試。'
+  });
+});
+
+// Answered CLIENT-SIDE from matches.json's own lastAiFetchAt whenever
+// possible (no network call needed just to tell a viewer "you already have
+// the latest, wait N more minutes") - the actual throttle enforcement stays
+// entirely server-side in build-data.mjs regardless; this is purely an
+// honest, immediate status line so mashing the button isn't the only way
+// to find out it wouldn't do anything new yet.
+function renderAiReevaluateStatus() {
+  if (!state.proxyUrl) {
+    aiReevaluateStatusText.textContent = '此站台尚未設定共用 Worker，AI 重新評估功能無法使用。';
+    aiReevaluateBtn.disabled = true;
+    return;
+  }
+  aiReevaluateBtn.disabled = false;
+  if (!state.lastAiFetchAt) {
+    aiReevaluateStatusText.textContent = 'AI 尚未評估過，按下即可觸發第一次評估。';
+    return;
+  }
+  const remainingMs = AI_REEVALUATE_MIN_INTERVAL_MS - (Date.now() - Date.parse(state.lastAiFetchAt));
+  aiReevaluateStatusText.textContent =
+    remainingMs > 0
+      ? `AI 每小時最多重新評估一次，還要等約 ${Math.max(1, Math.ceil(remainingMs / 60_000))} 分鐘。`
+      : '距離上次 AI 評估已超過一小時，現在按下就會觸發新的評估。';
+}
+
+aiReevaluateBtn.addEventListener('click', () => {
+  requestMatchDispatch({
+    statusEl: aiReevaluateStatusText,
+    button: aiReevaluateBtn,
+    pendingText: '請求中…',
+    successText: '已送出重新評估請求，若已超過一小時的間隔，結果會在建置完成後自動套用。',
+    failureText: '請求失敗，請稍後再試。'
+  });
+});
+
+// A best-effort, silent ping on page load - if it's genuinely been over an
+// hour since the last real Gemini call, this lets ordinary TRAFFIC trigger
+// the next reevaluation automatically in the background, rather than only
+// ever waiting for GitHub's own 15-minute cron tick to happen to notice.
+// Never shown to the viewer either way (no statusEl/button passed) - a
+// visitor did nothing wrong by simply opening the page while this happens
+// to be due, and nothing goes wrong if this silently no-ops (proxy
+// unconfigured, still on cooldown, a network hiccup) either.
+function maybePingAiReevaluate() {
+  if (!state.proxyUrl) return;
+  const due = !state.lastAiFetchAt || Date.now() - Date.parse(state.lastAiFetchAt) >= AI_REEVALUATE_MIN_INTERVAL_MS;
+  if (due) requestMatchDispatch();
+}
+
+// ---- Live score/odds polling (see ./lib/espn.mjs) --------------------------
+//
+// Everything ELSE on this page only ever refreshes on the event-driven
+// schedule described above (on load, and exactly when a match starts/ends) -
+// deliberately no blind polling, per this file's own long-standing design.
+// A genuinely LIVE match's actual current score is the one thing that
+// design can't provide on its own (matches.json is only ever as fresh as
+// the last build, at most every 15 minutes) - item 5's "live stats,
+// refreshed every few seconds/minutes" needs a real, if narrowly-scoped,
+// exception: while at least one currently-loaded match is actually LIVE,
+// poll the shared proxy's /sports-proxy (a thin CORS passthrough to ESPN's
+// own public scoreboard - see that module) for just that match's own
+// league, on a fixed short interval, and merge the real score/status back
+// into state.allRawMatches in place. This never re-runs the AI validation
+// pass or recomputes competitiveness/watchability/reason - only the same
+// live facts ESPN itself already reports (score, finished status), plus
+// letting recommendation.mjs's own liveExcitementBonus react to them so a
+// live match that turns out to be a genuine nail-biter can bump the day's
+// plan (item 6) - see applyRecentRepeatPenalties's own comment for where
+// that bonus is actually applied.
+const LIVE_POLL_INTERVAL_MS = 30_000;
+let livePollTimer = null;
+
+function anyMatchLiveNow() {
+  return state.allRawMatches.some(m => {
+    if (m.timeTbd || m.isFinished || !TEAM_LEAGUE_ESPN[m.sport]) return false;
+    const lifecycle = matchLifecycleState(m);
+    return lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
+  });
+}
+
+function liveSportsNow() {
+  const sports = new Set();
+  state.allRawMatches.forEach(m => {
+    if (m.timeTbd || m.isFinished || !TEAM_LEAGUE_ESPN[m.sport]) return;
+    const lifecycle = matchLifecycleState(m);
+    if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) sports.add(m.sport);
+  });
+  return sports;
+}
+
+async function pollLiveMatches() {
+  if (!state.proxyUrl) return;
+  const sports = liveSportsNow();
+  if (!sports.size) return;
+
+  const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
+  let changed = false;
+  await Promise.allSettled(
+    [...sports].map(async sport => {
+      const target = liveScoreboardUrl(sport);
+      if (!target) return;
+      const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
+        cache: 'no-store'
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const scoreboard = await response.json();
+      extractLiveUpdates(sport, scoreboard).forEach((update, id) => {
+        const match = byId.get(id);
+        if (!match || match.isFinished) return;
+        const [awayScore, homeScore] = update.scores;
+        if (Array.isArray(match.competitors) && match.competitors.length === 2) {
+          if (awayScore != null && match.competitors[0].score !== awayScore) {
+            match.competitors[0].score = awayScore;
+            changed = true;
+          }
+          if (homeScore != null && match.competitors[1].score !== homeScore) {
+            match.competitors[1].score = homeScore;
+            changed = true;
+          }
+        }
+        if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
+        if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        if (update.isFinished && !match.isFinished) {
+          match.isFinished = true;
+          changed = true;
+        }
+        // Live-corrects the pre-game duration estimate from ESPN's own
+        // current inning/quarter/match-minute - see
+        // recommendation.mjs's estimateLiveDurationMinutes for why this
+        // directly improves scheduling (effectiveDurationMinutes/
+        // schedulingInterval), not just what's printed on the card, and
+        // this repo's own reported "MLB drops 30-60 minutes off its
+        // estimate" bug this is meant to narrow.
+        if (!update.isFinished) {
+          const liveDuration = estimateLiveDurationMinutes(match.sport, match.startTimeUtc, match.durationMinutes, update);
+          if (liveDuration !== match.durationMinutes) {
+            match.durationMinutes = liveDuration;
+            changed = true;
+          }
+        }
+      });
+    })
+  ).catch(() => {}); // best-effort - a failed poll just tries again next tick
+
+  // Re-derives effectiveScore/the day's plan from the freshly-updated raw
+  // matches (liveExcitementBonus reads match.competitors[].score directly,
+  // see recommendation.mjs) - skipped entirely when nothing actually
+  // changed, so a quiet tick (scores unchanged since last poll) doesn't
+  // still force a render.
+  if (changed) recomputeAndRender();
+}
+
+function scheduleLivePoll() {
+  if (livePollTimer) clearTimeout(livePollTimer);
+  livePollTimer = setTimeout(async () => {
+    // A backgrounded tab still gets rescheduled (so it picks back up the
+    // moment it's visible again) but skips the actual network request -
+    // no point spending battery/quota polling scores nobody's looking at.
+    // A mid-swipe stack gets the same short retry the scheduled data-update
+    // path already uses (see isStackBeingInteractedWith's own comment)
+    // rather than yanking the DOM out from under an active gesture.
+    if (document.visibilityState !== 'hidden' && !isStackBeingInteractedWith() && anyMatchLiveNow()) {
+      await pollLiveMatches();
+    }
+    scheduleLivePoll();
+  }, LIVE_POLL_INTERVAL_MS);
+}
 
 async function init() {
   try {
@@ -1723,6 +2020,8 @@ async function init() {
 
     applyMatchData(data);
     scheduleNextUpdate();
+    scheduleLivePoll();
+    maybePingAiReevaluate();
   } catch (error) {
     console.error(error);
     errorState.hidden = false;

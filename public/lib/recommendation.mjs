@@ -80,22 +80,44 @@ export function resolveService(whereToWatchTw) {
 // There used to be a viewer-selectable "recommendation style" (entertainment
 // vs competitive) picking which per-match score drove the recommended
 // lineup. That's gone - one well-reasoned score, not two competing answers
-// to the same question. `bestMatchScore` is watchability ("what a general
-// sports fan/mainstream media would find notable regardless of how close it
-// ends up being", per that field's own definition in the shared proxy's
-// buildMatchRecommendPrompt) nudged by broadcastQuality when it's actually
-// available - watchability needs no familiarity with a sport's standings or
-// current form to make sense of, unlike raw closeness. Falls back to the
-// build-time composite `match.score` when watchability itself isn't set (a
-// heuristic-scored/finished match with no real AI judgment behind it), and
-// skips the broadcastQuality blend entirely rather than producing NaN in
-// that same case.
-export const BROADCAST_QUALITY_WEIGHT = 0.15;
+// to the same question, and it's deliberately NOT anchored on any single
+// dimension either: "best match" means the fixture that combines real
+// SKILL/closeness (competitiveness), genuine COMPETITIVE stakes/staying
+// power (enduranceScore - does the contest actually stay meaningful all the
+// way through, not just at kickoff), and broad ENTERTAINMENT/public
+// attention (watchability, nudged by broadcastQuality's production-quality
+// signal) - never a match that only wins because it's exceptional on one of
+// those axes while being mediocre on the others. `bestMatchScore` is a
+// weighted blend of whichever of these four fields a match actually has
+// (see BEST_MATCH_WEIGHTS), renormalized over just the present ones so a
+// finished/never-scored match missing some fields still gets a real number
+// built from what IS known, same "renormalize over what's present" posture
+// scripts/objective-score.mjs's own weightedAverage uses. Falls back to the
+// build-time composite `match.score` only when NONE of the four dimensions
+// are set at all (nothing left to blend).
+export const BEST_MATCH_WEIGHTS = {
+  competitiveness: 0.3, // skill/closeness of the contest itself
+  watchability: 0.4, // entertainment value / mainstream public attention
+  enduranceScore: 0.15, // does the competitive stakes actually last
+  broadcastQuality: 0.15 // production quality of watching it
+};
+
+function weightedBlend(pairs) {
+  const present = pairs.filter(([value]) => Number.isFinite(value));
+  if (!present.length) return null;
+  const totalWeight = present.reduce((sum, [, weight]) => sum + weight, 0);
+  return present.reduce((sum, [value, weight]) => sum + value * (weight / totalWeight), 0);
+}
 
 export function bestMatchScore(match) {
-  const primary = Number.isFinite(match.watchability) ? match.watchability : match.score;
-  if (!Number.isFinite(match.broadcastQuality)) return primary;
-  return primary * (1 - BROADCAST_QUALITY_WEIGHT) + match.broadcastQuality * BROADCAST_QUALITY_WEIGHT;
+  const blended = weightedBlend([
+    [match.competitiveness, BEST_MATCH_WEIGHTS.competitiveness],
+    [match.watchability, BEST_MATCH_WEIGHTS.watchability],
+    [match.enduranceScore, BEST_MATCH_WEIGHTS.enduranceScore],
+    [match.broadcastQuality, BEST_MATCH_WEIGHTS.broadcastQuality]
+  ]);
+  if (blended != null) return blended;
+  return Number.isFinite(match.watchability) ? match.watchability : match.score;
 }
 
 // ---- Sport priority / owned-service nudges ---------------------------------
@@ -134,19 +156,20 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
 
   const baseScore = Number.isFinite(match.score) ? match.score : 0;
   const bestScore = bestMatchScore(match);
-  // How much of bestScore is attributable to the broadcastQuality blend
-  // alone - lets an explanation say "production quality nudged this up/down
-  // by X" instead of just "the score is Y", per docs/
+  // How much the unified Best-Match blend (skill + competition + entertainment,
+  // see bestMatchScore/BEST_MATCH_WEIGHTS above) moved the number away from
+  // watchability alone - lets an explanation say "the wider blend nudged
+  // this up/down by X" instead of just "the score is Y", per docs/
   // recommendation-engine-audit.md's stated goal of never leaving an
   // adjustment implicit.
   const preBlendBase = Number.isFinite(match.watchability) ? match.watchability : match.score;
-  const broadcastAdjustment = Number.isFinite(preBlendBase) ? bestScore - preBlendBase : 0;
+  const blendAdjustment = Number.isFinite(preBlendBase) ? bestScore - preBlendBase : 0;
 
   return {
     baseScore,
     bestMatchScore: bestScore,
     adjustments: {
-      broadcastQuality: Math.round(broadcastAdjustment * 1000) / 1000,
+      blend: Math.round(blendAdjustment * 1000) / 1000,
       priority: priorityNudge,
       service: serviceNudge
     },
@@ -526,6 +549,138 @@ export function matchLifecycleState(match, now = Date.now()) {
   return LIFECYCLE_STATES.LIVE;
 }
 
+// ---- Live duration correction (a real-time refinement of the pre-game
+// estimate, using ESPN's own live period/clock data) ------------------------
+//
+// scripts/sport-duration.mjs's predictions are necessarily PRE-GAME
+// estimates, decided from a team's own historical pace before a single
+// pitch/tip-off/kickoff - real, CURRENT progress once a match is actually
+// live is a much stronger signal for "how long will this broadcast really
+// run", especially for MLB's own no-clock uncertainty (this repo's own
+// reported bug: the pre-game estimate can drop out by 30-60 real minutes).
+// This extrapolates the REAL pace observed so far (wall-clock elapsed vs.
+// how far into the game ESPN's own live status reports it to be) forward to
+// the sport's own full nominal length, so a genuinely slow- or fast-moving
+// live game visibly corrects its own estimate instead of staying pinned to
+// a pre-game guess the live game itself has already started to contradict.
+// See app.js's pollLiveMatches for where this actually gets called (once
+// per live-score poll) and written back onto match.durationMinutes, which
+// is the one field every downstream scheduling calculation in this file
+// (effectiveDurationMinutes/schedulingDurationMinutes/estimatedDurationMinutes)
+// already reads from - so a better live number improves the whole viewing
+// plan for free, not just what's printed on one card.
+export function estimateLiveDurationMinutes(sport, startTimeUtc, fallbackMinutes, live, now = Date.now()) {
+  if (!live?.isLive) return fallbackMinutes;
+  const elapsedMinutes = (now - Date.parse(startTimeUtc)) / 60_000;
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes <= 0) return fallbackMinutes;
+
+  const progress = liveGameProgressFraction(sport, live);
+  // Too little of the game has happened to extrapolate responsibly yet - an
+  // estimate from a handful of minutes is noisier than the pre-game guess,
+  // not more informative than it.
+  if (progress == null || progress < 0.2) return fallbackMinutes;
+
+  const projected = elapsedMinutes / progress;
+  // Blended with the original pre-game estimate rather than fully replacing
+  // it, so one early, still-noisy reading can't whiplash the schedule -
+  // weighted toward the observed real pace (0.7) since it's the more
+  // current signal, but never discarding the original entirely. Never
+  // below what has already, definitionally, elapsed.
+  const blended = projected * 0.7 + fallbackMinutes * 0.3;
+  return Math.max(Math.round(elapsedMinutes), Math.round(blended));
+}
+
+// 0..1, how far through the sport's own full regulation length a live match
+// already is - or null when this sport/live payload carries no usable
+// progress signal. F1 always returns null: no live per-lap timing feed is
+// available from this build's own APIs (see sport-duration.mjs's own
+// comment on deliberately not taking on a new dependency for exactly this),
+// so an F1 race simply keeps its pre-race circuit-baseline estimate
+// throughout, same as before this function existed.
+function liveGameProgressFraction(sport, live) {
+  if (sport === 'MLB') {
+    const inning = Number(live.period);
+    return Number.isFinite(inning) && inning > 0 ? Math.min(1, inning / 9) : null;
+  }
+  if (sport === 'NBA') {
+    const quarter = Number(live.period);
+    if (!Number.isFinite(quarter) || quarter <= 0) return null;
+    const clockMinutesLeft = parseClockMinutesLeft(live.displayClock);
+    const minutesIntoQuarter = clockMinutesLeft == null ? 0 : Math.max(0, 12 - clockMinutesLeft);
+    // Regulation is 4x12 minutes - a quarter beyond the 4th (overtime) all
+    // count as "past regulation", since OT's own real-time cost is already
+    // handled separately by predictNbaDurationMinutes' own expected-value
+    // overtime term, not by this live progress fraction.
+    const regulationMinutesElapsed = Math.min(4, quarter - 1) * 12 + minutesIntoQuarter;
+    return Math.min(1, regulationMinutesElapsed / 48);
+  }
+  if (sport === 'Premier League') {
+    const minute = parseLeadingInt(live.displayClock);
+    return minute == null ? null : Math.min(1, minute / 90);
+  }
+  return null;
+}
+
+function parseClockMinutesLeft(displayClock) {
+  const match = /^(\d+):(\d+)/.exec(displayClock || '');
+  if (!match) return null;
+  return Number(match[1]) + Number(match[2]) / 60;
+}
+
+function parseLeadingInt(displayClock) {
+  const match = /^(\d+)/.exec(displayClock || '');
+  return match ? Number(match[1]) : null;
+}
+
+// ---- Live excitement (a real-time bonus for a genuinely close live game) --
+//
+// A pre-game score (competitiveness/watchability/enduranceScore/...) is
+// necessarily a PREDICTION, decided before a single pitch/kickoff/tip-off.
+// Once a match is actually live, its real current score is a far stronger,
+// more current signal for "is this genuinely worth switching to or staying
+// on right now" - this is a small, bounded, ADDITIVE bonus (never a
+// replacement for the AI-validated score, same "adjustment, not override"
+// posture as every other nudge in this file) applied only to a fixture
+// that's genuinely LIVE right now, from how close its real current score
+// is, weighted by how far into the game it already is - a tied game in the
+// first few minutes says very little, a tied game deep into the second
+// half/late innings genuinely is more exciting. This is what lets a live
+// match that turns out to be a nail-biter win a scheduling slot a pre-game
+// prediction alone wouldn't have given it (see app.js's pollLiveMatches,
+// which re-fetches live scores and re-runs the day's plan with this bonus
+// applied - "if a live match becomes close, it can bump the upcoming
+// schedule").
+//
+// Reads match.competitors[].score directly (the exact same field
+// build-data.mjs already produces) rather than a separate "live score"
+// field, so a client-side live-score refresh (see app.js) only ever has to
+// update the ONE place a score already lives.
+export const LIVE_EXCITEMENT_MAX_BONUS = 2.5;
+
+export function liveExcitementBonus(match, now = Date.now()) {
+  if (match.isFinished) return 0;
+  const scores = (match.competitors || []).map(c => Number(c?.score));
+  if (scores.length !== 2 || !scores.every(Number.isFinite)) return 0;
+  const state = matchLifecycleState(match, now);
+  if (state !== LIFECYCLE_STATES.LIVE && state !== LIFECYCLE_STATES.ENDING_SOON) return 0;
+
+  const start = Date.parse(match.startTimeUtc);
+  const totalMinutes = Math.max(1, estimatedDurationMinutes(match));
+  const elapsedFraction = Math.min(1, Math.max(0, (now - start) / (totalMinutes * 60_000)));
+
+  // How close the two current scores are, scaled to how high-scoring THIS
+  // game already is rather than a fixed margin - a 1-run gap is close in a
+  // 2-1 MLB game, not in a 12-1 one; a 1-point gap late in an NBA game
+  // isn't remotely the same as a 1-point gap in a 0-0 EPL match (whose own
+  // total is 0, so `lopsidedAt`'s own floor of 3 keeps that division sane).
+  const gap = Math.abs(scores[0] - scores[1]);
+  const totalScored = scores[0] + scores[1];
+  const lopsidedAt = Math.max(3, totalScored * 0.3);
+  const closeness = Math.max(0, 1 - gap / lopsidedAt);
+
+  return Math.round(closeness * elapsedFraction * LIVE_EXCITEMENT_MAX_BONUS * 100) / 100;
+}
+
 // ---- Quiet hours ------------------------------------------------------------
 
 export const QUIET_HOUR_START = 0;
@@ -618,7 +773,28 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
         break;
       }
     }
-    const withCur = { score: prevBest.score + getScore(cur.choice), picks: [...prevBest.picks, cur] };
+    // Floored at 0, never negative, before it's added to the running total.
+    // A viewer-preference/variety penalty (priority nudge, cross-day repeat,
+    // sport concentration - see applyRecentRepeatPenalties) is a
+    // TIE-BREAKER between competing alternatives, never a verdict that a
+    // fixture isn't worth watching at all - but the raw DP as "maximize
+    // total score of chosen non-overlapping items" doesn't know that
+    // distinction: if enough stacked penalties push a candidate's own score
+    // negative, ADDING it to an otherwise-empty, genuinely non-conflicting
+    // slot makes the running total go DOWN, so the unfloored DP would
+    // rather recommend NOTHING there at all - discarding a fixture that
+    // costs the viewer literally nothing to also watch, for no real reason.
+    // This was the direct cause of a reported bug: a day with a perfectly
+    // fine, non-overlapping evening fixture ended up with only one
+    // recommended match because that fixture's stacked penalties (repeat +
+    // sport-concentration + a low sport-priority rank) happened to net
+    // negative. Flooring here means a non-conflicting candidate can only
+    // ever help or be neutral to the plan, never actively worse than
+    // recommending nothing in its own free slot - PICKING it and PICKING
+    // NOTHING then tie (`>=` below already favors picking it), so it's
+    // included, exactly matching "why not, it's free" intuition.
+    const score = Math.max(0, getScore(cur.choice));
+    const withCur = { score: prevBest.score + score, picks: [...prevBest.picks, cur] };
     const without = i > 0 ? dp[i - 1] : { score: 0, picks: [] };
     dp[i] = withCur.score >= without.score ? withCur : without;
   }
@@ -639,6 +815,19 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 // function stays a pure function of its arguments - app.js's own
 // `state.pinnedChoices.get(dayKey)` is what a caller passes here.
 //
+// A finished match is a REAL candidate here, not excluded - the whole plan
+// is decided as ONE calendar day, not "whatever is still ahead as of right
+// now" (see docs/recommendation-engine-audit.md and this repo's own README
+// "Sport recommendation should be run using day as one unit" design goal):
+// a viewer opening the page mid-afternoon should see the SAME whole-day
+// lineup a viewer this morning would have, this morning's game shown as
+// having already happened (matchLifecycleState/buildMatchCard's own
+// is-finished styling) in its own rightful slot, not silently dropped from
+// 推薦賽事 the moment it ends and the rest of the day quietly reflowed to
+// fill the gap. isQuietHours is still the one thing that keeps a fixture
+// out of the plan outright - "already over" isn't a reason to exclude it,
+// it's a reason to show it as history.
+//
 // Every individual candidate goes into the scheduler below - NOT one
 // representative per near-total-overlap cluster. An earlier version chose
 // each cluster's highest-effectiveScore member BEFORE scheduling and only
@@ -658,7 +847,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     match.isPreferred = false;
     match.slotKey = null;
   });
-  const candidates = dayMatches.filter(m => !isQuietHours(m) && !m.isFinished);
+  const candidates = dayMatches.filter(m => !isQuietHours(m));
   if (!candidates.length) return [];
 
   // Falls back to the older effectiveScore name (never to a bare 0) when
@@ -833,7 +1022,15 @@ export function daysBetweenDayKeys(laterDayKey, earlierDayKey) {
 // win on consecutive days, this just stops it from winning by default
 // every time an alternative is close. Anything 4+ days back is
 // indistinguishable from "not recently recommended" at this scale.
-export const RECENT_REPEAT_PENALTY_BY_GAP_DAYS = { 1: 1.5, 2: 0.75, 3: 0.25 };
+// Bumped up from the original {1: 1.5, 2: 0.75, 3: 0.25} - a reported real
+// case (the same MLB matchup recommended as the day's bridge/secondary pick
+// on three straight days) showed the old weights were too small to matter
+// against a matchup that's merely a BIT better than that day's alternative,
+// even though "include some variety unless the alternative is genuinely
+// much worse" is exactly the intended behavior. Still soft and decaying,
+// never a hard ban - a dramatically better repeat can still win - just with
+// real teeth against a close call now instead of a token nudge.
+export const RECENT_REPEAT_PENALTY_BY_GAP_DAYS = { 1: 2.5, 2: 1.5, 3: 0.75 };
 export function recentRepeatPenalty(daysSinceLastRecommended) {
   if (!Number.isFinite(daysSinceLastRecommended) || daysSinceLastRecommended <= 0) return 0;
   return RECENT_REPEAT_PENALTY_BY_GAP_DAYS[daysSinceLastRecommended] || 0;
@@ -860,7 +1057,9 @@ export const SPORT_CONCENTRATION_LOOKBACK_DAYS = 3;
 // three sports roughly splitting recent picks is exactly the normal, fine
 // case this should leave alone entirely (0 penalty).
 export const SPORT_CONCENTRATION_THRESHOLD = 0.75;
-export const SPORT_CONCENTRATION_PENALTY = 1;
+// Bumped up from 1 alongside RECENT_REPEAT_PENALTY_BY_GAP_DAYS above - same
+// "variety needs real teeth against a close call" reasoning.
+export const SPORT_CONCENTRATION_PENALTY = 1.5;
 
 // Map<sport, share 0..1> of how much of `picks` belongs to each sport -
 // also what "the planner should expose that concentration" (section 15's
@@ -902,9 +1101,14 @@ export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDa
     const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
     const repeatPenalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
     const sportPenalty = sportConcentrationPenalty(match.sport, recentPicks);
+    // Recomputed fresh every call (never accumulated) from match's own
+    // CURRENT competitor scores - see liveExcitementBonus's own comment.
+    const liveBonus = liveExcitementBonus(match);
     match.recentRepeatPenalty = repeatPenalty;
     match.sportConcentrationPenalty = sportPenalty;
-    match.planningScore = (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - repeatPenalty - sportPenalty;
+    match.liveExcitementBonus = liveBonus;
+    match.planningScore =
+      (Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - repeatPenalty - sportPenalty + liveBonus;
   });
 }
 
@@ -990,7 +1194,6 @@ export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinned
   const actualMatch = actual.find(m => m.id === candidateId);
   if (!actualMatch) return { reason: 'notFound', detail: 'No such candidate on this day.' };
   if (actualMatch.recommended) return { reason: 'recommended', detail: 'This match is already part of the plan - there is nothing to explain.' };
-  if (actualMatch.isFinished) return { reason: 'finished', detail: 'The match has already finished, so it was never a candidate.' };
   if (isQuietHours(actualMatch)) {
     return { reason: 'quietHours', detail: 'Its local start time falls in quiet hours (00:00-05:00), which is never recommended however good its score.' };
   }
@@ -1001,7 +1204,7 @@ export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinned
   // viewer swipe uses (see pinSlotChoice in app.js), then let the
   // scheduler find the best plan that actually includes it.
   const forced = dayMatches.map(m => ({ ...m }));
-  const forcedCandidates = forced.filter(m => !isQuietHours(m) && !m.isFinished);
+  const forcedCandidates = forced.filter(m => !isQuietHours(m));
   const cluster = groupIntoSlots(forcedCandidates).find(c => c.members.some(m => m.id === candidateId));
   const forcedKey = cluster ? slotKeyFromMembers(cluster.members) : candidateId;
   const forcedPinnedForDay = new Map(pinnedForDay ? pinnedForDay.entries() : []);

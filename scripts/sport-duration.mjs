@@ -113,18 +113,49 @@ export function isCoorsField(venueFullName) {
   return venueFullName === 'Coors Field';
 }
 
+// A real, pre-game-available signal this formula didn't use before: the
+// betting market's own total-runs line (already fetched for every MLB
+// fixture - see build-data.mjs's oddsContext/parseOddsSignal). More total
+// runs means more baserunners, more pitching changes, more mound visits -
+// all real, additional broadcast time a low-scoring pitchers' duel simply
+// doesn't accumulate; fewer means the opposite. `MLB_LEAGUE_AVG_OVER_UNDER`
+// is a plain, stable estimate of a typical MLB total (this league-wide
+// average moves only slightly year to year, and this modifier is a soft,
+// bounded nudge, not a value the exact number needs to be precise for).
+// Bounded to +-MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES since a market's total
+// is one more real signal to weigh, not one that should dominate the
+// team-pace-based estimate this already is.
+export const MLB_LEAGUE_AVG_OVER_UNDER = 8.5;
+export const MLB_ODDS_DURATION_MINUTES_PER_RUN = 2;
+export const MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES = 8;
+
+export function mlbOddsDurationModifier(oddsOverUnder) {
+  if (!Number.isFinite(oddsOverUnder)) return 0;
+  const raw = (oddsOverUnder - MLB_LEAGUE_AVG_OVER_UNDER) * MLB_ODDS_DURATION_MINUTES_PER_RUN;
+  return Math.max(-MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, Math.min(MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, raw));
+}
+
 // away/home team names are ESPN's own `team.displayName` (already what
 // build-data.mjs's buildCompetitor stores as `competitor.name`) - an
 // unrecognized team (a spring-training/exhibition opponent, or a rename
 // this table hasn't caught up with yet) contributes an offset of 0 rather
 // than skewing the estimate in either direction or failing the build.
-export function predictMlbDurationMinutes({ awayTeam, homeTeam, venue }) {
+// `oddsOverUnder` is optional (most fixtures have one via ESPN's own odds
+// provider, but never guaranteed) - see mlbOddsDurationModifier's own
+// comment; missing/non-numeric contributes 0, same "a missing signal is
+// neutral, never guessed" posture as every other optional input here.
+export function predictMlbDurationMinutes({ awayTeam, homeTeam, venue, oddsOverUnder }) {
   const awayOffset = MLB_TEAM_PACE_OFFSET_MINUTES[awayTeam] ?? 0;
   const homeOffset = MLB_TEAM_PACE_OFFSET_MINUTES[homeTeam] ?? 0;
   const teamPaceModifier = (awayOffset + homeOffset) / 2;
   const venueModifier = isCoorsField(venue) ? MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES : 0;
+  const oddsModifier = mlbOddsDurationModifier(oddsOverUnder);
   return Math.round(
-    MLB_BASE_DURATION_MINUTES + teamPaceModifier + MLB_ABS_CHALLENGE_SYSTEM_PADDING_MINUTES + venueModifier
+    MLB_BASE_DURATION_MINUTES +
+      teamPaceModifier +
+      MLB_ABS_CHALLENGE_SYSTEM_PADDING_MINUTES +
+      venueModifier +
+      oddsModifier
   );
 }
 

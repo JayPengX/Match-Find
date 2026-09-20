@@ -55,23 +55,34 @@
     </section>
 
     <section class="settings-section">
-      <h3>開發者工具</h3>
-      <p class="settings-hint">匯出目前的推薦資料（JSON），可用來檢查推薦準確度。</p>
-      <button id="export-data-btn" type="button" class="settings-action-btn is-secondary">匯出推薦資料</button>
+      <h3>AI 評分</h3>
+      <p id="ai-reevaluate-status-text" class="settings-hint"></p>
+      <div class="settings-btn-row">
+        <button id="ai-reevaluate-btn" type="button" class="settings-action-btn is-secondary">AI 重新評估</button>
+      </div>
     </section>
+
   </div>
 
   <main id="app" hidden>
-    <section id="day-scroller-section">
-      <div id="day-scroller" class="day-scroller" role="tablist" aria-label="選擇日期"></div>
-    </section>
+    <!-- Sticky as one grouped unit (see .control-bar in styles.css) - on a
+         phone, "which day" and "which sport" are the two controls a viewer
+         reaches for again and again while scrolling a long match list;
+         pinning them to the top instead of leaving them to scroll away
+         with the first section is the actual mobile-centric fix (see
+         styles.css's own comment for why this beats a plain static row). -->
+    <div class="control-bar">
+      <section id="day-scroller-section">
+        <div id="day-scroller" class="day-scroller" role="tablist" aria-label="選擇日期"></div>
+      </section>
 
-    <section id="filters-section">
-      <div class="filter-row">
-        <button id="settings-btn" class="settings-chip-btn" type="button" aria-label="設定">⚙</button>
-        <div id="sport-filters" role="group" aria-label="依運動篩選"></div>
-      </div>
-    </section>
+      <section id="filters-section">
+        <div class="filter-row">
+          <button id="settings-btn" class="settings-chip-btn" type="button" aria-label="設定">⚙</button>
+          <div id="sport-filters" role="group" aria-label="依運動篩選"></div>
+        </div>
+      </section>
+    </div>
 
     <section id="recommended-section">
       <h2 class="section-label"><span data-day-label></span>推薦賽事</h2>

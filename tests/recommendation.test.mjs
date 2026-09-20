@@ -27,7 +27,7 @@ import {
   resolveViewingPlan,
   isQuietHours,
   resolveService,
-  BROADCAST_QUALITY_WEIGHT,
+  BEST_MATCH_WEIGHTS,
   PRIORITY_SCORE_DELTA,
   OWNED_SERVICE_SCORE_BONUS,
   resolveSportTiming,
@@ -54,7 +54,10 @@ import {
   estimatedDurationMinutes,
   STARTING_SOON_WINDOW_MINUTES,
   explainWhyNotRecommended,
-  slotKeyFromMembers
+  slotKeyFromMembers,
+  liveExcitementBonus,
+  LIVE_EXCITEMENT_MAX_BONUS,
+  estimateLiveDurationMinutes
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -82,20 +85,54 @@ function makeMatch(overrides = {}) {
 }
 
 describe('bestMatchScore (the one unified Best Matches blend)', () => {
-  test('blends watchability with broadcastQuality at the documented weight', () => {
-    const match = makeMatch({ watchability: 8, broadcastQuality: 4, score: 5 });
-    const expected = 8 * (1 - BROADCAST_QUALITY_WEIGHT) + 4 * BROADCAST_QUALITY_WEIGHT;
-    assert.equal(bestMatchScore(match), expected);
+  test('blends competitiveness/watchability/enduranceScore/broadcastQuality at the documented weights', () => {
+    const match = makeMatch({ competitiveness: 7, watchability: 8, enduranceScore: 6, broadcastQuality: 4 });
+    const expected =
+      7 * BEST_MATCH_WEIGHTS.competitiveness +
+      8 * BEST_MATCH_WEIGHTS.watchability +
+      6 * BEST_MATCH_WEIGHTS.enduranceScore +
+      4 * BEST_MATCH_WEIGHTS.broadcastQuality;
+    assert.ok(Math.abs(bestMatchScore(match) - expected) < 1e-9);
   });
 
-  test('falls back to the build-time composite score when watchability is missing', () => {
-    const match = makeMatch({ watchability: undefined, score: 5, broadcastQuality: 5 });
-    assert.equal(bestMatchScore(match), 5 * (1 - BROADCAST_QUALITY_WEIGHT) + 5 * BROADCAST_QUALITY_WEIGHT);
+  test('renormalizes over whichever dimensions are actually present', () => {
+    const match = makeMatch({
+      competitiveness: undefined,
+      watchability: 8,
+      enduranceScore: undefined,
+      broadcastQuality: 4
+    });
+    const totalWeight = BEST_MATCH_WEIGHTS.watchability + BEST_MATCH_WEIGHTS.broadcastQuality;
+    const expected =
+      (8 * BEST_MATCH_WEIGHTS.watchability + 4 * BEST_MATCH_WEIGHTS.broadcastQuality) / totalWeight;
+    assert.ok(Math.abs(bestMatchScore(match) - expected) < 1e-9);
   });
 
-  test('a missing broadcastQuality (finished/never-scored match) skips the blend entirely', () => {
-    const match = makeMatch({ watchability: 8, broadcastQuality: null });
-    assert.equal(bestMatchScore(match), 8);
+  test('no dimension can dominate on its own - one exceptional axis alone is not enough to top a well-rounded match', () => {
+    // A one-dimensional "10 at watchability, mediocre everywhere else" match
+    // should NOT beat a well-rounded match that's merely good across the board.
+    const oneDimensional = makeMatch({ competitiveness: 2, watchability: 10, enduranceScore: 2, broadcastQuality: 2 });
+    const wellRounded = makeMatch({ competitiveness: 7, watchability: 7, enduranceScore: 7, broadcastQuality: 7 });
+    assert.ok(bestMatchScore(wellRounded) > bestMatchScore(oneDimensional));
+  });
+
+  test('falls back to watchability, then the build-time composite score, when nothing else is set at all', () => {
+    const withWatchability = makeMatch({
+      competitiveness: undefined,
+      watchability: 8,
+      enduranceScore: undefined,
+      broadcastQuality: undefined
+    });
+    assert.equal(bestMatchScore(withWatchability), 8);
+
+    const nothingAtAll = makeMatch({
+      competitiveness: undefined,
+      watchability: undefined,
+      enduranceScore: undefined,
+      broadcastQuality: undefined,
+      score: 5
+    });
+    assert.equal(bestMatchScore(nothingAtAll), 5);
   });
 });
 
@@ -267,14 +304,48 @@ describe('weightedIntervalSchedule', () => {
   test('an empty input returns an empty plan', () => {
     assert.deepEqual(weightedIntervalSchedule([]), []);
   });
+
+  test('a non-conflicting negative-score candidate is still included, not dropped for "lowering the total"', () => {
+    // Reproduces the reported bug: a perfectly fine, non-overlapping evening
+    // fixture whose stacked penalties (repeat/sport-concentration/priority)
+    // happened to net negative was silently left off the day's plan even
+    // though including it cost nothing - the unfloored DP would rather
+    // recommend NOTHING in that free slot than add a "negative-value" item.
+    const items = [
+      { interval: { start: 0, end: 60 }, choice: { effectiveScore: 5, id: 'earlier' } },
+      { interval: { start: 100, end: 160 }, choice: { effectiveScore: -0.5, id: 'later' } }
+    ];
+    const picks = weightedIntervalSchedule(items).map(p => p.choice.id);
+    assert.deepEqual(picks.sort(), ['earlier', 'later']);
+  });
+
+  test('a negative score still loses to a genuinely better, overlapping alternative', () => {
+    const items = [
+      { interval: { start: 0, end: 60 }, choice: { effectiveScore: -0.5, id: 'weak' } },
+      { interval: { start: 30, end: 90 }, choice: { effectiveScore: 4, id: 'strong' } }
+    ];
+    const picks = weightedIntervalSchedule(items).map(p => p.choice.id);
+    assert.deepEqual(picks, ['strong']);
+  });
 });
 
 describe('computeDayPlan', () => {
-  test('a finished match is never a candidate, however good its score', () => {
+  test('a finished match IS a real candidate - the plan is one whole calendar day, not just what is still ahead', () => {
+    // "Sport recommendation runs as one day-unit" - a viewer opening the
+    // page mid-afternoon should see the same whole-day lineup a viewer this
+    // morning would have, this morning's game shown as history in its own
+    // rightful slot rather than silently dropped once it ends.
     const finished = makeMatch({ id: 'f', isFinished: true, effectiveScore: 99, startTimeUtc: '2026-09-19T12:00:00.000Z' });
     const plan = computeDayPlan('2026-09-19', [finished]);
-    assert.deepEqual(plan, []);
-    assert.equal(finished.recommended, false);
+    assert.deepEqual(plan.map(m => m.id), ['f']);
+    assert.equal(finished.recommended, true);
+  });
+
+  test('a finished match still competes normally for its own slot against another candidate', () => {
+    const strongerFinished = makeMatch({ id: 'a', isFinished: true, startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const weakerFinished = makeMatch({ id: 'b', isFinished: true, startTimeUtc: '2026-09-19T18:02:00.000Z', durationMinutes: 60, effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-19', [strongerFinished, weakerFinished]);
+    assert.deepEqual(plan.map(m => m.id), ['a']);
   });
 
   test('a fixture whose local start falls in quiet hours (00:00-05:00) is never a candidate', () => {
@@ -578,10 +649,10 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
       ])
     );
     assert.deepEqual(plan.get('2026-09-19').map(m => m.id), ['a1']);
-    // a2's own matchup was just recommended yesterday (penalty 1.5) -
-    // 8 - 1.5 = 6.5 < b's 7.8, so the alternative wins.
+    // a2's own matchup was just recommended yesterday (penalty 2.5) -
+    // 8 - 2.5 = 5.5 < b's 7.8, so the alternative wins.
     assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['b2']);
-    assert.equal(a2.recentRepeatPenalty, 1.5);
+    assert.equal(a2.recentRepeatPenalty, 2.5);
   });
 
   test('a dramatically better repeat still wins - the penalty is soft, never a hard ban', () => {
@@ -598,9 +669,9 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
   });
 
   test('recentRepeatPenalty decays with distance and disappears after 3 days', () => {
-    assert.equal(recentRepeatPenalty(1), 1.5);
-    assert.equal(recentRepeatPenalty(2), 0.75);
-    assert.equal(recentRepeatPenalty(3), 0.25);
+    assert.equal(recentRepeatPenalty(1), 2.5);
+    assert.equal(recentRepeatPenalty(2), 1.5);
+    assert.equal(recentRepeatPenalty(3), 0.75);
     assert.equal(recentRepeatPenalty(4), 0);
     assert.equal(recentRepeatPenalty(0), 0);
     assert.equal(recentRepeatPenalty(null), 0);
@@ -625,7 +696,7 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
     const match = footballMatch({ id: 'a', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8 });
     applyRecentRepeatPenalties([match], '2026-09-20', new Map([[matchupKey(match), '2026-09-19']]));
     assert.equal(match.effectiveScore, 8);
-    assert.equal(match.planningScore, 6.5);
+    assert.equal(match.planningScore, 5.5);
   });
 });
 
@@ -781,12 +852,15 @@ describe('Invariant checks', () => {
     const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [a2]]]));
     assert.ok(plan.get('2026-09-20').some(m => m.id === 'a2')); // still recommended - no rival to lose to
     assert.equal(a2.effectiveScore, 8); // never mutated
-    // Both the matchup-repeat penalty (1.5, same matchup as yesterday) AND
-    // the sport-concentration penalty (1, day1's only pick was also
+    // Both the matchup-repeat penalty (2.5, same matchup as yesterday) AND
+    // the sport-concentration penalty (1.5, day1's only pick was also
     // Premier League - 100% share) apply here since this is a
     // single-candidate day with nothing to diversify against; still never
-    // enough to drop the pick when nothing else is competing for the slot.
-    assert.equal(a2.planningScore, 5.5);
+    // enough to drop the pick when nothing else is competing for the slot -
+    // and even if the stacked penalties HAD pushed this negative, the
+    // scheduler's own score floor (see weightedIntervalSchedule) means a
+    // non-conflicting candidate is never worse than recommending nothing.
+    assert.equal(a2.planningScore, 4);
   });
 });
 
@@ -825,9 +899,10 @@ describe('§27 explainWhyNotRecommended', () => {
     assert.equal(result.reason, 'recommended');
   });
 
-  test('a finished match is explained as finished, never re-scheduled', () => {
+  test('a finished match with the winning score for its slot is explained as recommended, not excluded', () => {
     const a = footballMatch({ id: 'a', isFinished: true, effectiveScore: 99 });
-    assert.equal(explainWhyNotRecommended('a', '2026-09-19', [a]).reason, 'finished');
+    computeDayPlan('2026-09-19', [a]);
+    assert.equal(explainWhyNotRecommended('a', '2026-09-19', [a]).reason, 'recommended');
   });
 
   test('a quiet-hours match is explained as such', () => {
@@ -862,11 +937,14 @@ describe('§27 explainWhyNotRecommended', () => {
     assert.equal(result.actualValue, 2);
   });
 
-  test('lowValue: a standalone candidate whose own score genuinely wasn\'t worth its slot', () => {
+  test('a standalone candidate is recommended even with a negative score - nothing else competes for its slot', () => {
+    // See weightedIntervalSchedule's own score-floor comment: a
+    // non-conflicting candidate is never worse than recommending nothing,
+    // however negative its own (penalty-laden) score - so this is no
+    // longer a "lowValue" case at all, it's simply recommended.
     const negative = footballMatch({ id: 'negative', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: -5 });
     const result = explainWhyNotRecommended('negative', '2026-09-19', [negative], null, { scoreField: 'effectiveScore' });
-    assert.equal(result.reason, 'lowValue');
-    assert.deepEqual(result.conflictsWith, undefined);
+    assert.equal(result.reason, 'recommended');
   });
 
   test('an unknown candidate id is reported plainly, never throws', () => {
@@ -927,6 +1005,105 @@ describe('describeEvidence / isEvidenceFresh (structured evidence)', () => {
   test('isEvidenceFresh is false when there is no evidenceRetrievedAt at all', () => {
     assert.equal(isEvidenceFresh(makeMatch({ evidenceRetrievedAt: null })), false);
     assert.equal(isEvidenceFresh(makeMatch({})), false);
+  });
+});
+
+describe('estimateLiveDurationMinutes (real-time correction from ESPN live period/clock)', () => {
+  const START = '2026-09-19T18:00:00.000Z';
+  const startMs = Date.parse(START);
+
+  test('a non-live payload leaves the pre-game estimate untouched', () => {
+    assert.equal(estimateLiveDurationMinutes('MLB', START, 164, { isLive: false }, startMs + 60 * 60_000), 164);
+  });
+
+  test('too little of the game has happened yet - keeps the pre-game estimate', () => {
+    // 1st inning of 9, MLB - progress 1/9 ~= 0.11, under the 0.2 floor.
+    const result = estimateLiveDurationMinutes('MLB', START, 164, { isLive: true, period: 1 }, startMs + 20 * 60_000);
+    assert.equal(result, 164);
+  });
+
+  test('MLB: a game running slower than average extrapolates to a longer estimate', () => {
+    // 40 real minutes elapsed to reach the 4th inning (progress 4/9) implies
+    // a full-length pace of 40 / (4/9) = 90 real minutes just for that
+    // portion - blended 0.7/0.3 with a 164-min pre-game estimate, this
+    // should land noticeably ABOVE a fast pace but the blend keeps it
+    // sane; the key behavioral assertion is direction, not an exact number.
+    const slow = estimateLiveDurationMinutes('MLB', START, 164, { isLive: true, period: 4 }, startMs + 100 * 60_000);
+    const fast = estimateLiveDurationMinutes('MLB', START, 164, { isLive: true, period: 4 }, startMs + 40 * 60_000);
+    assert.ok(slow > fast);
+  });
+
+  test('never estimates less than the time that has already genuinely elapsed', () => {
+    const result = estimateLiveDurationMinutes('MLB', START, 50, { isLive: true, period: 9 }, startMs + 300 * 60_000);
+    assert.ok(result >= 300);
+  });
+
+  test('NBA: reads quarter + clock to compute regulation progress', () => {
+    // Start of the 3rd quarter (quarter=3, full 12:00 left) = 24 minutes of
+    // regulation elapsed out of 48 -> progress 0.5.
+    const result = estimateLiveDurationMinutes(
+      'NBA',
+      START,
+      140,
+      { isLive: true, period: 3, displayClock: '12:00' },
+      startMs + 80 * 60_000
+    );
+    assert.ok(Number.isFinite(result) && result > 0);
+  });
+
+  test('Premier League: reads the match-minute clock directly', () => {
+    // 45 minutes elapsed of 90 -> progress 0.5.
+    const result = estimateLiveDurationMinutes(
+      'Premier League',
+      START,
+      113,
+      { isLive: true, displayClock: '45' },
+      startMs + 50 * 60_000
+    );
+    assert.ok(Number.isFinite(result) && result > 0);
+  });
+
+  test('F1 has no live progress signal - always keeps the pre-race estimate', () => {
+    const result = estimateLiveDurationMinutes('F1', START, 92, { isLive: true, period: 30 }, startMs + 60 * 60_000);
+    assert.equal(result, 92);
+  });
+});
+
+describe('liveExcitementBonus (real-time closeness bonus for a live match)', () => {
+  function liveMatch(overrides = {}) {
+    return makeMatch({
+      sport: 'MLB',
+      startTimeUtc: '2026-09-19T18:00:00.000Z',
+      durationMinutes: 190,
+      enduranceScore: 10,
+      competitors: [{ homeAway: 'away', score: 3 }, { homeAway: 'home', score: 3 }],
+      ...overrides
+    });
+  }
+  const START = Date.parse('2026-09-19T18:00:00.000Z');
+
+  test('a finished match never gets a live bonus', () => {
+    assert.equal(liveExcitementBonus(liveMatch({ isFinished: true }), START + 60 * 60_000), 0);
+  });
+
+  test('a match with no real competitor scores yet gets no bonus', () => {
+    assert.equal(liveExcitementBonus(liveMatch({ competitors: [] }), START + 60 * 60_000), 0);
+  });
+
+  test('a tied game deep into its estimated length scores near the max bonus', () => {
+    const bonus = liveExcitementBonus(liveMatch(), START + estimatedDurationMinutes(liveMatch()) * 60_000 * 0.95);
+    assert.ok(bonus > LIVE_EXCITEMENT_MAX_BONUS * 0.8);
+  });
+
+  test('a tied game right at the start gets almost no bonus - closeness alone is not enough', () => {
+    const bonus = liveExcitementBonus(liveMatch(), START + 60_000);
+    assert.ok(bonus < 0.1);
+  });
+
+  test('a lopsided game gets little to no bonus regardless of how far along it is', () => {
+    const blowout = liveMatch({ competitors: [{ homeAway: 'away', score: 12 }, { homeAway: 'home', score: 1 }] });
+    const bonus = liveExcitementBonus(blowout, START + estimatedDurationMinutes(blowout) * 60_000 * 0.9);
+    assert.ok(bonus < 0.3);
   });
 });
 
