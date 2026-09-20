@@ -422,20 +422,34 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   every following swipe on that same node broke the identical way until an
   unrelated render corrected it back to the real pin from somewhere else -
   which read as the stack suddenly flicking back and freezing there again.
-  A pinned choice also always excludes every OTHER member of its own
-  stack, not just whichever ones directly overlap the pin in time
-  (`computeDayPlan` in `recommendation.mjs`). A 3+-member stack can be a
-  "chain" - card 1 overlaps card 2, card 2 overlaps card 3, but 1 and 3
-  don't overlap each other at all - and an earlier version left a
-  non-adjacent member like that freely schedulable even after a pin, since
-  it never directly conflicted with the pinned pick. Swiping to the
-  lowest-scored card in exactly that shape let the OTHER end of the chain
-  get independently re-recommended too, silently splitting one 3-card
-  stack into two separate 2-card stacks mid-swipe - the dots would jump to
-  a smaller stack and further swipes would loop between only the
-  remaining two cards, never reaching back to the first. A pin now always
-  owns its entire stack, so its member set (and therefore which card is
-  first/second/third) stays stable across every swipe.
+  A stack's own member list (`alternativeIds` in `recommendation.mjs`)
+  is now only the OTHER candidates that DIRECTLY (pairwise) overlap the
+  recommended pick, not every member of its wider presentational cluster.
+  `groupIntoSlots` groups by a TRANSITIVE chain (card 1 overlaps card 2,
+  card 2 overlaps card 3 is enough to union all three, even if 1 and 3
+  never overlap each other at all) - harmless for a genuine 3-card cluster,
+  but a real MLB night's own games routinely chain 10-14 of them into ONE
+  cluster this way (each game reserves ~3-4 hours with buffer, staggered
+  only 20-30 minutes apart across the night - confirmed against real
+  fetched data via the debug tool below). An earlier version handed the
+  swipeable stack every OTHER member of that WHOLE transitive cluster as
+  its alternatives, so a viewer could open what looked like a normal
+  "pick one of these" stack and find 10+ cards in it, most of which never
+  actually conflicted with each other at all - swiping through it landed
+  on cards in no order a viewer would recognize, and pinning one card
+  could shuffle which OTHER cards were still independently recommended
+  elsewhere, since so many pairs in a chain that size are only linked
+  transitively. A first attempt at fixing this instead made a pin exclude
+  its ENTIRE transitive cluster - which "solved" the shuffling by instead
+  silently suppressing every one of those 10+ often-unrelated games from
+  being recommended at all the moment a viewer pinned just one of them,
+  confirmed wrong against the same real data before it ever shipped.
+  Narrowing `alternativeIds` to direct conflicts only (while a pin's own
+  hard-exclusion logic, and the stable lookup key a pin is stored under,
+  both stay based on the FULL cluster - see that field's own comment)
+  keeps every stack small and locally coherent - a real "pick one of these
+  2-3 games actually airing at the same time" choice - without suppressing
+  any other game the chain happened to also transitively touch.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day

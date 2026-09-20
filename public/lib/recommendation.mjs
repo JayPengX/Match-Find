@@ -896,27 +896,24 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   clusters.forEach(cluster => cluster.members.forEach(m => clusterByMatchId.set(m.id, cluster)));
 
   // A pinned choice is a hard user override (see app.js's pinSlotChoice) -
-  // it alone represents its conflict cluster now, so EVERY OTHER member of
-  // that same cluster is excluded, not just whichever ones directly
-  // (pairwise) near-totally overlap the pin. An earlier version excluded
-  // only the direct pairwise overlaps, on the theory that a member which
-  // doesn't itself conflict with the pin should stay a normal free
-  // candidate the planner can still schedule elsewhere. In practice that
-  // broke the swipeable card stack itself: a 3+ member chain cluster (A-B
-  // near-total-overlap, B-C near-total-overlap, but A and C NOT direct
-  // overlapping each other) presents as ONE 3-card "pick one of these"
-  // stack, backed by the fact that with no pin the DP naturally picks only
-  // one of the three (whichever has the best single/combined value). The
-  // moment a viewer swiped to pin the lowest-scored, non-adjacent member
-  // (C), forcing it in let the DP ALSO freely re-add the other end of the
-  // chain (A) purely because forcing a pick skips the "is this worth it"
-  // comparison altogether - the result was BOTH A and C independently
-  // "recommended", silently fracturing the single 3-member stack the
-  // viewer was mid-swipe on into two separate 2-member stacks (a jarring
-  // "swipe to the last card and the dots jump/shrink" regression - see
-  // README). A pin's whole point is "I am committing to this cluster's
-  // choice being exactly this one" - so it now always owns the full
-  // cluster, keeping every stack's member set stable across every pin.
+  // it alone represents its conflict cluster now. Every OTHER match that
+  // genuinely can't be watched alongside it (a direct pairwise
+  // isNearTotalOverlap, not just "somewhere in the same transitive
+  // cluster") is excluded from the scheduler entirely; anything else stays
+  // a normal free candidate the planner is still free to schedule around
+  // the pin. This matters a LOT in practice: a real MLB slate's own
+  // transitive cluster can chain together 10+ games in one giant group
+  // (game1 near-totally overlaps game2, game2 overlaps game3, ... - each
+  // ~3-4 reserved hours, bunched into a few real-world start-time windows -
+  // even though game1 and game14 don't remotely conflict). Excluding the
+  // WHOLE transitive cluster on a single pin (an earlier version of this
+  // function tried exactly that, to keep the swipeable stack's member set
+  // from ever changing shape) would silently suppress every other one of
+  // those 10+ genuinely independent, non-conflicting games from being
+  // recommended at all for the rest of the day the moment a viewer pinned
+  // just ONE of them - confirmed against real fetched data (see README).
+  // Pairwise-only exclusion is correct; the actual "swipe stack" bug this
+  // was chasing was in `alternatives` below, not here.
   const forcedIds = new Set();
   const excludedIds = new Set();
   clusters.forEach(cluster => {
@@ -926,7 +923,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     if (!pinnedMatch) return;
     forcedIds.add(pinnedMatch.id);
     cluster.members.forEach(m => {
-      if (m.id !== pinnedMatch.id) excludedIds.add(m.id);
+      if (m.id !== pinnedMatch.id && isNearTotalOverlap(m, pinnedMatch)) excludedIds.add(m.id);
     });
   });
 
@@ -967,34 +964,51 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   });
 
   // alternativeIds is purely presentational, computed AFTER scheduling:
-  // every other member of a picked match's own conflict cluster that the
-  // scheduler didn't also independently pick. A match is never both
-  // recommended and listed as someone else's alternative (docs/
-  // recommendation-engine-audit.md's Invariant 1).
+  // every OTHER candidate that DIRECTLY (pairwise isNearTotalOverlap)
+  // conflicts with the picked match and that the scheduler didn't also
+  // independently pick - deliberately NOT "every other member of the
+  // picked match's transitive cluster". A real MLB slate's transitive
+  // cluster can chain together 10+ games in one giant group (see the
+  // exclusion comment above) even though most pairs in it never conflict
+  // at all - an earlier version of this function used the FULL transitive
+  // cluster here, which meant a viewer swiping through what should have
+  // been a genuine, small "pick one of these 2-3 games actually airing at
+  // the same time" stack instead got a card for every one of 10+ unrelated
+  // games that whole night, most with nothing to do with the one actually
+  // picked - confirmed against real fetched data, and almost certainly the
+  // real cause behind reports of the swipe stack "looping weirdly, out of
+  // order" (see README). A match is never both recommended and listed as
+  // someone else's alternative (docs/recommendation-engine-audit.md's
+  // Invariant 1) - `!m.recommended` still guards that here.
   //
-  // slotKey is the FULL cluster's own stable key (every member, whether or
-  // not it ended up recommended) - deliberately NOT derived from whatever
-  // subset a particular card's stack happens to display. A cluster of 3+
-  // near-total-overlapping matches where the scheduler independently
-  // recommends more than one of them (e.g. two matches that only each
-  // conflict with a third, not with each other - see Test 3's A/B/C in
-  // recommendation.test.mjs) renders as TWO separate swipeable stacks, one
-  // per recommended pick, each showing only the leftover match as its own
-  // alternative. Both stacks are really the same underlying conflict
-  // cluster, though, and app.js's pinSlotChoice has to record a pin under
-  // the key computeDayPlan will actually look up on the next render
-  // (pinnedForDay.get(slotKeyFromMembers(cluster.members)) above, always
-  // the full cluster) - keying off only the 2 matches visible in whichever
-  // stack the viewer happened to swipe would silently never match that
-  // lookup, so the pin would appear to take (the swipe animates, the dot
+  // slotKey is still the FULL cluster's own stable key (every member,
+  // whether or not it ended up recommended, and regardless of direct vs.
+  // transitive conflict) - deliberately NOT narrowed the same way
+  // alternativeIds just was. A cluster of 3+ near-total-overlapping
+  // matches where the scheduler independently recommends more than one of
+  // them (e.g. two matches that only each conflict with a third, not with
+  // each other - see Test 3's A/B/C in recommendation.test.mjs) renders as
+  // TWO separate swipeable stacks, one per recommended pick, each showing
+  // only its OWN direct conflicts as alternatives. Both stacks are really
+  // part of the same underlying conflict cluster, though, and app.js's
+  // pinSlotChoice has to record a pin under the key computeDayPlan will
+  // actually look up on the next render (pinnedForDay.get(
+  // slotKeyFromMembers(cluster.members)) above, always the full cluster) -
+  // keying off only the 2-3 matches visible in whichever stack the viewer
+  // happened to swipe would silently never match that lookup on a 3+-stack
+  // split, so the pin would appear to take (the swipe animates, the dot
   // updates) but get thrown away on the very next render, reverting right
   // back. Exposing the real key here, once, is what makes every stack for
-  // the same cluster agree on where a pin against it lives.
+  // the same cluster agree on where a pin against it lives, even though
+  // the members each stack actually DISPLAYS are now its own direct
+  // conflicts only.
   picks.forEach(({ choice }) => {
     const cluster = clusterByMatchId.get(choice.id);
     if (!cluster || cluster.members.length < 2) return;
     choice.slotKey = slotKeyFromMembers(cluster.members);
-    const alternatives = cluster.members.filter(m => m.id !== choice.id && !m.recommended);
+    const alternatives = cluster.members.filter(
+      m => m.id !== choice.id && !m.recommended && isNearTotalOverlap(m, choice)
+    );
     if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
   });
 

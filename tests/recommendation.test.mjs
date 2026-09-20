@@ -951,23 +951,25 @@ describe('groupIntoSlots is anchor-independent (docs bug #7)', () => {
   });
 });
 
-describe('a pinned choice always owns its entire cluster, never just its direct conflicts', () => {
-  test('pinning one member of a wider cluster still excludes an unrelated, non-conflicting member of the same cluster', () => {
+describe('a pinned choice only excludes matches it directly conflicts with', () => {
+  test('pinning one member of a wider chain cluster leaves an unrelated, non-conflicting member freely schedulable', () => {
     // a-b near-totally overlap, b-c near-totally overlap, but a and c do
     // NOT overlap each other at all - one transitive presentational
-    // cluster/swipeable stack (groupIntoSlots unions by the chain, not by
-    // every pair individually), but a and c are otherwise perfectly
-    // schedulable together. An earlier version excluded only whichever
-    // members directly (pairwise) conflicted with the pin, which let a
-    // genuinely reproduced real bug through: forcing the lowest-scored,
-    // non-adjacent member of a 3-card swipe stack silently let the OTHER
-    // end of the chain get independently re-recommended too (since forcing
-    // a pick skips the "is this worth it" comparison a natural, unpinned
-    // plan would have made) - fracturing one 3-member stack into two
-    // separate 2-member stacks mid-swipe. A pin now always excludes every
-    // other member of its full cluster, keeping the stack's member set
-    // - and therefore which card is "first/second/third" - stable across
-    // every pin.
+    // cluster (groupIntoSlots unions by the chain, not by every pair
+    // individually), but a and c are otherwise perfectly schedulable
+    // together. Confirmed against a real fetched slate (see README): a
+    // normal MLB night's own transitive cluster can chain together 10+
+    // games this way (game1 overlaps game2, game2 overlaps game3, ...)
+    // even though most of them never conflict with each other at all. An
+    // earlier version of this function excluded the pinned choice's ENTIRE
+    // transitive cluster, on the theory that a pin should always keep its
+    // swipe stack's member set stable - but that meant pinning just ONE of
+    // those 10+ games silently suppressed every other one of them from
+    // being recommended for the rest of the day, genuinely non-conflicting
+    // games included. Pairwise-only exclusion is what actually belongs
+    // here: forcing c in should free b (its own direct conflict) but leave
+    // a - which never conflicted with c - free to still be recommended on
+    // its own merits.
     const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T17:30:00.000Z', durationMinutes: 180, effectiveScore: 100 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:30:00.000Z', durationMinutes: 60, effectiveScore: 3 });
@@ -978,10 +980,26 @@ describe('a pinned choice always owns its entire cluster, never just its direct 
 
     const pinnedForDay = new Map([[[a.id, b.id, c.id].sort().join('|'), 'c']]);
     const plan = computeDayPlan('2026-09-19', [a, b, c], pinnedForDay);
-    assert.deepEqual(plan.map(m => m.id), ['c']);
+    // Both a and c end up recommended - b (which directly conflicts with
+    // both) is the one excluded.
+    assert.deepEqual(new Set(plan.map(m => m.id)), new Set(['a', 'c']));
     assert.equal(c.recommended, true);
-    assert.equal(a.recommended, false);
-    assert.deepEqual(new Set(c.alternativeIds), new Set(['a', 'b']));
+    assert.equal(a.recommended, true);
+    assert.equal(b.recommended, false);
+    // Each pick's own alternativeIds is its DIRECT conflicts only (b, in
+    // both cases) - never the other independently-recommended end of the
+    // chain, which it was never actually competing against. This is the
+    // real fix for the reported "swipe stack has way more cards than
+    // could ever really be watched together and loops unpredictably" bug:
+    // an earlier version listed every OTHER member of the whole transitive
+    // cluster here, so on a real MLB night a single stack could carry 10+
+    // cards, most of which never conflicted with the one actually picked.
+    assert.deepEqual(a.alternativeIds, ['b']);
+    assert.deepEqual(c.alternativeIds, ['b']);
+    // slotKey stays the full cluster's own key regardless - see this
+    // function's own comment on why the pin LOOKUP key and the displayed
+    // alternatives are deliberately two different notions of "cluster".
+    assert.equal(a.slotKey, c.slotKey);
   });
 });
 
