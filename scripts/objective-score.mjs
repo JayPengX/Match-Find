@@ -241,8 +241,13 @@ export function computeMlbObjectiveScore({
     [competitiveness, 0.35],
     [momentum, 0.2]
   ]) ?? 5;
+  // 2, not NBA's 1.5 - matches EPL's own derby bonus. Verified against the
+  // real 9/26 Dodgers/Giants case (see this function's own comment above):
+  // 1.5 only closed that specific gap to an exact tie (both sequences
+  // scoring 15.725) - still left to a coin-flip on DP traversal order, not
+  // a real decision either way.
   if (isRivalry) {
-    watchability += 1.5;
+    watchability += 2;
     factors.push('known historic rivalry matchup');
   }
   watchability = clamp(Math.round(watchability), 1, 10);
