@@ -604,8 +604,26 @@ async function fetchF1Matches(now, windowEndMs, daysAhead) {
 export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceIntensity } = {}) {
   const broadcastQuality = estimateBroadcastQualityBaseline(match.broadcast);
   const [away, home] = match.competitors;
-  const awayWinPct = away?.record ? away.record.wins / Math.max(1, away.record.wins + away.record.losses) : null;
-  const homeWinPct = home?.record ? home.record.wins / Math.max(1, home.record.wins + home.record.losses) : null;
+  // `null` for a team with zero games played (preseason/season-opener,
+  // record 0-0), never `0` - a 0.000 win% is a REAL, verified fact about a
+  // team that's played games and lost all of them; "hasn't played yet" is a
+  // completely different, no-signal case that Math.max(1, ...)'s old
+  // divide-by-zero guard silently conflated with it. Both teams sharing the
+  // same "no signal" 0 used to read as a perfectly even 0.0pp win% gap -
+  // maximum closeness - to closenessFromWinPctGap, which is exactly
+  // backwards: a live-verified case was a 0-0 NBA preseason exhibition in
+  // Quebec City (no betting line posted either) scoring a maxed-out 10/10
+  // competitiveness and 9.0 overall, ranking ABOVE real September MLB
+  // pennant-race games with genuine stakes. Every per-sport function
+  // already guards `Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct)`
+  // before using either one specifically so a genuinely missing signal
+  // renormalizes away via weightedAverage instead of being treated as a
+  // real value - that guard just never worked while a missing record's
+  // "0 games" was itself indistinguishable from "a real 0.000 average".
+  const awayGames = away?.record ? away.record.wins + away.record.losses : 0;
+  const homeGames = home?.record ? home.record.wins + home.record.losses : 0;
+  const awayWinPct = awayGames > 0 ? away.record.wins / awayGames : null;
+  const homeWinPct = homeGames > 0 ? home.record.wins / homeGames : null;
 
   let result;
   switch (match.sport) {

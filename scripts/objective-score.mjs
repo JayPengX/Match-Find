@@ -100,11 +100,21 @@ export function streakMomentum(streakCode) {
 // Recent-form closeness between two teams' own last-10-games records -
 // conceptually the same idea as closenessFromWinPctGap but over a much
 // smaller, much more CURRENT sample, so it moves faster than a full-season
-// record does. Returns null when either side's last-10 record isn't known.
+// record does. Returns null when either side's last-10 record isn't known
+// OR either side has genuinely played 0 of its own last-10 games yet (a
+// brand-new season/roster edge case) - same fix as
+// computeMatchObjectiveScore's own awayWinPct/homeWinPct guard in
+// build-data.mjs: `wins / Math.max(1, wins + losses)` used to silently
+// turn "no games played" into a real, finite 0.000, which two 0-0 sides
+// then read as a perfectly even recent-form matchup (maximum closeness)
+// instead of "no signal at all".
 export function closenessFromLastTen(awayLastTen, homeLastTen) {
   if (!awayLastTen || !homeLastTen) return null;
-  const awayPct = awayLastTen.wins / Math.max(1, awayLastTen.wins + awayLastTen.losses);
-  const homePct = homeLastTen.wins / Math.max(1, homeLastTen.wins + homeLastTen.losses);
+  const awayGames = awayLastTen.wins + awayLastTen.losses;
+  const homeGames = homeLastTen.wins + homeLastTen.losses;
+  if (awayGames <= 0 || homeGames <= 0) return null;
+  const awayPct = awayLastTen.wins / awayGames;
+  const homePct = homeLastTen.wins / homeGames;
   return closenessFromWinPctGap(Math.abs(awayPct - homePct));
 }
 

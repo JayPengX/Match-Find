@@ -1121,3 +1121,112 @@ a live/local headless-browser reproduction recorded here, not by an
 assertion `npm test` runs on every commit. A regression here would only
 resurface the same way this one was found - swiping an actual deployed
 stack, not a failing CI test.
+
+## Round 9 - live-verifying the objective-score formula against real data, and a genuine scoring bug it found
+
+A direct request to optimize the recommendation engine by comparing its
+actual output against real online/media data. This is also the first time
+this repo's own long-standing "Known limitations" caveat - every previous
+round's own "no live verification of either new external API" disclaimer,
+present since Round 6 - could actually be tested: this session's
+environment has real outbound network access to the MLB Stats API, the
+Jolpica F1 API, and general web search, none of which any earlier session
+had.
+
+### 1. The MLB Stats API integration is confirmed accurate against live data
+
+Fetched the real, current NL standings directly and hand-verified one
+live-scored fixture end to end: `mlb-401817017` (Philadelphia Phillies @
+New York Mets, 2026-09-20) computed `competitiveness: 8`,
+`playoff proximity 10/0`. The live MLB Stats API's own standings for that
+exact date show the Phillies holding a wild-card spot outright (WCGB "-")
+while 6 GB in their division, and the Mets 14 games back in the wild
+card with only a handful of games left (mathematically all but
+eliminated) - feeding those real numbers through `playoffProximityScore`/
+`closenessFromWinPctGap`/`closenessFromSpread` by hand reproduces the
+exact `8`/`10`/`0` the live build computed. Independently, a web search
+for real published MLB coverage of that same date flagged this exact
+fixture as the day's wild-card-race must-watch game, for the same
+reason the deterministic formula's own `factors` already state ("9.0pp
+win% gap, playoff-race atmosphere"). `scripts/sport-signals.mjs`'s MLB
+integration - unverified against a live response in every prior round -
+is doing exactly what it was designed to do. This closes that
+long-standing limitation for MLB; F1 (Jolpica) is reachable the same way
+but wasn't independently checked against a real race this round.
+
+### 2. Found instead: a real, live, high-impact scoring bug - 0 games played read as a perfectly even matchup
+
+Comparing top-scored fixtures across the whole window against real
+public attention surfaced a fixture that had no business being anywhere
+near the top: an NBA "Miami Heat @ Toronto Raptors" fixture on 2026-10-03
+- both teams 0-0, no betting line posted (a real market signal that this
+isn't a real game to price), venue "Videotron Centre" (a Quebec City arena
+NBA teams only play in for preseason exhibitions) - scored a maxed-out
+`competitiveness: 10`, `enduranceScore: 10`, and an overall `9.0`, ranking
+ABOVE genuine September MLB pennant-race games with real stakes. Even
+Gemini's own validation reason correctly identified it as preseason
+("熱身賽階段評分符合預期") and still left the score untouched, because its
+adjustment is bounded to ±2 per dimension - it can't fix a baseline that's
+wrong by that much, only the deterministic formula itself can.
+
+**Root cause**: `scripts/build-data.mjs`'s `computeMatchObjectiveScore`
+computed `awayWinPct`/`homeWinPct` as `wins / Math.max(1, wins + losses)`
+- a divide-by-zero guard that silently turns "this team has played 0
+games" into a real, finite `0`, indistinguishable from "this team has
+played games and gone 0-for-everything". Every per-sport formula already
+guards `Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct)`
+specifically so a genuinely missing signal renormalizes away via
+`weightedAverage` instead of counting as a real value - that guard simply
+never worked, because two 0-0 teams' win% wasn't missing, it was a real
+(wrong) `0`, and `closenessFromWinPctGap(0 - 0)` reads a `0.0pp` gap as
+the most even matchup possible: a `10`.
+
+**Fix**: `awayWinPct`/`homeWinPct` are `null` (not `0`) whenever a side has
+played zero games - the exact case the existing `Number.isFinite` guards
+in every per-sport formula were already written to handle correctly, once
+they actually receive a real `null` instead of a fake `0`. The same bug,
+same fix, applied to `objective-score.mjs`'s `closenessFromLastTen` (a
+team with 0 of its own last-10 games played, a lower-probability but
+identical-shape edge case for a brand-new season/roster). Both are
+covered by new regression tests built directly from the live-observed
+case (`tests/build-data.test.mjs`, `tests/objective-score.test.mjs`) -
+281/281 assertions pass.
+
+### 3. The AI-validation "evidence" layer is confirmed completely non-functional - a quota wall, not a scoring problem
+
+While investigating whether the scoring gap above was masked by missing
+AI validation, checked the live `matches.json` directly: 0 of 135
+fixtures carry any grounded evidence at all, despite 115 of them
+otherwise going through successful AI validation. Root-caused via a
+purpose-built diagnostic added to the shared proxy
+(`jaypengx-collab/shared-proxy`'s `debugGrounding` request flag): every
+model in `MATCH_RECOMMEND_MODELS` returns an immediate `429
+RESOURCE_EXHAUSTED` for the grounded (Google Search tool) request
+specifically, while the exact same models succeed instantly for the
+plain scoring call in the same `/match-recommend` invocation. Google
+Search grounding sits on its own, much stricter quota than plain Gemini
+generation on this account/API key - a billing-tier limit, not a bug this
+codebase's own code can fix. A KV-backed cooldown was added on the proxy
+side so a confirmed all-429 batch stops retrying 3 known-doomed models on
+every subsequent build until the cooldown expires - a latency/cost fix,
+not a capability fix. Getting real grounded evidence back requires either
+enabling billing for Search grounding on that Gemini API key, or a
+genuinely different real-time-search source - both real decisions this
+round didn't make unilaterally.
+
+### Known limitations after Round 9
+
+- Only MLB's live data was independently hand-verified this round; F1
+  (Jolpica) and NBA/EPL's odds-only signals were not, though the network
+  access to check them now exists where it didn't in any earlier round.
+- The 0-0/no-games-played bug was found by comparing scores against real
+  public data, not by a systematic audit of every `Math.max(1, ...)`
+  divide-by-zero guard in the codebase - `scripts/evaluate-recommendations.mjs`
+  has a few of the same shape but computing plain descriptive rates
+  (recommended-rate, sport-share), where a 0-vs-null distinction has no
+  real behavioral consequence the way a scoring input does, so those were
+  left alone rather than changed on spec.
+- Evidence/grounding remains non-functional pending the billing/vendor
+  decision above - every fixture still scores on the deterministic
+  formula plus AI validation alone, same as before this round, just with
+  the specific 0-0 scoring bug now fixed underneath it.

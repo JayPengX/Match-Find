@@ -91,6 +91,36 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
     assert.ok(Array.isArray(result.factors));
   });
 
+  // Live-verified regression: a real 0-0 NBA preseason exhibition (Miami
+  // Heat @ Toronto Raptors, Quebec City, no betting line posted) scored a
+  // maxed-out 10/10 competitiveness and 9.0 overall on the deployed site -
+  // ABOVE genuine September MLB pennant-race games with real stakes.
+  // awayWinPct/homeWinPct used to compute as `0 / Math.max(1, 0) = 0` for a
+  // 0-games-played team - a real, finite 0, not null - which
+  // closenessFromWinPctGap then read as "both teams verified at an
+  // identical 0.000 win%", i.e. a perfectly even matchup, maximum
+  // closeness. Two teams that HAVEN'T PLAYED YET carry no competitiveness
+  // signal at all; this must renormalize away to the neutral default, not
+  // max out.
+  test('a 0-0 (preseason/no games played) record carries no competitiveness signal, never scores as a perfectly even matchup', () => {
+    const match = {
+      sport: 'NBA',
+      broadcast: '',
+      isPostseason: false,
+      oddsSpread: null,
+      oddsOverUnder: null,
+      competitors: [
+        { name: 'Miami Heat', record: { wins: 0, losses: 0 } },
+        { name: 'Toronto Raptors', record: { wins: 0, losses: 0 } }
+      ]
+    };
+    const result = computeMatchObjectiveScore(match, {});
+    assert.equal(result.competitiveness, 5); // renormalized neutral default, not the old maxed-out 10
+    assert.equal(result.enduranceScore, 5);
+    assert.equal(result.skill, null); // no games played - genuinely no skill signal either
+    assert.ok(!result.factors.some(f => f.includes('win%')));
+  });
+
   test('looks up MLB standings signals by team display name from the provided map', () => {
     const withStreak = {
       sport: 'MLB',

@@ -140,6 +140,15 @@ describe('closenessFromLastTen', () => {
     assert.equal(closenessFromLastTen(null, { wins: 5, losses: 5 }), null);
     assert.equal(closenessFromLastTen({ wins: 5, losses: 5 }, null), null);
   });
+
+  // Same class of bug as computeMatchObjectiveScore's own live-verified
+  // 0-0 preseason regression (tests/build-data.test.mjs) - 0 games played
+  // must never read as a real, tied 0.000 recent-form pct.
+  test('returns null (not a maxed-out 10) when either side has played 0 of its own last 10', () => {
+    assert.equal(closenessFromLastTen({ wins: 0, losses: 0 }, { wins: 6, losses: 4 }), null);
+    assert.equal(closenessFromLastTen({ wins: 6, losses: 4 }, { wins: 0, losses: 0 }), null);
+    assert.equal(closenessFromLastTen({ wins: 0, losses: 0 }, { wins: 0, losses: 0 }), null);
+  });
 });
 
 describe('estimateBroadcastQualityBaseline', () => {
