@@ -195,15 +195,32 @@ competing ones: `bestMatchScore` (`public/lib/recommendation.mjs`) is the
 single blend every viewer's 推薦賽事 is built from - an earlier version let
 you pick between two subtly different "recommendation styles"; that choice
 added confusion without adding real value, so it's gone. `bestMatchScore`
-itself is a weighted blend of competitiveness (skill/closeness),
-watchability (entertainment/mainstream attention), enduranceScore (does the
-contest actually stay meaningful all the way through), and broadcastQuality
-(`BEST_MATCH_WEIGHTS`) - deliberately never anchored on just one of those
-axes, so a match that's exceptional on only one dimension while mediocre on
-the rest doesn't automatically win over a well-rounded one; renormalized
-over whichever of the four a fixture actually has (a finished/never-scored
-match with fewer of them still gets a real number built from what IS
-known). The one place your own taste actually overrides the algorithm is
+itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
+
+- **skill** - how GOOD the two teams actually are (`scripts/objective-score.mjs`'s
+  `skillFromWinPct`, from each side's own win%/points-rate) - deliberately a
+  separate axis from competitiveness below: two elite teams playing a close
+  game and two also-ran teams playing an equally close game score
+  identically on closeness alone, but they're not the same recommendation.
+  Null for F1 (no per-competitor quality signal exists for a single-driver
+  race), renormalized away like any other missing signal.
+- **competitiveness** - how CLOSE tonight's specific pairing is (season
+  record gap, recent form, betting-market spread)
+- **watchability** - entertainment value/mainstream public attention -
+  itself already the deterministic objective score folded together with
+  Gemini's own real-world-knowledge and Google Search-grounded validation
+  pass (see "AI recommendations" below for what that grounding pass
+  actually does and its own real limits)
+- **enduranceScore** - does the contest actually stay meaningful all the
+  way through, not just at kickoff
+- **broadcastQuality** - production quality of watching it
+
+deliberately never anchored on just one of those axes, so a match that's
+exceptional on only one dimension while mediocre on the rest doesn't
+automatically win over a well-rounded one; renormalized over whichever of
+the five a fixture actually has (a finished/never-scored match, or a sport
+missing one signal, still gets a real number built from what IS known). The
+one place your own taste actually overrides the algorithm is
 **Prefer** - swiping a card stack to commit to a specific alternative (see
 "The viewing plan" below) - which is local, explicit, and per-match, not a
 blanket ranking toggle.
@@ -393,7 +410,18 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   to its first card on at least some mobile WebKit builds. The reused
   node's scroll position is explicitly captured before that move and
   restored after, so a completed swipe can't snap back to (and get stuck
-  on) the wrong card.
+  on) the wrong card. That reused node also tracks which member is
+  currently pinned on the node itself (`wrapper.dataset.primaryId`), not in
+  a variable captured once when the stack was first built - the node can
+  survive many reuse-renders across many swipes, and a value captured only
+  once at build time went stale the moment the first swipe changed the pin,
+  which was the direct cause of a worse regression than either bug above:
+  a swipe landing back on that ORIGINAL first-loaded card compared true
+  against the stale value and silently did nothing at all (the pin never
+  actually changed), which then looked like the stack getting stuck, and
+  every following swipe on that same node broke the identical way until an
+  unrelated render corrected it back to the real pin from somewhere else -
+  which read as the stack suddenly flicking back and freezing there again.
 - A fixture ESPN has scheduled but hasn't set a real kickoff time for yet
   (almost always a playoff game whose bracket slot is set before its exact
   date/time is - see `isTimeTbd` in `build-data.mjs`) never enters the day
@@ -711,6 +739,27 @@ refresh and AI reevaluation" below for what those actually do now.
 The workflow commits `data/ai-meta.json` back to the repo only when its
 timestamp actually changed (see `.github/workflows/deploy.yml`'s "Commit
 AI fetch timestamp" step).
+
+**Media-attention/evidence research is only run for a bounded top slice of
+each batch, not the whole thing**: the shared proxy's `/match-recommend`
+folds a real Google Search-grounded pass (current standings, injuries,
+media buzz - the shared proxy's `fetchGroundedMatchInfo`) into scoring, but
+that pass has to finish inside a single ~8-second attempt. Asking it to
+genuinely research all ~80 fixtures a full 14-day-window batch can carry
+isn't a realistic amount of work for the model to do per fixture in that
+time - in practice a request that large tends to fall back to reasoning
+from training data (or empty evidence arrays across the board) rather than
+performing dozens of distinct real searches, which is indistinguishable
+from grounding "not doing anything" from this build's side even though the
+call itself succeeds. The shared proxy now caps that research pass to its
+own highest-objective-score `GROUNDED_MATCH_INFO_MAX_ITEMS` (20) fixtures
+per batch - the ones actually contending for a recommendation slot, where a
+real media-attention/injury/storyline fact could change the outcome -
+rather than spreading a fixed research budget thin across fixtures that
+were never going to be recommended anyway. Fixtures outside that slice are
+unaffected otherwise: they're still scored normally, just with no research
+evidence folded in, identical to what already happens whenever grounding
+fails or genuinely finds nothing.
 
 **Contested-cluster refinement (a second, comparative pass for close
 calls)**: the base validation call above adjusts each fixture independently

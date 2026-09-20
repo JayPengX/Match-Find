@@ -1187,6 +1187,13 @@ function slotMemberOrderKey(members) {
 // scroll position, or any card this pin didn't actually change the
 // recommendation state of.
 function patchStackSelectionTags(stackNode, members, isTopOfDay, primaryId) {
+  // Keeps buildMatchStack's own settle() (which reads
+  // stackNode.dataset.primaryId, not a closed-over variable - see that
+  // field's own comment) correct across a reuse-render even when the
+  // reuse itself didn't originate from THIS stack's own swipe - e.g. a
+  // different slot's pin triggering a shared renderSections() pass that
+  // patches this one along the way.
+  stackNode.dataset.primaryId = primaryId;
   members.forEach(match => {
     const card = stackNode.querySelector(`[data-match-id="${CSS.escape(match.id)}"]`);
     if (!card) return;
@@ -1263,6 +1270,18 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // changed, this key won't match and the caller correctly falls back to a
   // full rebuild instead of reusing something stale.
   wrapper.dataset.memberOrderKey = slotMemberOrderKey(ordered);
+  // Tracks "which member is currently pinned" on the LIVE node itself,
+  // read/written by settle() below instead of the closed-over `primary`
+  // parameter - see settle()'s own comment for why: this same wrapper (and
+  // therefore this same closure) can be REUSED across many renders (see
+  // renderRecommendedSection's reuse branch), each of which can change
+  // which member is actually pinned via patchStackSelectionTags, but never
+  // re-runs buildMatchStack itself. `primary.id` is only ever this specific
+  // call's own snapshot - it goes stale the moment the first reuse-render
+  // patches a DIFFERENT primaryId onto this node, silently freezing
+  // settle()'s idea of "the default" at whatever the page happened to open
+  // with.
+  wrapper.dataset.primaryId = primary.id;
   const primaryIndex = ordered.findIndex(m => m.id === primary.id);
   ordered.forEach((match, index) => {
     const card = buildMatchCard(match);
@@ -1321,11 +1340,26 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   function settle() {
     const activeIndex = currentIndex();
     const chosen = ordered[activeIndex];
-    if (chosen && chosen.id !== primary.id) {
+    // wrapper.dataset.primaryId, NOT the closed-over `primary.id` - see
+    // that dataset field's own comment. Using the stale closure value here
+    // was the actual cause of a reported regression worse than the
+    // original "flashes back" bug: after this exact node survived one
+    // reuse-render (any swipe that isn't this stack's very first), a swipe
+    // that happened to land back on THIS BUILD's original primary card
+    // compared true against that stale id and skipped calling
+    // pinSlotChoice entirely - leaving the actual pinned state (whatever
+    // the FIRST swipe had already set) silently out of sync with what the
+    // scroller visually showed. The stack then looked "stuck" (the swipe
+    // registered nothing) until some unrelated later render corrected
+    // scrollLeft back to the real pin, which read as the stack "flicking
+    // back" and freezing there, since the same stale comparison broke
+    // every subsequent swipe on this node the same way.
+    if (chosen && chosen.id !== wrapper.dataset.primaryId) {
       // Recorded BEFORE pinSlotChoice triggers its own render, so that
       // render can find and reuse this exact node - see interactedStack's
       // own comment.
       interactedStack = { dayKey, slotKey, memberOrderKey: wrapper.dataset.memberOrderKey, node: wrapper };
+      wrapper.dataset.primaryId = chosen.id;
       pinSlotChoice(dayKey, slotKey, chosen.id);
     }
   }

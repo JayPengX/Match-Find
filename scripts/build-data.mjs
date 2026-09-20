@@ -617,7 +617,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
       result = computeF1ObjectiveScore({ titleRaceIntensity: f1TitleRaceIntensity });
       break;
     default:
-      result = { competitiveness: 5, watchability: 5, enduranceScore: 5, factors: [] };
+      result = { competitiveness: 5, watchability: 5, enduranceScore: 5, skill: null, factors: [] };
   }
   return { ...result, broadcastQuality };
 }
@@ -715,6 +715,7 @@ function toRecommendPayloadItem(m) {
       watchability: m.objectiveScore.watchability,
       enduranceScore: m.objectiveScore.enduranceScore,
       broadcastQuality: m.objectiveScore.broadcastQuality,
+      skill: m.objectiveScore.skill,
       factors: m.objectiveScore.factors
     }
   };
@@ -998,6 +999,14 @@ async function main() {
     match.watchability = clamp(Math.round(objective.watchability + adjustment.watchabilityAdjustment), 1, 10);
     match.enduranceScore = clamp(Math.round(objective.enduranceScore + adjustment.enduranceScoreAdjustment), 1, 10);
     match.broadcastQuality = clamp(Math.round(objective.broadcastQuality + adjustment.broadcastQualityAdjustment), 1, 10);
+    // Purely deterministic (average win%/points-rate, see
+    // objective-score.mjs's skillFromWinPct) - never adjusted by Gemini,
+    // unlike the four dimensions above. Team quality is exactly the kind of
+    // fact a real standings record already settles; there's nothing left
+    // for a validation pass to add on top the way there is for
+    // watchability's "is this secretly a bigger story than the numbers
+    // suggest" judgment call.
+    match.skill = Number.isFinite(objective.skill) ? objective.skill : null;
     // A locally-built, data-grounded reason (see buildObjectiveReasonZh)
     // until Gemini's own validated one arrives - real and specific to this
     // fixture's actual numbers, not a placeholder.

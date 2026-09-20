@@ -139,6 +139,24 @@ export function estimateBroadcastQualityBaseline(broadcast) {
   return FLAGSHIP_BROADCAST_NETWORKS.includes(normalized) ? 7 : 5;
 }
 
+// How GOOD the two teams actually are, independent of how CLOSE tonight's
+// particular pairing is - a genuinely distinct axis from `competitiveness`
+// above, which only measures the GAP between two records and scores two
+// elite 95-win teams identically to two last-place 95-loss teams as long as
+// they're equally matched against each other. A viewer asking "is this
+// worth watching" cares about both: a close game between two great teams
+// (a real playoff-caliber matchup) and a close game between two also-rans
+// are not the same recommendation, even though this repo's own
+// `competitiveness` alone can't tell them apart. .500 (a perfectly average
+// team) is the neutral midpoint (5); the scale is deliberately wide enough
+// that a realistic elite team (~.600, a 97-win MLB pace) already lands
+// near the top and a realistic also-ran (~.400) near the bottom, without
+// needing a mathematically-rare .700+/.300- record to reach either end.
+export function skillFromWinPct(avgWinPct) {
+  if (!Number.isFinite(avgWinPct)) return null;
+  return clamp(Math.round(5 + (avgWinPct - 0.5) * 20), 1, 10);
+}
+
 // A run line beyond ~3 runs, or a point spread beyond ~15 points, is
 // already a blowout by market consensus for that sport - see
 // closenessFromSpread's own comment for why this varies by sport rather
@@ -223,7 +241,12 @@ export function computeMlbObjectiveScore({
     10
   );
 
-  return { competitiveness, watchability, enduranceScore, factors };
+  const skill = skillFromWinPct(
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
+  );
+  if (Number.isFinite(skill)) factors.push(`avg win% ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
+
+  return { competitiveness, watchability, enduranceScore, skill, factors };
 }
 
 // ---- NBA ------------------------------------------------------------------
@@ -281,7 +304,12 @@ export function computeNbaObjectiveScore({
 
   const enduranceScore = clamp(Math.round(competitiveness), 1, 10);
 
-  return { competitiveness, watchability, enduranceScore, factors };
+  const skill = skillFromWinPct(
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
+  );
+  if (Number.isFinite(skill)) factors.push(`avg win% ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
+
+  return { competitiveness, watchability, enduranceScore, skill, factors };
 }
 
 // ---- Premier League ---------------------------------------------------
@@ -322,7 +350,12 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, odds
 
   const enduranceScore = clamp(Math.round(competitiveness), 1, 10);
 
-  return { competitiveness, watchability, enduranceScore, factors };
+  const skill = skillFromWinPct(
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
+  );
+  if (Number.isFinite(skill)) factors.push(`avg points-rate ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
+
+  return { competitiveness, watchability, enduranceScore, skill, factors };
 }
 
 // ---- F1 -------------------------------------------------------------------
@@ -346,5 +379,11 @@ export function computeF1ObjectiveScore({ titleRaceIntensity }) {
   const watchability = clamp(Math.round(hasIntensity ? 4 + titleRaceIntensity * 6 : 5), 1, 10);
   const enduranceScore = clamp(Math.round(hasIntensity ? 4 + titleRaceIntensity * 5 : 5), 1, 10);
 
-  return { competitiveness, watchability, enduranceScore, factors };
+  // No per-competitor "how good are they" signal exists for a single-driver
+  // race the way a two-team win% average does - null, renormalized away by
+  // bestMatchScore's own weightedBlend, same posture as every other missing
+  // signal in this module rather than a guessed default.
+  const skill = null;
+
+  return { competitiveness, watchability, enduranceScore, skill, factors };
 }

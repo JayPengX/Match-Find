@@ -18,7 +18,8 @@ import {
   computeMlbObjectiveScore,
   computeNbaObjectiveScore,
   computeEplObjectiveScore,
-  computeF1ObjectiveScore
+  computeF1ObjectiveScore,
+  skillFromWinPct
 } from '../scripts/objective-score.mjs';
 
 describe('clamp', () => {
@@ -153,7 +154,47 @@ describe('estimateBroadcastQualityBaseline', () => {
   });
 });
 
+describe('skillFromWinPct', () => {
+  test('a perfectly average .500 win% is the neutral midpoint', () => {
+    assert.equal(skillFromWinPct(0.5), 5);
+  });
+
+  test('a realistic elite team win% scores near the top', () => {
+    assert.ok(skillFromWinPct(0.6) >= 7);
+  });
+
+  test('a realistic also-ran win% scores near the bottom', () => {
+    assert.ok(skillFromWinPct(0.4) <= 3);
+  });
+
+  test('is always clamped to [1, 10] even for an unrealistic win%', () => {
+    assert.equal(skillFromWinPct(1), 10);
+    assert.equal(skillFromWinPct(0), 1);
+  });
+
+  test('returns null, not NaN, when no win% is available', () => {
+    assert.equal(skillFromWinPct(null), null);
+    assert.equal(skillFromWinPct(undefined), null);
+  });
+});
+
 describe('computeMlbObjectiveScore', () => {
+  test('skill reflects the AVERAGE quality of both teams, not how close the game is - two elite teams score higher skill than two also-rans, even at the identical win% gap', () => {
+    const eliteMatchup = computeMlbObjectiveScore({ awayWinPct: 0.62, homeWinPct: 0.58, away: null, home: null, isPostseason: false });
+    const alsoRanMatchup = computeMlbObjectiveScore({ awayWinPct: 0.42, homeWinPct: 0.38, away: null, home: null, isPostseason: false });
+    // Both pairings have the same 0.04 win% gap, so competitiveness should
+    // be identical - it's SKILL, not competitiveness, that should tell
+    // these two matchups apart.
+    assert.equal(eliteMatchup.competitiveness, alsoRanMatchup.competitiveness);
+    assert.ok(eliteMatchup.skill > alsoRanMatchup.skill);
+  });
+
+  test('skill is null, not a guessed default, when no win% is available', () => {
+    const result = computeMlbObjectiveScore({ awayWinPct: null, homeWinPct: null, away: null, home: null, isPostseason: false });
+    assert.equal(result.skill, null);
+  });
+
+
   test('two evenly-matched teams with no other signals score high competitiveness', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
     assert.ok(result.competitiveness >= 9);
@@ -241,6 +282,11 @@ describe('computeNbaObjectiveScore', () => {
     const postseason = computeNbaObjectiveScore({ awayWinPct: 0.6, homeWinPct: 0.4, isPostseason: true, isRivalry: false, isNationalBroadcast: false });
     assert.ok(postseason.watchability > regularSeason.watchability);
   });
+
+  test('skill is a real, computed value from the two teams average win%', () => {
+    const result = computeNbaObjectiveScore({ awayWinPct: 0.7, homeWinPct: 0.7, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    assert.ok(result.skill >= 8);
+  });
 });
 
 describe('computeEplObjectiveScore', () => {
@@ -255,6 +301,11 @@ describe('computeEplObjectiveScore', () => {
 });
 
 describe('computeF1ObjectiveScore', () => {
+  test('has no per-competitor skill signal - null, never a guessed default', () => {
+    const result = computeF1ObjectiveScore({ titleRaceIntensity: 1 });
+    assert.equal(result.skill, null);
+  });
+
   test('a live, dead-heat title race scores near the top', () => {
     const result = computeF1ObjectiveScore({ titleRaceIntensity: 1 });
     assert.ok(result.watchability >= 9);

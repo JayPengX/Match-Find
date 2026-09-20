@@ -82,23 +82,35 @@ export function resolveService(whereToWatchTw) {
 // lineup. That's gone - one well-reasoned score, not two competing answers
 // to the same question, and it's deliberately NOT anchored on any single
 // dimension either: "best match" means the fixture that combines real
-// SKILL/closeness (competitiveness), genuine COMPETITIVE stakes/staying
-// power (enduranceScore - does the contest actually stay meaningful all the
-// way through, not just at kickoff), and broad ENTERTAINMENT/public
-// attention (watchability, nudged by broadcastQuality's production-quality
-// signal) - never a match that only wins because it's exceptional on one of
-// those axes while being mediocre on the others. `bestMatchScore` is a
-// weighted blend of whichever of these four fields a match actually has
-// (see BEST_MATCH_WEIGHTS), renormalized over just the present ones so a
-// finished/never-scored match missing some fields still gets a real number
-// built from what IS known, same "renormalize over what's present" posture
-// scripts/objective-score.mjs's own weightedAverage uses. Falls back to the
-// build-time composite `match.score` only when NONE of the four dimensions
-// are set at all (nothing left to blend).
+// SKILL (how good the two teams actually ARE, independent of tonight's
+// pairing - see scripts/objective-score.mjs's skillFromWinPct), genuine
+// COMPETITIVENESS (how CLOSE tonight's specific pairing is - competitiveness
+// - plus whether those stakes actually stay meaningful all the way through
+// rather than just at kickoff - enduranceScore), and broad ENTERTAINMENT/
+// public attention (watchability - itself already folded together from the
+// deterministic objective score AND Gemini's own real-world-knowledge/
+// search-grounded validation pass, see build-data.mjs's fetchAiScores and
+// the shared proxy's own mediaAttention evidence category - plus
+// broadcastQuality's production-quality signal) - never a match that only
+// wins because it's exceptional on one of those axes while being mediocre
+// on the others. A viewer explicitly asked for this distinction: two elite
+// teams playing a close, well-covered game is a different (better)
+// recommendation than two also-rans playing an equally close, equally
+// under-the-radar one - competitiveness/watchability alone can't tell those
+// apart, since neither depends on how GOOD the two teams actually are.
+// `bestMatchScore` is a weighted blend of whichever of these five fields a
+// match actually has (see BEST_MATCH_WEIGHTS), renormalized over just the
+// present ones so a finished/never-scored match, or a sport with no skill
+// signal at all (F1 - see objective-score.mjs's own comment), still gets a
+// real number built from what IS known, same "renormalize over what's
+// present" posture scripts/objective-score.mjs's own weightedAverage uses.
+// Falls back to the build-time composite `match.score` only when NONE of
+// these dimensions are set at all (nothing left to blend).
 export const BEST_MATCH_WEIGHTS = {
-  competitiveness: 0.3, // skill/closeness of the contest itself
-  watchability: 0.4, // entertainment value / mainstream public attention
-  enduranceScore: 0.15, // does the competitive stakes actually last
+  skill: 0.2, // how good the two teams actually are
+  competitiveness: 0.2, // how close tonight's specific pairing is
+  watchability: 0.35, // entertainment value / mainstream public attention
+  enduranceScore: 0.1, // does the competitive stakes actually last
   broadcastQuality: 0.15 // production quality of watching it
 };
 
@@ -111,6 +123,7 @@ function weightedBlend(pairs) {
 
 export function bestMatchScore(match) {
   const blended = weightedBlend([
+    [match.skill, BEST_MATCH_WEIGHTS.skill],
     [match.competitiveness, BEST_MATCH_WEIGHTS.competitiveness],
     [match.watchability, BEST_MATCH_WEIGHTS.watchability],
     [match.enduranceScore, BEST_MATCH_WEIGHTS.enduranceScore],

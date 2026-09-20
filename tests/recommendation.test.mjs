@@ -85,14 +85,24 @@ function makeMatch(overrides = {}) {
 }
 
 describe('bestMatchScore (the one unified Best Matches blend)', () => {
-  test('blends competitiveness/watchability/enduranceScore/broadcastQuality at the documented weights', () => {
-    const match = makeMatch({ competitiveness: 7, watchability: 8, enduranceScore: 6, broadcastQuality: 4 });
+  test('blends skill/competitiveness/watchability/enduranceScore/broadcastQuality at the documented weights', () => {
+    const match = makeMatch({ skill: 9, competitiveness: 7, watchability: 8, enduranceScore: 6, broadcastQuality: 4 });
     const expected =
+      9 * BEST_MATCH_WEIGHTS.skill +
       7 * BEST_MATCH_WEIGHTS.competitiveness +
       8 * BEST_MATCH_WEIGHTS.watchability +
       6 * BEST_MATCH_WEIGHTS.enduranceScore +
       4 * BEST_MATCH_WEIGHTS.broadcastQuality;
     assert.ok(Math.abs(bestMatchScore(match) - expected) < 1e-9);
+  });
+
+  test('SKILL (how good the teams are) is a genuinely separate axis from competitiveness (how close they are)', () => {
+    // Two elite teams in a close game vs. two also-ran teams in an equally
+    // close game - competitiveness/watchability alone can't tell these
+    // apart, since neither depends on how good the two teams actually are.
+    const eliteMatchup = makeMatch({ skill: 9, competitiveness: 8, watchability: 8, enduranceScore: 8, broadcastQuality: 8 });
+    const alsoRanMatchup = makeMatch({ skill: 2, competitiveness: 8, watchability: 8, enduranceScore: 8, broadcastQuality: 8 });
+    assert.ok(bestMatchScore(eliteMatchup) > bestMatchScore(alsoRanMatchup));
   });
 
   test('renormalizes over whichever dimensions are actually present', () => {
