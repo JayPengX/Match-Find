@@ -2539,6 +2539,19 @@ const APP_BUILD_ID_PATTERN = /const APP_BUILD_ID = '([^']*)'/;
 
 async function fetchLiveAppBuildId() {
   try {
+    // `cache: 'no-store'` is enough here: it tells THIS BROWSER to skip its
+    // own local HTTP cache and always hit the network. GitHub Pages' own CDN
+    // (Fastly) does cache this same URL at the edge under its own
+    // `cache-control: max-age=600` - but live-verified via curl, Fastly
+    // actually IGNORES the query string entirely for its cache key on this
+    // asset (three requests with three different random query strings all
+    // came back `x-cache: HIT` against the SAME underlying cached object, on
+    // three different edge nodes) - so a cache-busting query param here would
+    // do nothing at that layer anyway, only add noise. The CDN side turned
+    // out not to be the actual bug: GitHub Pages purges/repopulates its edge
+    // cache on every deploy, confirmed live serving the correct just-deployed
+    // build id within seconds. See reloadAppBtn's own click handler for
+    // where the real "still doesn't hide" bug actually was - not here.
     const response = await fetch(APP_VERSION_CHECK_PATH, { cache: 'no-store' });
     if (!response.ok) return null;
     const text = await response.text();
@@ -2620,8 +2633,24 @@ refreshDataBtn.addEventListener('click', () => {
 });
 reloadAppBtn.addEventListener('click', () => {
   // A real reload, not just re-fetching data - the whole point is to get
-  // this tab off whatever OLD app.js it's still running.
-  window.location.reload();
+  // this tab off whatever OLD app.js it's still running. A bare
+  // window.location.reload() is NOT guaranteed to do that: index.html
+  // itself is served with cache-control: max-age=600 (confirmed live via
+  // curl), so an ordinary reload made within 10 minutes of this tab's own
+  // last load can be satisfied entirely from THIS BROWSER's own local HTTP
+  // cache without ever reaching the network - reloading the exact same
+  // stale index.html (and the old app.js?v=<sha> it references) this tab
+  // already had. That's the real reason this stayed live-reported as
+  // "still doesn't hide even on the newest version" even after fixing the
+  // check itself (see fetchLiveAppBuildId's own comment): the CHECK was
+  // correct, but clicking the button to act on it did nothing.
+  //
+  // A browser's own local cache is keyed on the full URL including its
+  // query string (unlike GitHub Pages' CDN, which was confirmed to ignore
+  // query strings for ITS cache key) - so navigating to a cache-busted URL
+  // forces a genuine network request this browser can't shortcut from disk.
+  const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
+  window.location.replace(bustedUrl);
 });
 
 // ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -

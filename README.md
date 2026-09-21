@@ -714,9 +714,23 @@ compression variant), which reads as "changed" when nothing really did.
 Comparing the build id embedded in the file's own content instead of a CDN
 header has no such false positive - two copies of the same deploy are
 byte-identical. A genuine difference reveals a second "發現新版本，點此重
-新載入" button that does a real `location.reload()` - the only way to
-actually replace a page's own running JavaScript, which re-fetching match
-data alone can never do.
+新載入" button - the only way to actually replace a page's own running
+JavaScript, which re-fetching match data alone can never do.
+
+That button navigates to a cache-busted URL (`location.pathname +
+'?_=' + Date.now()`, via `location.replace`) rather than calling a bare
+`location.reload()`. `index.html` itself is served by GitHub Pages with
+`cache-control: max-age=600` - a plain reload made within that window can
+be satisfied entirely from this browser's own local HTTP cache with no
+network request at all, live-reported as the reload button still doing
+nothing ("never hide") even right after the build-id check above was
+already fixed: the check was telling the truth, the click just wasn't
+acting on it. A never-before-fetched URL forces a genuine network request
+this browser can't answer from disk (GitHub Pages' own CDN was ruled out
+separately - it purges/repopulates on every deploy, confirmed live within
+seconds of a push, so by the time a viewer would ever click this button
+the CDN is already serving the correct content; it was only ever this
+browser's own local cache in the way, not the CDN's).
 
 ### Efficiency: caching and instant paint
 

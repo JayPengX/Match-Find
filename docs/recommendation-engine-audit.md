@@ -3107,3 +3107,41 @@ vs. self, correctly reporting no difference in the local/dev case too).
 Full suite still 350/350 (both fixes are markup/version-check plumbing,
 no scoring logic touched). Committed and pushed to both branches of
 Match-Find.
+
+**Direct follow-up report, same day: "New update found, click to update
+still doesn't hide after newest version" - persisted even past the
+`APP_BUILD_ID` fix above.** The build-id COMPARISON itself was already
+correct (verified live: both the plain and `?v=<sha>`-suffixed `app.js`
+URLs served the freshly-deployed build id within seconds of that deploy
+going out). The actual bug was one step further down: clicking the
+"發現新版本，點此重新載入" button called a bare `window.location.reload()`,
+and `index.html` itself is served by GitHub Pages with
+`cache-control: max-age=600` (confirmed live via curl) - a PLAIN reload,
+unlike a hard/force-refresh, is allowed to be satisfied entirely from this
+browser's own local HTTP cache when made within that freshness window,
+with no network request at all. Since this repo did five deploys in the
+same ~30-minute session that day, a viewer who'd loaded the page at any
+point in that window and then clicked "reload" was, in effect, reloading
+the exact same stale `index.html` (and the old `app.js?v=<sha>` it
+references) straight back off disk - the click did nothing observable,
+which is exactly "never hides" from the viewer's own perspective, even
+though the underlying check that triggered the button was telling the
+truth. Separately confirmed the general shape of that theory was even
+worse than expected: GitHub Pages' CDN (Fastly) turned out to ignore the
+query string entirely for its own edge-cache key on this asset (three
+requests with three different random query strings, from three different
+edge nodes, all came back `x-cache: HIT` against what curl's own `age`
+header showed was the SAME underlying cached object) - so a cache-busting
+query param would have done nothing at THAT layer. It didn't need to,
+though: GitHub Pages purges/repopulates its own CDN cache on every deploy
+(confirmed serving the correct build id within seconds live), so the CDN
+was never actually the live bug here - only this browser's own local
+cache, which DOES key on the full URL including query string. Fixed by
+having the reload button navigate to `location.pathname + '?_=' +
+Date.now()` via `location.replace` instead of calling `location.reload()`
+directly - a URL this browser has never fetched before, so it cannot be
+answered from local cache and must hit the network, landing on GitHub
+Pages' CDN which (per the above) is already serving the correct content.
+
+Full suite still 350/350 (reload-button plumbing only, no scoring/build
+logic touched). Committed and pushed to both branches of Match-Find.
