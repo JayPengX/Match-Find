@@ -13,10 +13,19 @@ import {
   MLB_STATS_API_TEAM_IDS,
   parseMlbTeamRecord,
   parseMlbStandingsResponse,
+  parseNbaStandingsResponse,
+  parseEplStandingsResponse,
   computeTitleRaceIntensity,
   parseF1DriverStandingsResponse,
   F1_TITLE_RACE_DECIDED_GAP_POINTS
 } from '../public/lib/sport-signals.mjs';
+
+// A stat entry in ESPN's own /standings shape (both NBA and EPL below use
+// this exact shape) - `type` is the stable machine key parseNbaStandingsResponse/
+// parseEplStandingsResponse actually match against.
+function stat(type, value, displayValue) {
+  return { type, value, displayValue: displayValue ?? String(value) };
+}
 
 describe('MLB_STATS_API_TEAM_IDS', () => {
   test('has exactly 30 teams, one per MLB club, with unique numeric ids', () => {
@@ -130,6 +139,117 @@ describe('parseMlbStandingsResponse', () => {
   test('a lone team in its own division group has no runner-up, so no margin', () => {
     const json = { records: [{ teamRecords: [{ team: { id: 119 }, gamesBack: '-' }] }] };
     assert.equal(parseMlbStandingsResponse(json).get(119).divisionLeadMargin, null);
+  });
+});
+
+// Unlike the MLB parser above, these two ARE verified against real live
+// ESPN /standings responses (2026-09-21, plus a real historical 2024-25
+// NBA response for a non-zero mid-season shape) - see this repo's own
+// session notes for the exact curl output these fixtures are modeled on.
+describe('parseNbaStandingsResponse', () => {
+  function nbaEntry(name, wins, losses, { lastTen, streak } = {}) {
+    const stats = [stat('wins', wins), stat('losses', losses)];
+    if (lastTen) stats.push(stat('lasttengames', null, `${lastTen.wins}-${lastTen.losses}`));
+    stats.push(stat('streak', null, streak ?? '-'));
+    return { team: { displayName: name }, stats };
+  }
+
+  test('computes a signed gap to the 6-seed and 10-seed cutoffs from real wins/losses', () => {
+    // A 12-team conference (only the top/bottom matter here) shaped like a
+    // real, tight bubble race - several teams within a game of a cutoff,
+    // same shape live-confirmed in a real 2024-25 ESPN response.
+    const entries = [
+      nbaEntry('Team A', 50, 20),
+      nbaEntry('Team B', 45, 25),
+      nbaEntry('Team C', 42, 28),
+      nbaEntry('Team D', 40, 30),
+      nbaEntry('Team E', 39, 31),
+      nbaEntry('Team F', 38, 32, { lastTen: { wins: 6, losses: 4 }, streak: 'W2' }), // 6th - direct-playoff line
+      nbaEntry('Team G', 37, 33),
+      nbaEntry('Team H', 36, 34),
+      nbaEntry('Team I', 35, 35),
+      nbaEntry('Team J', 34, 36, { lastTen: { wins: 3, losses: 7 }, streak: 'L4' }), // 10th - play-in line
+      nbaEntry('Team K', 33, 37),
+      nbaEntry('Team L', 20, 50)
+    ];
+    const parsed = parseNbaStandingsResponse({ children: [{ standings: { entries } }] });
+    assert.equal(parsed.get('Team F').sixSeedGap, 0, 'the 6th-place team itself sits exactly on the cutoff');
+    assert.equal(parsed.get('Team J').tenSeedGap, 0, 'the 10th-place team itself sits exactly on the cutoff');
+    assert.ok(parsed.get('Team A').sixSeedGap < 0, 'the 1st-place team is well AHEAD of the cutoff');
+    assert.ok(parsed.get('Team L').tenSeedGap > 0, 'the last-place team is well BEHIND the cutoff');
+    assert.deepEqual(parsed.get('Team F').lastTen, { wins: 6, losses: 4 });
+    assert.equal(parsed.get('Team F').streakCode, 'W2');
+    assert.equal(parsed.get('Team J').streakCode, 'L4');
+    assert.equal(parsed.get('Team A').streakCode, null, '"-" (no streak reported) reads as null, never guessed');
+  });
+
+  test('before the season starts (every team 0-0), every gap is null, not a false "tied for the cutoff" 0', () => {
+    const entries = Array.from({ length: 12 }, (_, i) => nbaEntry(`Team ${i}`, 0, 0));
+    const parsed = parseNbaStandingsResponse({ children: [{ standings: { entries } }] });
+    for (const [, signal] of parsed) {
+      assert.equal(signal.sixSeedGap, null);
+      assert.equal(signal.tenSeedGap, null);
+    }
+  });
+
+  test('a team that individually has not played yet gets no gap, even once the league has started', () => {
+    // Needs at least NBA_PLAYOFF_SEED_CUTOFF (6) teams with real games
+    // played for the cutoff itself to exist at all.
+    const entries = [
+      nbaEntry('Played A', 10, 2),
+      nbaEntry('Played B', 9, 3),
+      nbaEntry('Played C', 8, 4),
+      nbaEntry('Played D', 7, 5),
+      nbaEntry('Played E', 6, 6),
+      nbaEntry('Played F', 5, 7),
+      nbaEntry('Not Yet', 0, 0)
+    ];
+    const parsed = parseNbaStandingsResponse({ children: [{ standings: { entries } }] });
+    assert.equal(parsed.get('Not Yet').sixSeedGap, null);
+    assert.ok(Number.isFinite(parsed.get('Played A').sixSeedGap));
+  });
+
+  test('handles a missing/malformed response gracefully', () => {
+    assert.equal(parseNbaStandingsResponse({}).size, 0);
+    assert.equal(parseNbaStandingsResponse(null).size, 0);
+    assert.equal(parseNbaStandingsResponse({ children: [{}] }).size, 0);
+  });
+});
+
+describe('parseEplStandingsResponse', () => {
+  function eplEntry(name, points, gamesPlayed = 10) {
+    return {
+      team: { displayName: name },
+      stats: [stat('points', points), stat('gamesplayed', gamesPlayed), stat('pointdifferential', 0)]
+    };
+  }
+
+  test('computes a signed points gap to the Champions League and relegation cutoffs', () => {
+    // 20 clubs, descending points - the real EPL shape (top 4 = Champions
+    // League, bottom 3 of 20 = relegated), live-confirmed against a real
+    // current-season response.
+    const points = [60, 55, 50, 45, 44, 40, 38, 36, 34, 32, 30, 28, 26, 24, 22, 20, 18, 16, 14, 10];
+    const entries = points.map((p, i) => eplEntry(`Team ${i + 1}`, p));
+    const parsed = parseEplStandingsResponse({ children: [{ standings: { entries } }] });
+    assert.equal(parsed.get('Team 4').championsLeagueGap, 0, 'the 4th-place team itself sits exactly on the CL cutoff');
+    assert.equal(parsed.get('Team 18').relegationGap, 0, 'the 18th-place team itself sits exactly on the relegation cutoff');
+    assert.ok(parsed.get('Team 1').championsLeagueGap < 0, 'the runaway leader is well clear of the CL cutoff');
+    assert.ok(parsed.get('Team 20').relegationGap > 0, 'last place is well short of the safety cutoff');
+  });
+
+  test('before a ball is kicked (every team on 0 games played), every gap is null, not a false 0', () => {
+    const entries = Array.from({ length: 20 }, (_, i) => eplEntry(`Team ${i}`, 0, 0));
+    const parsed = parseEplStandingsResponse({ children: [{ standings: { entries } }] });
+    for (const [, signal] of parsed) {
+      assert.equal(signal.championsLeagueGap, null);
+      assert.equal(signal.relegationGap, null);
+    }
+  });
+
+  test('handles a missing/malformed response gracefully', () => {
+    assert.equal(parseEplStandingsResponse({}).size, 0);
+    assert.equal(parseEplStandingsResponse(null).size, 0);
+    assert.equal(parseEplStandingsResponse({ children: [] }).size, 0);
   });
 });
 

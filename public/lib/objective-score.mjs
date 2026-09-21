@@ -104,10 +104,33 @@ export function playoffProximityScore(gamesBack, wildCardGamesBack, divisionLead
   return clamp(Math.round(10 - proximity * 0.8), 0, 10);
 }
 
+// The general form of playoffProximityScore's own discount above, for a
+// sport where the relevant "race" is against a specific TABLE CUTOFF
+// (a playoff seed line, a Champions League/relegation points line) rather
+// than MLB's own division-leader/wild-card shape - see
+// sport-signals.mjs's NBA/EPL standings parsers for where `gap` comes
+// from. Symmetric around a gap of 0 (the tensest possible position - a
+// team sitting exactly ON the cutoff line): scores fall away the same
+// 0.8-per-unit way on EITHER side, so a team comfortably past a cutoff
+// (a negative gap - see those parsers' own sign convention) is discounted
+// exactly like a team hopelessly short of it, instead of every "ahead of
+// the line" reading as an undifferentiated maximum the way a naive re-use
+// of playoffProximityScore's own one-sided formula would. `unit` rescales
+// `gap` into the same games-back-sized scale that slope assumes - NBA's
+// own gap is already in games (1, matches sport-signals.mjs's
+// seedCutoffGap), EPL's is in league POINTS (divide by ~3, a win's worth,
+// to approximate an equivalent game count - soccer has no native
+// "games back" unit the way a league with no draws does).
+export function cutoffProximityScore(gap, unit = 1) {
+  if (!Number.isFinite(gap) || !Number.isFinite(unit) || unit <= 0) return null;
+  return clamp(Math.round(10 - Math.abs(gap / unit) * 0.8), 0, 10);
+}
+
 // A team's own recent streak as a momentum signal, centered on a neutral 5
-// (streakCode is the MLB Stats API's own "W3"/"L2"-style notation) - capped
-// at an 8-game streak so one extreme outlier season-opening/closing streak
-// doesn't dominate the whole matchup's watchability on its own.
+// (streakCode is the "W3"/"L2"-style notation both the MLB Stats API and
+// ESPN's own NBA standings endpoint use) - capped at an 8-game streak so
+// one extreme outlier season-opening/closing streak doesn't dominate the
+// whole matchup's watchability on its own.
 export function streakMomentum(streakCode) {
   const match = /^([WL])(\d+)$/.exec(streakCode || '');
   if (!match) return null;
@@ -345,14 +368,31 @@ export function computeMlbObjectiveScore({
 
 // ---- NBA ------------------------------------------------------------------
 //
-// No dedicated standings API integration yet (see this repo's README,
-// "Known limitations of the API-driven scoring engine") - competitiveness
-// is season-record-and-odds based, same shape as MLB's own record/odds
-// terms, just without the last-10/standings-proximity depth MLB gets from
-// the MLB Stats API.
+// `away`/`home` are each either null (no ESPN standings entry found for
+// this team - a brand-new season, or the fetch itself failed - see
+// sport-signals.mjs's own comment on why that's a normal, harmless
+// outcome) or `{ sixSeedGap, tenSeedGap, lastTen: {wins,losses}|null,
+// streakCode }` from parseNbaStandingsResponse - the same depth MLB's own
+// standings integration already has (playoff-cutoff proximity, last-10
+// closeness, streak momentum), now real for NBA too rather than a flat
+// season-record-and-odds-only stand-in.
+//
+// `closestCutoffGap` picks whichever of a team's own two seed gaps (the
+// direct-playoff line, the play-in line) is CLOSER to zero - the cutoff
+// that's actually live for that team right now, the same "either race
+// keeps it alive" reasoning MLB's own division/wild-card pair already
+// uses.
+function closestCutoffGap(...gaps) {
+  const candidates = gaps.filter(Number.isFinite);
+  if (!candidates.length) return null;
+  return candidates.reduce((best, gap) => (best == null || Math.abs(gap) < Math.abs(best) ? gap : best), null);
+}
+
 export function computeNbaObjectiveScore({
   awayWinPct,
   homeWinPct,
+  away,
+  home,
   isPostseason,
   isRivalry,
   isNationalBroadcast,
@@ -366,32 +406,58 @@ export function computeNbaObjectiveScore({
   if (Number.isFinite(seasonCloseness)) {
     factors.push(`season win% gap ${(Math.abs(awayWinPct - homeWinPct) * 100).toFixed(1)}pp`);
   }
+
+  const recentCloseness = closenessFromLastTen(away?.lastTen, home?.lastTen);
+  if (Number.isFinite(recentCloseness) && away?.lastTen && home?.lastTen) {
+    factors.push(`last 10: ${away.lastTen.wins}-${away.lastTen.losses} vs ${home.lastTen.wins}-${home.lastTen.losses}`);
+  }
+
   const oddsCloseness = closenessFromSpread(oddsSpread, NBA_SPREAD_LOPSIDED_AT);
   if (Number.isFinite(oddsCloseness)) factors.push(`odds spread ${oddsSpread}`);
 
   const competitiveness = clamp(
-    Math.round(weightedAverage([[seasonCloseness, 0.6], [oddsCloseness, 0.4]]) ?? 5),
+    Math.round(
+      weightedAverage([
+        [seasonCloseness, 0.45],
+        [recentCloseness, 0.3],
+        [oddsCloseness, 0.25]
+      ]) ?? 5
+    ),
     1,
     10
   );
 
-  let stakes = 5;
+  const awayStakes = cutoffProximityScore(closestCutoffGap(away?.sixSeedGap, away?.tenSeedGap));
+  const homeStakes = cutoffProximityScore(closestCutoffGap(home?.sixSeedGap, home?.tenSeedGap));
+  const stakesInputs = [awayStakes, homeStakes].filter(Number.isFinite);
+  let stakes = stakesInputs.length ? Math.max(...stakesInputs) : 5;
+  if (stakesInputs.length) factors.push(`playoff-seed proximity ${stakesInputs.join('/')}`);
   if (isPostseason) {
     stakes = 10;
     factors.push('postseason game');
   }
+
+  const awayMomentum = streakMomentum(away?.streakCode);
+  const homeMomentum = streakMomentum(home?.streakCode);
+  const momentumInputs = [awayMomentum, homeMomentum].filter(Number.isFinite);
+  const momentum = momentumInputs.length ? Math.max(...momentumInputs) : null;
+  if (Number.isFinite(momentum)) factors.push(`streak ${away?.streakCode || ''}/${home?.streakCode || ''}`.trim());
+
+  let watchability = weightedAverage([
+    [stakes, 0.45],
+    [competitiveness, 0.35],
+    [momentum, 0.2]
+  ]) ?? 5;
   // Rivalry/national-broadcast are additive bonuses, not blended-in values -
   // a blend can round-collide with (or even pull DOWN) an already-high base
   // score for two evenly-matched teams, which is backwards: a rivalry or a
   // national broadcast should only ever add watchability, never subtract
-  // it, whatever the matchup's own competitiveness already is.
-  let watchability = weightedAverage([[stakes, 0.5], [competitiveness, 0.5]]) ?? 5;
-  // Not gated on competitiveness the way MLB's rivalry bonus is (see
-  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - NBA has no
-  // standings-based signal yet, so a low competitiveness here can still be
-  // early-season noise a real rivalry/national broadcast should survive.
-  // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS right below is still the
-  // backstop against a genuinely decided blowout.
+  // it, whatever the matchup's own competitiveness already is. Not gated on
+  // competitiveness the way MLB's rivalry bonus is (see
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - a low
+  // competitiveness here can still be early-season noise a real rivalry/
+  // national broadcast should survive. MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS
+  // right below is still the backstop against a genuinely decided blowout.
   if (isRivalry) {
     watchability += 1.5;
     factors.push('known rivalry matchup');
@@ -404,7 +470,11 @@ export function computeNbaObjectiveScore({
   watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
   watchability = clamp(Math.round(watchability), 1, 10);
 
-  const enduranceScore = clamp(Math.round(competitiveness), 1, 10);
+  const enduranceScore = clamp(
+    Math.round(weightedAverage([[competitiveness, 0.6], [recentCloseness, 0.4]]) ?? competitiveness),
+    1,
+    10
+  );
 
   const skill = skillFromWinPct(
     Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
@@ -416,13 +486,25 @@ export function computeNbaObjectiveScore({
 
 // ---- Premier League ---------------------------------------------------
 //
-// Same "no dedicated standings API yet" posture as NBA above - table
-// position/points-per-game would sharpen this further (see README's
-// "Known limitations"), but season record + odds (when a provider has
-// posted a line, which is rare for EPL via ESPN's API) + the derby flag
-// this repo's own sport-duration.mjs already computes for the duration
-// model is a real, deterministic starting point today.
-export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBigClub, oddsSpread, oddsOverUnder }) {
+// `away`/`home` are each either null (no ESPN standings entry - a brand-
+// new season, or the fetch failed) or `{ points, gamesPlayed,
+// pointDifferential, championsLeagueGap, relegationGap }` from
+// parseEplStandingsResponse - real table position now feeds a genuine
+// STAKES dimension (Champions League qualification / relegation danger)
+// EPL never had before, the same "how much does this actually matter"
+// axis MLB's playoff proximity and NBA's seed proximity already give
+// their own sports. `EPL_STAKES_UNIT_POINTS` (3, a win's worth) rescales
+// a raw POINTS gap into the same games-back-sized unit
+// cutoffProximityScore's own slope assumes - soccer has no native "games
+// back" the way a league without draws does.
+//
+// Still no recent-form signal, unlike MLB/NBA above - ESPN's EPL
+// standings response has no per-team streak/last-5 figure at all (checked
+// against a real live response), only points/goal-difference/rank. A
+// genuine gap, not silently pretended away.
+export const EPL_STAKES_UNIT_POINTS = 3;
+
+export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, isDerby, isBigClub, oddsSpread, oddsOverUnder }) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
     Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? awayWinPct - homeWinPct : null
@@ -439,6 +521,22 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBi
     10
   );
 
+  const awayStakes = cutoffProximityScore(
+    closestCutoffGap(away?.championsLeagueGap, away?.relegationGap),
+    EPL_STAKES_UNIT_POINTS
+  );
+  const homeStakes = cutoffProximityScore(
+    closestCutoffGap(home?.championsLeagueGap, home?.relegationGap),
+    EPL_STAKES_UNIT_POINTS
+  );
+  const stakesInputs = [awayStakes, homeStakes].filter(Number.isFinite);
+  const stakes = stakesInputs.length ? Math.max(...stakesInputs) : null;
+  if (stakesInputs.length) factors.push(`table-position proximity ${stakesInputs.join('/')}`);
+
+  let watchability = weightedAverage([
+    [stakes, 0.45],
+    [competitiveness, 0.35]
+  ]) ?? competitiveness;
   // Additive, same reasoning as computeNbaObjectiveScore's own rivalry/
   // national-broadcast bonuses - a derby/big-club fixture should only ever
   // ADD watchability over the same two teams' plain competitiveness, never
@@ -450,12 +548,11 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBi
   // this particular season's (often early, noisy, small-sample) win% record
   // the way `competitiveness`/`skill` necessarily do.
   // Not gated on competitiveness the way MLB's rivalry bonus is (see
-  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - EPL has no
-  // standings-based signal yet, so a low competitiveness here is exactly
-  // the early-season-noise case (Liverpool @ AFC Bournemouth) this bonus
-  // was written to survive. MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS
-  // right below is still the backstop against a genuinely decided blowout.
-  let watchability = competitiveness;
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - a low
+  // competitiveness here can still be the early-season-noise case
+  // (Liverpool @ AFC Bournemouth) this bonus was written to survive.
+  // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS right below is still the
+  // backstop against a genuinely decided blowout.
   if (isDerby) {
     watchability += 2;
     factors.push('known derby fixture');
@@ -464,11 +561,10 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBi
     watchability += 2;
     factors.push('known big-club fixture');
   }
-  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - mostly a
-  // no-op here (watchability starts AT competitiveness for EPL, unlike
-  // MLB/NBA's separate stakes blend), but keeps a stacked derby+big-club
-  // (up to +4) from lifting a genuinely lopsided fixture too far past its
-  // own competitiveness either.
+  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - keeps a
+  // stacked derby+big-club (up to +4) plus a high table-stakes reading
+  // from lifting a genuinely lopsided fixture too far past its own
+  // competitiveness either.
   watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
   watchability = clamp(Math.round(watchability), 1, 10);
 

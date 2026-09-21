@@ -108,10 +108,17 @@ import {
   computeF1ObjectiveScore
 } from './objective-score.mjs';
 // Fetches the real, current API signals the functions above turn into a
-// score - standings/form (MLB Stats API) and championship intensity
-// (Jolpica F1 API) - see that module's own top-of-file comment for the
-// honest caveat on how these were built without live network access.
-import { fetchMlbStandings, fetchF1TitleRaceIntensity } from './sport-signals.mjs';
+// score - standings/form (MLB Stats API, and ESPN's own /standings for
+// NBA/EPL) and championship intensity (Jolpica F1 API) - see that
+// module's own top-of-file comment for the honest caveat on how the MLB/F1
+// ones were built without live network access (the NBA/EPL ones were
+// added later, against real live responses).
+import {
+  fetchMlbStandings,
+  fetchNbaStandings,
+  fetchEplStandings,
+  fetchF1TitleRaceIntensity
+} from './sport-signals.mjs';
 
 // How many calendar days ahead (from today, UTC) buildMatches fetches by
 // default - the FULL horizon the day-scroller can ever show a pill for.
@@ -588,7 +595,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
 // standings, F1 title-race intensity) every fixture of that sport shares.
 // A sport with no dedicated formula yet falls back to a plain neutral
 // score rather than crashing the build.
-export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceIntensity } = {}) {
+export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity } = {}) {
   const broadcastQuality = estimateBroadcastQualityBaseline(match.broadcast);
   const [away, home] = match.competitors;
   // `null` for a team with zero games played (preseason/season-opener,
@@ -636,6 +643,8 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
       result = computeNbaObjectiveScore({
         awayWinPct,
         homeWinPct,
+        away: nbaStandings?.get(away?.name) || null,
+        home: nbaStandings?.get(home?.name) || null,
         isPostseason: match.isPostseason,
         isRivalry: isNbaRivalry(away?.name, home?.name),
         isNationalBroadcast: isNationalBroadcast(match.broadcast),
@@ -647,6 +656,8 @@ export function computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceInt
       result = computeEplObjectiveScore({
         awayWinPct,
         homeWinPct,
+        away: eplStandings?.get(away?.name) || null,
+        home: eplStandings?.get(home?.name) || null,
         isDerby: isEplDerby(away?.name, home?.name),
         isBigClub: isEplBigClub(away?.name, home?.name),
         oddsSpread: match.oddsSpread,
@@ -813,9 +824,13 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   // there's no live use for them this run (an all-EPL/NBA window, or the
   // off-season) so a quiet day doesn't cost a request for nothing.
   const hasActiveMlb = matches.some(m => m.sport === 'MLB' && !m.isFinished);
+  const hasActiveNba = matches.some(m => m.sport === 'NBA' && !m.isFinished);
+  const hasActiveEpl = matches.some(m => m.sport === 'Premier League' && !m.isFinished);
   const hasActiveF1 = matches.some(m => m.sport === 'F1' && !m.isFinished);
-  const [mlbStandings, f1TitleRaceIntensity] = await Promise.all([
+  const [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity] = await Promise.all([
     hasActiveMlb ? fetchMlbStandings(now.getUTCFullYear(), fetchJson) : Promise.resolve(new Map()),
+    hasActiveNba ? fetchNbaStandings(fetchJson) : Promise.resolve(new Map()),
+    hasActiveEpl ? fetchEplStandings(fetchJson) : Promise.resolve(new Map()),
     hasActiveF1 ? fetchF1TitleRaceIntensity(fetchJson) : Promise.resolve(null)
   ]);
 
@@ -832,7 +847,7 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   // plan that keeps shrinking to "only what's still ahead" depending purely
   // on when it happens to be loaded.
   for (const match of matches) {
-    const objective = computeMatchObjectiveScore(match, { mlbStandings, f1TitleRaceIntensity });
+    const objective = computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity });
     match.competitiveness = clamp(Math.round(objective.competitiveness), 1, 10);
     match.watchability = clamp(Math.round(objective.watchability), 1, 10);
     match.enduranceScore = clamp(Math.round(objective.enduranceScore), 1, 10);

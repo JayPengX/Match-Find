@@ -2622,3 +2622,83 @@ window. This is the system telling the truth (there is genuinely no MLB
 game worth a reasonable Taiwan viewing hour that calendar day), not a bug
 to route around - loosening quiet hours to fill the gap would violate the
 Taiwan-time rule specifically to avoid an empty day, which is backwards.
+
+## Round 24 (2026-09-21): NBA and EPL get the same standings-integration depth MLB already had
+
+Direct follow-up to Round 22/23's own MLB fix - user's own words: "we
+currently only optimized it for MLB... optimize for EPL and NBA also, it'd
+equally important." MLB's `computeMlbObjectiveScore` had real division/
+wild-card proximity, last-10 form, and streak momentum from the MLB Stats
+API; NBA and EPL had none of that at all - just season record + odds +
+the rivalry/derby/national-broadcast flags. Built the same depth for both,
+from ESPN's own `/standings` endpoint (a host this build already fetches
+from for the scoreboard, so no new dependency or proxy-allowlist change):
+
+- **NBA** (`public/lib/sport-signals.mjs`'s `parseNbaStandingsResponse`):
+  ESPN's own `/apis/v2/sports/basketball/nba/standings` gives, per team,
+  `wins`/`losses`, a `streak` in the SAME "W3"/"L2" notation the MLB Stats
+  API already uses (directly reusable by the existing `streakMomentum`),
+  and a `Last Ten Games` split record (directly reusable by
+  `closenessFromLastTen`) - confirmed against a real historical (2024-25)
+  response, since the CURRENT 2026-27 season is still in preseason.
+  Computed a NEW signal ESPN doesn't hand over directly: each team's own
+  signed distance to its conference's 6-seed (direct playoff berth) and
+  10-seed (last play-in spot) cutoffs, from wins/losses already in the
+  same response - the standard sports "games back between two records"
+  formula, applied to a specific CUTOFF rather than MLB's own
+  division-leader/wild-card shape.
+- **EPL** (`parseEplStandingsResponse`): ESPN's own
+  `/apis/v2/sports/soccer/eng.1/standings` gives real league POINTS (not
+  derivable from `parseOverallRecord`'s coarser win/loss/draw split) and
+  rank. No streak/last-5 field exists in this response at all (checked
+  against a real live response) - a genuine, stated gap, not silently
+  worked around. Computed the same kind of new cutoff-distance signal as
+  NBA, in POINTS instead of games: each team's own signed points gap to
+  the Champions League line (top 4) and the relegation line (bottom 3 of
+  20) - EPL's first real stakes signal ever, verified against a real live
+  response (a genuine early-season relegation six-pointer, Fulham/Coventry
+  City, scored a real, high watchability=10 once wired through
+  `computeEplObjectiveScore`, something the old win%-only formula had no
+  way to see).
+
+**New shared building block**: `cutoffProximityScore` (`public/lib/objective-score.mjs`)
+generalizes `playoffProximityScore`'s own discount logic (see Round 23) to
+a SIGNED gap against any specific cutoff, symmetric around 0 - a team
+comfortably clear of a cutoff is discounted the same way a team hopelessly
+short of one already was, rather than every "ahead of the line" reading as
+an undifferentiated maximum. NBA's seed gaps and EPL's points gaps (divided
+by `EPL_STAKES_UNIT_POINTS = 3`, a win's worth, to approximate an
+equivalent game count) both feed through this same function.
+
+**A real bug caught before shipping, same failure class as Round 23's
+own**: NBA's 2026-27 season is still in preseason - every team reads 0-0.
+Before adding a guard, this scored a maxed-out `playoff-seed proximity
+10/10` for literally every preseason exhibition on the schedule (every
+team's own win-loss differential is 0, which read as "tied exactly on the
+cutoff" - the same "0 games played is a real no-signal case, not a genuine
+0.000-average tie" mistake Round 22's own MLB fix targeted, just for a new
+signal). Fixed with a `seasonStarted` guard in both
+`parseNbaStandingsResponse` and `parseEplStandingsResponse` - if NO team in
+the whole conference/league has played a game yet, every gap is left
+`null` rather than a false 0; a team that individually hasn't played (even
+once the rest of the league has) also gets `null`, never a guessed value.
+Re-verified against a fresh real rebuild: all 3 current (preseason) NBA
+fixtures correctly show `competitiveness: 5, watchability: 5, factors: []`
+- neutral, no fabricated signal - instead of the false 10/10 reading.
+
+**Live-verified, end to end**: rebuilt real `matches.json` and confirmed
+the picked lineup for 2026-09-22 through 2026-10-05 is BYTE-FOR-BYTE
+IDENTICAL to before this round - expected, since the only currently-active
+NBA fixtures are preseason (correctly near-signal now, same as before) and
+the only EPL fixtures in the fetched window are already-finished (an
+international break has no upcoming EPL games at all right now - see
+Round 22). The new code is real, tested, and wired end-to-end, but has
+nothing to change YET; it activates automatically once the real NBA season
+starts and EPL fixtures resume, without needing another deploy. Directly
+exercised the new scoring paths with realistic hand-built and real-
+historical-data cases (a real 2024-25 NBA play-in bubble race, a real
+current-EPL relegation six-pointer, a real current-EPL top-4 race, and a
+blowout in each sport still correctly capped by
+`MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS`) - see this round's own
+session log. 18 new tests added across `objective-score.test.mjs`/
+`sport-signals.test.mjs`, full suite 351/351.

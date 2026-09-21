@@ -102,12 +102,27 @@ statistical signals `public/lib/sport-signals.mjs` fetches, nothing more.
   feeds every race that season's watchability - a title fight still very
   much alive makes EVERY remaining race more consequential, independent of
   which circuit it's at.
-- **NBA / Premier League**: season record and betting odds already fetched
-  from ESPN, plus the same rivalry/derby and national-broadcast detectors
-  `public/lib/sport-duration.mjs` already computes for the duration model
-  (`isNbaRivalry`/`isEplDerby`/`isNationalBroadcast`) - real facts, just
-  without a dedicated standings-API integration yet (see "Known
-  limitations" below).
+- **NBA** (ESPN's own `/apis/v2/sports/basketball/nba/standings` - same
+  host/team-naming as the scoreboard fetch, no separate id-mapping table
+  needed): each team's own signed distance to its conference's real seed
+  cutoffs (`sixSeedGap`/`tenSeedGap` - the direct-playoff line AND the
+  play-in line, same "either race keeps it alive" reasoning as MLB's own
+  division/wild-card pair), last-10-games record, and current streak - the
+  SAME depth MLB's own standings integration has, not a shallower stand-in.
+  Guarded against a real failure mode this was built and caught live: every
+  team reads 0-0 before a season actually starts (preseason exhibitions),
+  which would otherwise report a maxed-out "playoff race" for every single
+  game - see `parseNbaStandingsResponse`'s own `seasonStarted` check.
+- **Premier League** (ESPN's own `/apis/v2/sports/soccer/eng.1/standings`):
+  each team's own signed POINTS gap to the real Champions League
+  qualification line (top 4) and the relegation line (bottom 3 of 20) -
+  a genuine stakes signal EPL never had before, on top of season record
+  and betting odds already fetched from ESPN and the same rivalry/derby
+  and national-broadcast detectors `public/lib/sport-duration.mjs` already
+  computes for the duration model (`isNbaRivalry`/`isEplDerby`/
+  `isNationalBroadcast`). No recent-form signal for EPL specifically (see
+  "Known limitations" below) - ESPN's own standings response for this
+  league has no per-team streak/last-5 figure at all.
 
 **Why Gemini is gone entirely** (`docs/recommendation-engine-audit.md`'s
 Round 11): this pipeline used to send every fixture's objective score to
@@ -133,12 +148,13 @@ from the actual factors behind the score (e.g. "依雙方戰績、近期戰況�
 **Known limitations** (stated plainly rather than left silently
 unaddressed, same posture as `docs/recommendation-engine-audit.md`):
 
-- **NBA and Premier League have no dedicated standings-API integration
-  yet.** Both score on season record + odds + the existing rivalry/derby/
-  national-broadcast detectors - real signals, but shallower than MLB's
-  standings-proximity/recent-form depth. A free, no-key NBA/EPL standings
-  source (or ESPN's own standings endpoint, not just its scoreboard) would
-  be the natural next step.
+- **EPL has no recent-form signal.** ESPN's own `/standings` endpoint for
+  `soccer/eng.1` (the same one NBA below uses) has no per-team streak/
+  last-5 figure at all (checked against a real live response) - only
+  points, goal difference, and rank. It DOES now have a real table-
+  position stakes signal (Champions League/relegation proximity - see
+  `parseEplStandingsResponse`, `public/lib/sport-signals.mjs`), just not
+  the recent-form depth MLB/NBA get from their own standings sources.
 - **No injury data, and no real-time media/narrative signal at all.**
   Neither is knowable from data this build already fetches, and adding
   either back would mean either a new paid data source or a working

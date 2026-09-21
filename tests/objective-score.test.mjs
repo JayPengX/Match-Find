@@ -12,6 +12,7 @@ import {
   closenessFromWinPctGap,
   closenessFromSpread,
   playoffProximityScore,
+  cutoffProximityScore,
   streakMomentum,
   closenessFromLastTen,
   estimateBroadcastQualityBaseline,
@@ -123,6 +124,33 @@ describe('playoffProximityScore', () => {
 
   test('divisionLeadMargin is ignored for a team that is NOT leading (gamesBack > 0)', () => {
     assert.equal(playoffProximityScore(8, 8, 30), playoffProximityScore(8, 8, undefined));
+  });
+});
+
+describe('cutoffProximityScore', () => {
+  test('sitting exactly on the cutoff (gap 0) scores a perfect 10', () => {
+    assert.equal(cutoffProximityScore(0), 10);
+  });
+
+  test('symmetric: being AHEAD of a cutoff is discounted the same way as being behind it', () => {
+    assert.equal(cutoffProximityScore(5), cutoffProximityScore(-5));
+    assert.ok(cutoffProximityScore(5) < 10);
+  });
+
+  test('a large gap in either direction floors at 0', () => {
+    assert.equal(cutoffProximityScore(20), 0);
+    assert.equal(cutoffProximityScore(-20), 0);
+  });
+
+  test('`unit` rescales the gap - a points gap and its games-equivalent score the same', () => {
+    // EPL's own points-to-games conversion (a win is worth 3 points).
+    assert.equal(cutoffProximityScore(6, 3), cutoffProximityScore(2, 1));
+  });
+
+  test('returns null for a missing gap or an invalid unit', () => {
+    assert.equal(cutoffProximityScore(null), null);
+    assert.equal(cutoffProximityScore(5, 0), null);
+    assert.equal(cutoffProximityScore(5, -1), null);
   });
 });
 
@@ -323,6 +351,52 @@ describe('computeNbaObjectiveScore', () => {
     const result = computeNbaObjectiveScore({ awayWinPct: 0.7, homeWinPct: 0.7, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
     assert.ok(result.skill >= 8);
   });
+
+  test('a real play-in/playoff-seed bubble race raises watchability, even with a mediocre record', () => {
+    // Both teams sit right on their conference's play-in cutoff - a real
+    // stakes signal the old (record-only) formula had no way to see.
+    const noStandings = computeNbaObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    const bubbleRace = computeNbaObjectiveScore({
+      awayWinPct: 0.5,
+      homeWinPct: 0.5,
+      away: { tenSeedGap: 0.5, sixSeedGap: 4 },
+      home: { tenSeedGap: -0.5, sixSeedGap: 3 },
+      isPostseason: false,
+      isRivalry: false,
+      isNationalBroadcast: false
+    });
+    assert.ok(bubbleRace.watchability > noStandings.watchability);
+    assert.ok(bubbleRace.factors.some(f => f.includes('playoff-seed proximity')));
+  });
+
+  test('a real blowout (lopsided record) is NOT rescued by one side coincidentally sitting near a seed cutoff', () => {
+    const blowout = computeNbaObjectiveScore({
+      awayWinPct: 0.85,
+      homeWinPct: 0.15,
+      away: { sixSeedGap: -15, tenSeedGap: -20 }, // safely, comfortably in
+      home: { sixSeedGap: 0.5, tenSeedGap: -8 }, // home sits right on the 6-seed line
+      isPostseason: false,
+      isRivalry: false,
+      isNationalBroadcast: false
+    });
+    assert.ok(blowout.watchability <= blowout.competitiveness + 3);
+  });
+
+  test('recent form (last 10) and streak feed in the same way MLB\'s own standings do', () => {
+    const plain = computeNbaObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    const hotStreak = computeNbaObjectiveScore({
+      awayWinPct: 0.5,
+      homeWinPct: 0.5,
+      away: { lastTen: { wins: 9, losses: 1 }, streakCode: 'W8' },
+      home: { lastTen: { wins: 1, losses: 9 }, streakCode: 'L6' },
+      isPostseason: false,
+      isRivalry: false,
+      isNationalBroadcast: false
+    });
+    assert.notEqual(hotStreak.competitiveness, plain.competitiveness);
+    assert.ok(hotStreak.factors.some(f => f.startsWith('last 10')));
+    assert.ok(hotStreak.factors.some(f => f.startsWith('streak')));
+  });
 });
 
 describe('computeEplObjectiveScore', () => {
@@ -352,6 +426,48 @@ describe('computeEplObjectiveScore', () => {
     assert.ok(derbyAndBigClub.watchability >= derbyOnly.watchability);
     assert.ok(derbyAndBigClub.factors.includes('known derby fixture'));
     assert.ok(derbyAndBigClub.factors.includes('known big-club fixture'));
+  });
+
+  test('a real relegation six-pointer between two mid-table-looking teams scores high, unlike before', () => {
+    // A moderate, not-maxed-out win% gap (real headroom for stakes to
+    // actually move the number, same reasoning as the derby test above) -
+    // both teams sit right on the relegation cutoff, real current stakes a
+    // bare win% record has no way to show on its own.
+    const noStandings = computeEplObjectiveScore({ awayWinPct: 0.35, homeWinPct: 0.3, isDerby: false, isBigClub: false });
+    const sixPointer = computeEplObjectiveScore({
+      awayWinPct: 0.35,
+      homeWinPct: 0.3,
+      away: { relegationGap: 1, championsLeagueGap: 30 },
+      home: { relegationGap: -1, championsLeagueGap: 32 },
+      isDerby: false,
+      isBigClub: false
+    });
+    assert.ok(sixPointer.watchability > noStandings.watchability);
+    assert.ok(sixPointer.factors.some(f => f.includes('table-position proximity')));
+  });
+
+  test('a genuine Champions League race between two non-big clubs also scores high', () => {
+    const clRace = computeEplObjectiveScore({
+      awayWinPct: 0.55,
+      homeWinPct: 0.5,
+      away: { championsLeagueGap: 0.5, relegationGap: -25 },
+      home: { championsLeagueGap: -0.5, relegationGap: -27 },
+      isDerby: false,
+      isBigClub: false
+    });
+    assert.ok(clRace.watchability >= 8);
+  });
+
+  test('a real blowout is NOT rescued by one side coincidentally sitting near a table cutoff', () => {
+    const blowout = computeEplObjectiveScore({
+      awayWinPct: 0.05,
+      homeWinPct: 0.9,
+      away: { relegationGap: 1, championsLeagueGap: 40 }, // in real relegation danger
+      home: { championsLeagueGap: -20, relegationGap: -35 }, // safely top of the table
+      isDerby: false,
+      isBigClub: true
+    });
+    assert.ok(blowout.watchability <= blowout.competitiveness + 3);
   });
 });
 

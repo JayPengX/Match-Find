@@ -193,6 +193,190 @@ export async function fetchMlbStandings(season, fetchJson) {
   return byName;
 }
 
+// A stat entry lookup by ESPN's own stable, lowercase `type` key (not the
+// human-readable `name`, which can contain spaces/mixed case and reads as
+// more fragile to match against) - shared by the NBA/EPL standings parsers
+// below, both of which read the same `entry.stats` array shape ESPN's own
+// /standings endpoint uses for every sport.
+function findStat(stats, type) {
+  return (stats || []).find(s => s?.type === type);
+}
+
+// ---- NBA: ESPN's own /standings endpoint ---------------------------------
+//
+// Unlike MLB above (a separate Stats API with its own team ids - see
+// MLB_STATS_API_TEAM_IDS) and unlike EPL below, NBA's standings come from
+// ESPN itself - the SAME host/team-naming convention
+// public/lib/match-builder.mjs's own scoreboard fetch already uses, live-
+// confirmed identical team `displayName` strings ("LA Clippers", not
+// "Los Angeles Clippers") - so this needs no separate id-mapping table,
+// keying straight off `team.displayName` the same way public/lib/espn.mjs's
+// own extractors already do.
+export function nbaStandingsUrl() {
+  return 'https://site.api.espn.com/apis/v2/sports/basketball/nba/standings';
+}
+
+// The top 6 seeds in each conference get a direct playoff berth; 7-10 go
+// to the play-in tournament; 11+ are out entirely. Both cutoffs matter -
+// same "either race keeps it alive" reasoning as MLB's own division/wild-
+// card pair - a bubble team fighting to avoid falling to 11th cares just
+// as much as one fighting to climb into the top 6.
+export const NBA_PLAYOFF_SEED_CUTOFF = 6;
+export const NBA_PLAY_IN_SEED_CUTOFF = 10;
+
+// A team's real distance to a specific seed cutoff, in the same "games
+// back" unit MLB's own gamesBack already reports - the standard sports
+// formula (half the gap between each side's own win-loss differential),
+// computed here from wins/losses already in this same response, nothing
+// ESPN doesn't already report. SIGNED, on purpose: positive means BEHIND
+// that seed (still chasing it), negative means AHEAD of it (already
+// holding a cushion over it) - see objective-score.mjs's
+// cutoffProximityScore for why a signed gap, not just a distance, is what
+// actually lets a comfortable leader get discounted the same real way a
+// team with no realistic shot already is, instead of both reading as a
+// flat, undifferentiated "in".
+function seedCutoffGap(teamDiff, cutoffDiff) {
+  return (cutoffDiff - teamDiff) / 2;
+}
+
+export function parseNbaStandingsResponse(json) {
+  const byName = new Map();
+  for (const conference of json?.children || []) {
+    const entries = conference?.standings?.entries || [];
+    const withDiff = entries
+      .map(entry => {
+        const wins = Number(findStat(entry?.stats, 'wins')?.value);
+        const losses = Number(findStat(entry?.stats, 'losses')?.value);
+        return { entry, diff: wins - losses, gamesPlayed: wins + losses };
+      })
+      .filter(e => Number.isFinite(e.diff));
+    if (!withDiff.length) continue;
+    // ESPN's own entry order should already be standings order, but this
+    // sorts explicitly rather than trusting that - the cutoff computation
+    // below only works against the ACTUAL 6th/10th-best record in this
+    // conference, not whatever position ESPN happened to list 6th/10th.
+    withDiff.sort((a, b) => b.diff - a.diff);
+    // Before the season actually starts, every team is still 0-0 - every
+    // team's own diff reads 0, which would otherwise compute a "razor-
+    // tight, tied-for-the-cutoff" gap of exactly 0 for EVERY SINGLE team,
+    // the same "0 games played is a real no-signal case, not a genuine
+    // 0.000-average tie" gap match-builder.mjs's own computeMatchObjectiveScore
+    // comment already documents for win% - live-checked case this guards
+    // against: the 2026-27 preseason, every NBA team still 0-0, would
+    // otherwise report a maxed-out "playoff race" for every exhibition
+    // game on the schedule.
+    const seasonStarted = withDiff.some(e => e.gamesPlayed > 0);
+    const sixthDiff = seasonStarted ? withDiff[NBA_PLAYOFF_SEED_CUTOFF - 1]?.diff : null;
+    const tenthDiff = seasonStarted ? withDiff[NBA_PLAY_IN_SEED_CUTOFF - 1]?.diff : null;
+    for (const { entry, diff, gamesPlayed } of withDiff) {
+      const displayName = entry?.team?.displayName;
+      if (typeof displayName !== 'string') continue;
+      const lastTenMatch = /^(\d+)-(\d+)$/.exec(findStat(entry.stats, 'lasttengames')?.displayValue || '');
+      const streakDisplay = findStat(entry.stats, 'streak')?.displayValue;
+      // This team's OWN gap is only real once IT has actually played a
+      // game - even once the rest of the league has started, a team that
+      // hasn't played yet has no real signal of its own to report either.
+      const hasPlayed = gamesPlayed > 0;
+      byName.set(displayName, {
+        sixSeedGap: hasPlayed && Number.isFinite(sixthDiff) ? seedCutoffGap(diff, sixthDiff) : null,
+        tenSeedGap: hasPlayed && Number.isFinite(tenthDiff) ? seedCutoffGap(diff, tenthDiff) : null,
+        lastTen: lastTenMatch ? { wins: Number(lastTenMatch[1]), losses: Number(lastTenMatch[2]) } : null,
+        // "-" is ESPN's own notation for no streak yet (season-opening
+        // game) - same "never a guessed/defaulted value" posture as
+        // parseGamesBack above.
+        streakCode: typeof streakDisplay === 'string' && streakDisplay !== '-' ? streakDisplay : null
+      });
+    }
+  }
+  return byName;
+}
+
+// Same "fetch once per build, degrade to an empty Map on any failure"
+// contract as fetchMlbStandings above.
+export async function fetchNbaStandings(fetchJson) {
+  try {
+    return parseNbaStandingsResponse(await fetchJson(nbaStandingsUrl()));
+  } catch (error) {
+    console.warn(`NBA standings fetch failed (falling back to no standings signal): ${error.message}`);
+    return new Map();
+  }
+}
+
+// ---- EPL: ESPN's own /standings endpoint ---------------------------------
+//
+// Same host/naming convention as NBA above - no separate id-mapping table
+// needed, keyed straight off `team.displayName`. Real, long-stable English
+// top-flight rules, not something this build invented: the top 4
+// finishers qualify for the Champions League, the bottom 3 (of 20) are
+// relegated - both have been the format for many seasons and aren't
+// expected to need updating season to season.
+export const EPL_CHAMPIONS_LEAGUE_CUTOFF_RANK = 4;
+export const EPL_RELEGATION_CUTOFF_RANK = 18; // 18th of 20 - the first team IN the drop zone
+
+export function eplStandingsUrl() {
+  return 'https://site.api.espn.com/apis/v2/sports/soccer/eng.1/standings';
+}
+
+// EPL has no per-team "streak"/"last 5" figure anywhere in this endpoint
+// (checked against a real live response) - only points/goal difference/
+// rank, so unlike MLB/NBA above this has no recent-form signal to offer;
+// computeEplObjectiveScore's own comment covers what that means for its
+// scoring (a real, stated limitation, not silently dropped). What this
+// DOES give that a bare win/loss/draw record can't: real league POINTS
+// (3 for a win, 1 for a draw) - what English football actually decides
+// places by, not something derivable from parseOverallRecord's coarser
+// W-L-D split alone.
+export function parseEplStandingsResponse(json) {
+  const byName = new Map();
+  const entries = json?.children?.[0]?.standings?.entries || [];
+  const withPoints = entries
+    .map(entry => ({
+      entry,
+      points: Number(findStat(entry?.stats, 'points')?.value),
+      gamesPlayed: Number(findStat(entry?.stats, 'gamesplayed')?.value)
+    }))
+    .filter(e => Number.isFinite(e.points));
+  if (!withPoints.length) return byName;
+  withPoints.sort((a, b) => b.points - a.points);
+  // Same guard as parseNbaStandingsResponse's own `seasonStarted` - before
+  // a ball's been kicked, every team is 0 points, which would otherwise
+  // report a "razor-tight" gap of exactly 0 for all 20 teams rather than
+  // the genuine no-signal case it actually is.
+  const seasonStarted = withPoints.some(e => e.gamesPlayed > 0);
+  const clPoints = seasonStarted ? withPoints[EPL_CHAMPIONS_LEAGUE_CUTOFF_RANK - 1]?.points : null;
+  const relegationPoints = seasonStarted ? withPoints[EPL_RELEGATION_CUTOFF_RANK - 1]?.points : null;
+  for (const { entry, points, gamesPlayed } of withPoints) {
+    const displayName = entry?.team?.displayName;
+    if (typeof displayName !== 'string') continue;
+    const pointDifferential = Number(findStat(entry.stats, 'pointdifferential')?.value);
+    // This team's OWN gap is only real once IT has actually played -
+    // matches parseNbaStandingsResponse's own per-team `hasPlayed` guard.
+    const hasPlayed = gamesPlayed > 0;
+    byName.set(displayName, {
+      points,
+      gamesPlayed: Number.isFinite(gamesPlayed) ? gamesPlayed : null,
+      pointDifferential: Number.isFinite(pointDifferential) ? pointDifferential : null,
+      // A POINTS gap, not a games-back one (soccer has no equivalent unit -
+      // objective-score.mjs's cutoffProximityScore converts this to a
+      // comparable scale itself, see its own comment). Signed the same way
+      // NBA's seed gaps are above: positive = behind the cutoff (still
+      // chasing it), negative = ahead of it (already holding a cushion).
+      championsLeagueGap: hasPlayed && Number.isFinite(clPoints) ? clPoints - points : null,
+      relegationGap: hasPlayed && Number.isFinite(relegationPoints) ? relegationPoints - points : null
+    });
+  }
+  return byName;
+}
+
+export async function fetchEplStandings(fetchJson) {
+  try {
+    return parseEplStandingsResponse(await fetchJson(eplStandingsUrl()));
+  } catch (error) {
+    console.warn(`EPL standings fetch failed (falling back to no standings signal): ${error.message}`);
+    return new Map();
+  }
+}
+
 // ---- F1: the Ergast-compatible Jolpica API -------------------------------
 //
 // A modern F1 season's champion has usually been mathematically decided
