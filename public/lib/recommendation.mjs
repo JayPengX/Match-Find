@@ -25,7 +25,7 @@
 // The viewing-plan pipeline (see docs/recommendation-engine-audit.md for
 // the fuller writeup this follows) is deliberately one straight line:
 //   raw objective scores -> effectiveScore (viewer preference) ->
-//   planningScore (+ cross-day repeat penalty) -> schedulingInterval
+//   planningScore (+ live-match excitement bonus) -> schedulingInterval
 //   (duration uncertainty + transition buffer) -> computeDayPlan's
 //   scheduler -> the day's picks -> conflict clusters (presentation only,
 //   computed AFTER scheduling, never before it)
@@ -263,9 +263,9 @@ export function computeRecommendationScore(match, context = {}) {
     // "...after this viewer's own preferences" - eventScore never reflects
     // priorityOrder/myServiceIds, viewerScore always does.
     // There's deliberately no third `planningScore` here - that one also
-    // needs same-day scheduling context and cross-day repeat history
-    // (see applyRecentRepeatPenalties below), which a single match has no
-    // way to know on its own.
+    // needs the live-match excitement bonus (see applyLiveExcitementBonus
+    // below), which a single match with no scheduling context has no way
+    // to compute on its own.
     eventScore: breakdown.baseScore,
     viewerScore: breakdown.effectiveScore
   };
@@ -740,10 +740,10 @@ export function slotKeyFromMembers(members) {
 //
 // `getScore` defaults to effectiveScore (the plain viewer-relative score,
 // see computeEffectiveScore) but computeDayPlan can pass planningScore
-// instead (see applyRecentRepeatPenalties) so a soft cross-day repeat
-// penalty can steer WHICH sequence wins without needing a second copy of
-// this function, or mutating effectiveScore itself (see Invariant 4 in
-// docs/recommendation-engine-audit.md - a diversity penalty can reduce a
+// instead (see applyLiveExcitementBonus) so a live-game bonus can steer
+// WHICH sequence wins without needing a second copy of this function, or
+// mutating effectiveScore itself (see Invariant 4 in docs/
+// recommendation-engine-audit.md - a nudge like this can reduce or raise a
 // score, never delete the event or corrupt the score it's derived from).
 export function weightedIntervalSchedule(items, getScore = choice => choice.effectiveScore) {
   const sorted = items.slice().sort((a, b) => a.interval.end - b.interval.end);
@@ -758,10 +758,9 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
       }
     }
     // Floored at 0, never negative, before it's added to the running total.
-    // A viewer-preference/variety penalty (priority nudge, cross-day repeat,
-    // sport concentration - see applyRecentRepeatPenalties) is a
-    // TIE-BREAKER between competing alternatives, never a verdict that a
-    // fixture isn't worth watching at all - but the raw DP as "maximize
+    // A viewer-preference nudge (priority order - see PRIORITY_SCORE_DELTA)
+    // is a TIE-BREAKER between competing alternatives, never a verdict that
+    // a fixture isn't worth watching at all - but the raw DP as "maximize
     // total score of chosen non-overlapping items" doesn't know that
     // distinction: if enough stacked penalties push a candidate's own score
     // negative, ADDING it to an otherwise-empty, genuinely non-conflicting
@@ -770,9 +769,11 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
     // costs the viewer literally nothing to also watch, for no real reason.
     // This was the direct cause of a reported bug: a day with a perfectly
     // fine, non-overlapping evening fixture ended up with only one
-    // recommended match because that fixture's stacked penalties (repeat +
-    // sport-concentration + a low sport-priority rank) happened to net
-    // negative. Flooring here means a non-conflicting candidate can only
+    // recommended match because that fixture's stacked penalties (a low
+    // sport-priority rank, formerly also a now-removed repeat/
+    // sport-concentration penalty - see applyLiveExcitementBonus's own
+    // comment) happened to net negative. Flooring here means a
+    // non-conflicting candidate can only
     // ever help or be neutral to the plan, never actively worse than
     // recommending nothing in its own free slot - PICKING it and PICKING
     // NOTHING then tie (`>=` below already favors picking it), so it's
@@ -831,10 +832,8 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 // "not everyday is equally good": some days a slot's best pick has no
 // real rival at all and the stack should just show ONE card, other days
 // two or three fixtures in the same slot are a real toss-up and every one
-// of them belongs in the stack. 2.5 matches this same file's own settled
-// notion of "close enough to be a real call" (see
-// RECENT_REPEAT_PENALTY_BY_GAP_DAYS's top tier) rather than inventing a
-// second, unrelated scale for the same judgment.
+// of them belongs in the stack. 2.5 is this same file's own settled notion
+// of "close enough to be a real call" rather than an arbitrary number.
 export const ALTERNATIVE_MAX_SCORE_GAP = 2.5;
 
 export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore' } = {}) {
@@ -1050,26 +1049,18 @@ export function naturalSlotChoice(dayKey, dayMatches, slotKey, pinnedForDay = nu
   return picked ? picked.id : null;
 }
 
-// ---- Cross-day variety (soft recent-repeat penalty) ------------------------
-//
-// computeDayPlan only ever sees one calendar day, so left alone the same
-// highest-scoring matchup can win every single day of a multi-game series
-// even when a comparably good alternative exists (docs/
-// recommendation-engine-audit.md's "cross-day repetition needs to become a
-// real planning input" finding). This section is what lets a caller feed
-// "what did we already recommend on an EARLIER day" into today's plan,
-// without computeDayPlan itself needing to know anything about other days.
-//
 // A team-sport matchup's identity, independent of which side is home/away
 // or which export produced it (so "A @ B" and "B @ A" - a return leg, or
 // just a different [away, home] ordering - count as the same matchup). An
 // F1 session has no `competitors` (see build-data.mjs's fetchF1Matches), so
 // it falls back to its own name, which already includes the session suffix
 // - qualifying and the race itself are correctly two different keys, never
-// folded together as "the same event recommended twice". The one
-// definition of "same matchup" this codebase has - scripts/
-// evaluate-recommendations.mjs's own descriptive report uses this same
-// function rather than a second copy of this logic.
+// folded together as "the same event recommended twice". Nothing in this
+// module's own scoring reads this anymore (see applyLiveExcitementBonus's
+// own comment on why the cross-day repeat penalty this used to feed was
+// removed) - kept because scripts/evaluate-recommendations.mjs's own
+// descriptive report still uses it to track which distinct calendar dates a
+// given matchup was recommended on.
 export function matchupKey(match) {
   if (Array.isArray(match.competitors) && match.competitors.length === 2) {
     const names = match.competitors.map(c => c.name || c.abbreviation || '?').sort();
@@ -1078,64 +1069,12 @@ export function matchupKey(match) {
   return `${match.sport}: ${match.name || match.id}`;
 }
 
-// How many local calendar days apart two "YYYY-MM-DD" day keys are -
-// parsed as UTC midnight purely so the arithmetic is exact; the keys
-// themselves already represent a viewer's own local calendar date (see
-// app.js's localDateKey), this just diffs two date strings, not instants.
-export function daysBetweenDayKeys(laterDayKey, earlierDayKey) {
-  return Math.round((Date.parse(`${laterDayKey}T00:00:00Z`) - Date.parse(`${earlierDayKey}T00:00:00Z`)) / 86_400_000);
-}
-
-// Small and DECAYING, never a hard ban (docs/recommendation-engine-audit.md
-// section 14 is explicit about this) - a genuinely great matchup can still
-// win on consecutive days, this just stops it from winning by default
-// every time an alternative is close. Anything 4+ days back is
-// indistinguishable from "not recently recommended" at this scale.
-// Bumped up from the original {1: 1.5, 2: 0.75, 3: 0.25} - a reported real
-// case (the same MLB matchup recommended as the day's bridge/secondary pick
-// on three straight days) showed the old weights were too small to matter
-// against a matchup that's merely a BIT better than that day's alternative,
-// even though "include some variety unless the alternative is genuinely
-// much worse" is exactly the intended behavior. Still soft and decaying,
-// never a hard ban - a dramatically better repeat can still win - just with
-// real teeth against a close call now instead of a token nudge.
-export const RECENT_REPEAT_PENALTY_BY_GAP_DAYS = { 1: 2.5, 2: 1.5, 3: 0.75 };
-export function recentRepeatPenalty(daysSinceLastRecommended) {
-  if (!Number.isFinite(daysSinceLastRecommended) || daysSinceLastRecommended <= 0) return 0;
-  return RECENT_REPEAT_PENALTY_BY_GAP_DAYS[daysSinceLastRecommended] || 0;
-}
-
-// ---- Sport-level variety (soft concentration penalty) ---------------------
-//
-// The repeat penalty above only tracks a specific matchup (the same two
-// teams) - docs/recommendation-engine-audit.md section 15 asks for variety
-// "at multiple levels", not just that one: "Avoid accidentally producing:
-// MLB MLB MLB MLB MLB when equally compelling alternatives exist." A sport
-// that plays every day (MLB) is EXPECTED to win most days when it
-// genuinely has the best fixture - this only nudges the call when today's
-// other candidates are close enough for the recent concentration to
-// matter, same "soft, decaying, never a hard ban" design as the matchup
-// penalty.
-//
-// The share of RECENT PICKS (not candidates - a 15-game MLB slate vs. one
-// F1 session isn't "concentration", what actually happened is) that
-// belong to one sport, over the last SPORT_CONCENTRATION_LOOKBACK_DAYS
-// days.
-export const SPORT_CONCENTRATION_LOOKBACK_DAYS = 3;
-// Below this share, a sport isn't "dominating" enough to nudge - two or
-// three sports roughly splitting recent picks is exactly the normal, fine
-// case this should leave alone entirely (0 penalty).
-export const SPORT_CONCENTRATION_THRESHOLD = 0.75;
-// Bumped up from 1 alongside RECENT_REPEAT_PENALTY_BY_GAP_DAYS above - same
-// "variety needs real teeth against a close call" reasoning.
-export const SPORT_CONCENTRATION_PENALTY = 1.5;
-
 // Map<sport, share 0..1> of how much of `picks` belongs to each sport -
-// also what "the planner should expose that concentration" (section 15's
-// own words, on team/league concentration) resolves to: computeWindowPlan
-// returns this computed over the WHOLE window's own final picks, not just
-// the short lookback used for the penalty itself, for a caller (or a
-// developer inspecting an export) to actually see it.
+// a pure diagnostic (computeWindowPlan exposes this over the whole window's
+// own final picks, and scripts/evaluate-recommendations.mjs's own report
+// surfaces it too) - not fed into any scoring decision. It used to also
+// back a soft same-sport-concentration penalty (see applyLiveExcitementBonus's
+// own comment for why that was removed).
 export function computeSportConcentration(picks) {
   const bySport = new Map();
   picks.forEach(m => bySport.set(m.sport, (bySport.get(m.sport) || 0) + 1));
@@ -1145,151 +1084,59 @@ export function computeSportConcentration(picks) {
   return shares;
 }
 
-function sportConcentrationPenalty(sport, recentPicks) {
-  if (!recentPicks.length) return 0;
-  const share = computeSportConcentration(recentPicks).get(sport) || 0;
-  return share >= SPORT_CONCENTRATION_THRESHOLD ? SPORT_CONCENTRATION_PENALTY : 0;
-}
-
-// Sets `.planningScore`/`.recentRepeatPenalty`/`.sportConcentrationPenalty`
-// on every match in `dayMatches`. `lastRecommendedDayKey` (a
-// Map<matchupKey, dayKey>) and `recentPicks` (a flat array of matches
-// recommended over the last SPORT_CONCENTRATION_LOOKBACK_DAYS days, BEFORE
-// today - see computeWindowPlan) both come from a caller that's tracking
-// history across days; this function itself stays a pure function of its
-// arguments. Deliberately separate fields from effectiveScore, never
-// overwritten in place: effectiveScore stays the viewer's own true,
-// un-penalized judgment of the match (docs/recommendation-engine-audit.md's
-// Invariant 4 - a diversity penalty can reduce a score, never delete or
-// corrupt the one it's derived from); planningScore is only what the
-// scheduler's DP weighs picks by (see computeDayPlan's `scoreField`
-// option).
-// The combined repeat+concentration penalty is capped at
-// ALTERNATIVE_MAX_SCORE_GAP - the exact same "close enough to be a real
-// call" line this file already draws for the swipeable-alternative gate
-// (see that constant's own comment). Variety is a tie-breaker between
-// otherwise-comparable options, never a reason to bury a fixture that's
-// CLEARLY the best thing on - issue reported directly: "prioritize the
-// best game first, THEN variety" - a match that's ahead by more than this
-// codebase's own settled definition of "not really a close call" should
-// never lose its slot purely to stacked diversity nudges. Uncapped, the
-// two penalties together could reach 2.5 (repeat, 1-day gap) + 1.5
-// (concentration) = 4.0, well past that same 2.5 line - letting variety
-// override a genuinely decisive lead, not just tip a real toss-up, which
-// is backwards from the stated design intent both here and in
-// ALTERNATIVE_MAX_SCORE_GAP's own comment.
-//
-// A negligible extra nudge, PROPORTIONAL to the uncapped penalty rather
-// than a flat add-on (docs/recommendation-engine-audit.md Round 14) - live-
-// verified case: San Diego Padres @ Los Angeles Dodgers (already
-// recommended two days earlier - repeat 1.5 + concentration 1.5 = 3.0
-// uncapped) and Houston Astros @ Athletics (concentration 1.5 only, no
-// repeat) landed on the EXACT same total whole-day plan value (16.725
-// either way) for 2026-09-25's late slot once both were capped to the same
-// 2.5 - a genuine coin-flip the DP happened to resolve by original array
-// order, not by any real quality difference, so the SAME matchup kept
-// winning its slot on back-to-back recommended days purely by
-// implementation accident. Scaling by the UNCAPPED total (rather than
-// adding one flat constant whenever any penalty applies at all) is what
-// actually breaks that tie: Padres/Dodgers' own uncapped 3.0 picks up
-// slightly more of this nudge than Astros/A's uncapped 1.5, so the more
-// heavily/repeatedly penalized candidate loses the coin-flip, while a flat
-// per-match add-on would have cancelled out between them and changed
-// nothing. The factor (0.001) is far below this system's real score
-// granularity (every input here is an integer 1-10 combined through
-// weights that are themselves multiples of 0.05, so two genuinely
-// different sequences never land closer than that) - it can only ever
-// decide an actual tie, never override a real gap the cap above protects.
-const VARIETY_TIEBREAK_FACTOR = 0.001;
-export function applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks = []) {
+// Sets `.planningScore`/`.liveExcitementBonus` on every match in
+// `dayMatches` - the score computeDayPlan's scheduler actually weighs picks
+// by (see its own `scoreField` option). This used to also fold in a soft
+// cross-day matchup-repeat penalty and a same-sport-concentration penalty
+// (docs/recommendation-engine-audit.md sections 14/15 - "don't recommend the
+// same MLB matchup 3 days running when a comparable alternative exists").
+// Removed entirely per direct feedback: this viewer mostly doesn't watch on
+// weekdays at all, so comparing today's best game against whatever won a
+// weekday slot he never actually watched just buried a genuinely great game
+// for a "variety" benefit that never applied to him. planningScore is now
+// exactly effectiveScore plus the live-match excitement bonus below - kept
+// as its own field (rather than just reading effectiveScore directly)
+// purely so a live-game bonus can still nudge which of two overlapping
+// matches wins its slot without mutating effectiveScore itself (docs/
+// recommendation-engine-audit.md Invariant 4 - a nudge like this can move
+// the scheduler's own pick, never corrupt the viewer's true, un-nudged
+// judgment of the match).
+export function applyLiveExcitementBonus(dayMatches) {
   dayMatches.forEach(match => {
-    const lastDayKey = lastRecommendedDayKey.get(matchupKey(match));
-    const gap = lastDayKey ? daysBetweenDayKeys(dayKey, lastDayKey) : null;
-    const repeatPenalty = gap != null && gap > 0 ? recentRepeatPenalty(gap) : 0;
-    const sportPenalty = sportConcentrationPenalty(match.sport, recentPicks);
-    const uncappedPenalty = repeatPenalty + sportPenalty;
-    const varietyPenalty = Math.min(ALTERNATIVE_MAX_SCORE_GAP, uncappedPenalty) + uncappedPenalty * VARIETY_TIEBREAK_FACTOR;
     // Recomputed fresh every call (never accumulated) from match's own
     // CURRENT competitor scores - see liveExcitementBonus's own comment.
     const liveBonus = liveExcitementBonus(match);
-    match.recentRepeatPenalty = repeatPenalty;
-    match.sportConcentrationPenalty = sportPenalty;
     match.liveExcitementBonus = liveBonus;
-    // Rounded to 6dp purely to avoid float noise from the tiny tie-break
-    // factor above (e.g. 8 - 2.5025 landing on 5.4974999999999996 instead of
-    // 5.4975) - 6dp is still far finer than VARIETY_TIEBREAK_FACTOR's own
-    // 0.001, so this never masks a real difference, only binary float grot.
-    match.planningScore =
-      Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) - varietyPenalty + liveBonus) * 1e6) / 1e6;
+    match.planningScore = Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) + liveBonus) * 1e6) / 1e6;
   });
 }
 
-// Runs computeDayPlan once per day, IN CHRONOLOGICAL ORDER, across a whole
-// fetched window - the only way a later day's plan can actually know what
-// an earlier day already recommended. `matchesByDayKey` is a
-// Map<dayKey, matches> (app.js's own per-day buckets); `pinnedChoices` is
-// state.pinnedChoices as-is (a Map<dayKey, Map<slotKey, matchId>>).
+// Runs computeDayPlan once per day across a whole fetched window.
+// `matchesByDayKey` is a Map<dayKey, matches> (app.js's own per-day
+// buckets); `pinnedChoices` is state.pinnedChoices as-is (a
+// Map<dayKey, Map<slotKey, matchId>>). Each day is still scored
+// independently (applyLiveExcitementBonus has no cross-day memory - the
+// soft cross-day repeat/sport-concentration penalty this used to apply
+// chronologically was removed, see that function's own comment), so unlike
+// an earlier version of this function, day order no longer matters here.
 //
 // Returns:
 //   - `plan`: Map<dayKey, picks>
-//   - `lastRecommendedDayKey`: the FINAL matchup-repeat history, as it
-//     stands after every day in the window has been processed - useful as
-//     a whole-window summary/diagnostic, but NOT what a later per-day
-//     re-query (app.js's dayCandidatesForPlan/pinSlotChoice) should use as
-//     "history" for that day - see historyByDayKey below for why.
-//   - `historyByDayKey`: Map<dayKey, Map<matchupKey, dayKey>> - the
-//     matchup-repeat history AS IT STOOD immediately BEFORE that day's own
-//     picks were folded in, i.e. exactly what applyRecentRepeatPenalties
-//     actually used to score that day's candidates the one time this
-//     function computed them. This is the one a caller re-deriving a
-//     SINGLE day's candidates later (outside this same chronological pass)
-//     must use instead of the flat `lastRecommendedDayKey` above: that flat
-//     map only holds each matchup's LAST occurrence across the ENTIRE
-//     window, which for a real short back-to-back series (the reported
-//     "same MLB matchup recommended 3 days running" bug) is very often a
-//     day AFTER the one being re-queried - daysBetweenDayKeys(dayKey,
-//     future-day) is negative, so applyRecentRepeatPenalties's own `gap > 0`
-//     guard silently treats it as "no history at all" and the repeat
-//     penalty this whole mechanism exists for never actually applies,
-//     however many times that same matchup was already recommended on
-//     earlier days in the window.
-//   - `recentPicksByDayKey`: Map<dayKey, matches[]> - exactly the rolling
-//     "last few days' picks" this function itself used to weigh THAT day's
-//     sport-concentration penalty, reusable as-is by a caller scoped to
-//     one (possibly sport-filtered) day - see app.js's
-//     renderRecommendedSection - so it doesn't have to re-derive the same
-//     rolling window from `plan` itself.
 //   - `sportConcentration`: Map<sport, share> over the WHOLE window's own
-//     final picks (see computeSportConcentration) - the "expose that
-//     concentration" diagnostic section 15 asks for.
+//     final picks (see computeSportConcentration) - a pure diagnostic, not
+//     fed into any scoring decision.
 export function computeWindowPlan(matchesByDayKey, pinnedChoices = new Map()) {
   const dayKeys = [...matchesByDayKey.keys()].sort();
-  const lastRecommendedDayKey = new Map();
   const plan = new Map();
-  const recentPicksByDayKey = new Map();
-  const historyByDayKey = new Map();
-  const recentDayPicks = []; // rolling [{dayKey, picks}], oldest first
   dayKeys.forEach(dayKey => {
     const dayMatches = matchesByDayKey.get(dayKey) || [];
-    const recentPicks = recentDayPicks
-      .filter(entry => daysBetweenDayKeys(dayKey, entry.dayKey) <= SPORT_CONCENTRATION_LOOKBACK_DAYS)
-      .flatMap(entry => entry.picks);
-    recentPicksByDayKey.set(dayKey, recentPicks);
-    // Snapshotted BEFORE this day's own picks are folded into
-    // lastRecommendedDayKey below - see historyByDayKey's own comment.
-    historyByDayKey.set(dayKey, new Map(lastRecommendedDayKey));
-    applyRecentRepeatPenalties(dayMatches, dayKey, lastRecommendedDayKey, recentPicks);
+    applyLiveExcitementBonus(dayMatches);
     const picks = computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
-    picks.forEach(match => lastRecommendedDayKey.set(matchupKey(match), dayKey));
-    recentDayPicks.push({ dayKey, picks });
     plan.set(dayKey, picks);
   });
   return {
     plan,
-    lastRecommendedDayKey,
-    historyByDayKey,
-    recentPicksByDayKey,
-    sportConcentration: computeSportConcentration(recentDayPicks.flatMap(entry => entry.picks))
+    sportConcentration: computeSportConcentration(dayKeys.flatMap(dayKey => plan.get(dayKey)))
   };
 }
 
@@ -1410,8 +1257,8 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
       // baseScore/effectiveScore above, under the names docs/
       // recommendation-engine-audit.md's score-architecture section asks
       // for. planningScore is intentionally NOT set here - it needs
-      // same-day scheduling + cross-day history (applyRecentRepeatPenalties)
-      // neither of which this function has.
+      // same-day scheduling context (applyLiveExcitementBonus), which this
+      // function has no access to.
       eventScore: breakdown.baseScore,
       viewerScore: breakdown.effectiveScore,
       scoreBreakdown: breakdown,

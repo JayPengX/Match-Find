@@ -67,8 +67,7 @@ import {
   isQuietHours,
   computeOverlapRange,
   isNearTotalOverlap,
-  computeWindowPlan,
-  applyRecentRepeatPenalties,
+  applyLiveExcitementBonus,
   naturalSlotChoice,
   matchLifecycleState,
   LIFECYCLE_STATES,
@@ -86,9 +85,10 @@ import {
 import { pickReadableTeamColor } from './lib/color.mjs';
 import {
   POLYMARKET_TAG_ID,
-  polymarketEventsByTagUrl,
+  fetchAllPolymarketEvents,
   resolveTeamOdds,
-  resolveF1WinnerOdds
+  resolveF1WinnerOdds,
+  resolvePoleWinnerOdds
 } from './lib/polymarket.mjs';
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
@@ -139,6 +139,22 @@ const PROXY_FETCH_CACHE_TTL_MS = 45_000;
 const proxyFetchCache = new Map(); // url -> { data, expiresAt }
 const proxyFetchInFlight = new Map(); // url -> Promise<data>
 
+// Bounds how long any ONE proxied request is allowed to hang before this
+// tab gives up on it - a manual "refresh now" fans out 50+ of these in
+// parallel (see buildMatches), and without a bound, a single slow/stuck one
+// (a cold Worker isolate, a flaky mobile connection, an upstream API having
+// a bad moment) can hold up the WHOLE refresh, since most of the batches
+// awaiting these are a plain `Promise.all`/`await`, not something that
+// moves on the moment enough of them resolve. Live-reported as "updating
+// data takes 10-20 seconds, sometimes more, sometimes less" - the
+// inconsistency itself is a symptom of exactly this: which one straggler
+// happens to be slow varies refresh to refresh. Set a little above the
+// shared Worker's own SPORTS_PROXY_UPSTREAM_TIMEOUT_MS (8s, see that
+// repo's worker.js) so a normal Worker-side timeout still gets to finish
+// and return its own clean error response first, rather than being raced
+// and losing to this timeout on every genuinely slow (not stuck) request.
+const PROXY_FETCH_TIMEOUT_MS = 12_000;
+
 async function proxyFetchJson(url) {
   const cached = proxyFetchCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
@@ -146,7 +162,8 @@ async function proxyFetchJson(url) {
   if (pending) return pending;
   const request = (async () => {
     const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
-      cache: 'no-store'
+      cache: 'no-store',
+      signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
     });
     if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
     const data = await response.json();
@@ -159,6 +176,22 @@ async function proxyFetchJson(url) {
   } finally {
     proxyFetchInFlight.delete(url);
   }
+}
+
+// The same proxy passthrough as proxyFetchJson above, but deliberately
+// UNCACHED (see PROXY_FETCH_CACHE_TTL_MS's own comment on why
+// pollLiveMatches needs a guaranteed-fresh request every tick) - used only
+// for fetchAllPolymarketEvents's own pagination below, where each page
+// genuinely is a different URL anyway (a different `offset`) but still
+// shouldn't be served from a stale cache entry left over from an earlier
+// poll tick.
+async function proxyFetchJsonUncached(url) {
+  const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
+  });
+  if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
+  return response.json();
 }
 
 const state = {
@@ -203,38 +236,6 @@ const state = {
   // sitting untouched in localStorage the whole time (savePinnedChoices
   // still worked fine mid-session), just never read back on the load path.
   pinnedChoices: new Map(),
-  // Map<dayKey, Map<matchupKey, dayKey>> - computeWindowPlan's
-  // historyByDayKey: for each day, the most recent EARLIER day (across the
-  // WHOLE fetched window, regardless of the current sport filter) that
-  // matchup actually won its day's plan. Recomputed by renderSections (see
-  // computeWindowPlan) before every render, so a soft cross-day repeat
-  // penalty (applyRecentRepeatPenalties) can see "did we already
-  // recommend this exact matchup on an earlier day" no matter which day
-  // or sport filter the viewer currently has open - see docs/
-  // recommendation-engine-audit.md's "cross-day repetition" finding.
-  //
-  // Keyed per-day (not one flat Map<matchupKey, dayKey>) because a flat
-  // map can only remember one occurrence per matchup - the LAST one
-  // processed across the whole window - which for a real short
-  // back-to-back series is very often a day AFTER the one being asked
-  // about, silently hiding every earlier occurrence from that day's own
-  // repeat penalty (see computeWindowPlan's own comment on historyByDayKey
-  // for the exact "same matchup recommended 3 days running" bug this was).
-  recommendationHistory: new Map(),
-  // Map<dayKey, matches[]> - the rolling window of recently-recommended
-  // matches (see computeWindowPlan's own comment) each day's soft
-  // sport-concentration penalty was actually weighed against, reused as-is
-  // by renderRecommendedSection's own (possibly sport-filtered) call so it
-  // doesn't have to re-derive the same rolling window a second way.
-  recentPicksByDayKey: new Map(),
-  // Map<sport, share 0..1> over the whole fetched window's own final
-  // picks - docs/recommendation-engine-audit.md section 15's "the planner
-  // should expose that concentration" (team/league concentration) - not
-  // itself used for any scheduling decision, and (since the developer-only
-  // export button that used to surface this was removed) currently only
-  // ever inspected via public/data/matches.json directly or
-  // scripts/evaluate-recommendations.mjs (see README).
-  sportConcentration: new Map(),
   // Map<dayKey, Map<slotKey, Set<matchId>>> - which members a swipeable
   // card stack actually shows, frozen the first time each day+slot renders
   // - see renderRecommendedSection's own comment for why this exists:
@@ -433,6 +434,7 @@ const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
 const updateStatusText = document.getElementById('update-status-text');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
+const reloadAppBtn = document.getElementById('reload-app-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -1086,15 +1088,12 @@ function dayLabelFor(date, { short = false } = {}) {
 // isNearTotalOverlap/effectiveDurationMinutes/effectiveInterval/
 // schedulingInterval/canWatchSequentially/groupIntoSlots/
 // slotKeyFromMembers/weightedIntervalSchedule/computeDayPlan/
-// computeWindowPlan/applyRecentRepeatPenalties/matchupKey/
-// resolveViewingPlan all now live in ./lib/recommendation.mjs (imported at
-// the top of this file) - see that module for the "one continuous
-// back-to-back plan, not independent picks" model this section used to
-// document inline, and docs/recommendation-engine-audit.md for how
-// effectiveScore's adjustments are now exposed for debugging
-// (computeRecommendationScore/scoreBreakdown), and for the soft cross-day
-// repeat penalty (planningScore) computeWindowPlan/renderSections apply so
-// the same matchup doesn't default to winning every day of a series.
+// applyLiveExcitementBonus/matchupKey/resolveViewingPlan all now live in
+// ./lib/recommendation.mjs (imported at the top of this file) - see that
+// module for the "one continuous back-to-back plan, not independent
+// picks" model this section used to document inline, and docs/
+// recommendation-engine-audit.md for how effectiveScore's adjustments are
+// now exposed for debugging (computeRecommendationScore/scoreBreakdown).
 // computeOverlapRange is still used directly below, in buildMatchCard's
 // own overlap note.
 
@@ -1106,12 +1105,7 @@ function dayLabelFor(date, { short = false } = {}) {
 // computation that could disagree with what's on screen.
 function dayCandidatesForPlan(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  // state.recommendationHistory.get(dayKey) - NOT the whole-window flat
-  // map - see that field's own comment for why: it has to be "what was
-  // recommended before THIS day", not "each matchup's last occurrence
-  // anywhere in the fetched window".
-  const history = state.recommendationHistory.get(dayKey) || new Map();
-  applyRecentRepeatPenalties(dayCandidates, dayKey, history, state.recentPicksByDayKey.get(dayKey) || []);
+  applyLiveExcitementBonus(dayCandidates);
   return dayCandidates;
 }
 
@@ -1382,9 +1376,14 @@ function buildMatchCard(match) {
       item.hidden = !favorite;
       if (favorite) item.textContent = `${favorite.name} ${Math.round(favorite.pct)}%`;
     });
+    // Qualifying's own market is "who gets pole position", not "who wins
+    // the Grand Prix" - see resolvePoleWinnerOdds's own comment - so the
+    // label has to say which one this actually is rather than always
+    // reading as a race-winner probability.
+    const outrightLabel = match.id.endsWith('-qual') ? '桿位機率' : '奪冠機率';
     outrightEl.setAttribute(
       'aria-label',
-      `奪冠機率：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
+      `${outrightLabel}：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
     );
   }
 
@@ -1481,8 +1480,15 @@ function buildMatchCard(match) {
   // Sorted CLOSEST-start-first, not just "any earlier match" - "與 X 重疊"
   // should name the game most likely airing right before this one started,
   // not whichever happened to be earliest in the day's own list order.
-  // Among those, still prefers a recommended one when one exists (the more
-  // useful "you could also be watching X" case) over an arbitrary one.
+  // Only ever names a RECOMMENDED earlier match (isPreferred - a viewer's
+  // own swiped-to pin - is always also .recommended, see computeDayPlan's
+  // own forcedIds) - never an arbitrary non-recommended one. Reported
+  // directly: this note was naming whatever overlapping match happened to
+  // sort first even when it was itself just some other unrecommended
+  // fixture nobody would actually be watching instead - noise, not a real
+  // "you could be watching X instead" case. If no overlapping match is
+  // actually recommended, this simply shows nothing, rather than a
+  // meaningless overlap against a random card.
   // Excludes any match that's a NEAR-TOTAL overlap of this one (see
   // isNearTotalOverlap) - those are this match's own swipe-stack alternates
   // (see buildMatchStack/computeDayPlan's alternativeIds), not a genuine
@@ -1498,10 +1504,11 @@ function buildMatchCard(match) {
       m =>
         (match.overlappingIds || []).includes(m.id) &&
         Date.parse(m.startTimeUtc) < Date.parse(match.startTimeUtc) &&
-        !isNearTotalOverlap(match, m)
+        !isNearTotalOverlap(match, m) &&
+        m.recommended
     )
     .sort((a, b) => Date.parse(b.startTimeUtc) - Date.parse(a.startTimeUtc));
-  const earlierOverlap = earlierOverlaps.find(m => m.recommended) || earlierOverlaps[0];
+  const earlierOverlap = earlierOverlaps[0];
   if (earlierOverlap) {
     const range = computeOverlapRange(match, earlierOverlap);
     const mins = range ? Math.round((range.end - range.start) / 60_000) : null;
@@ -1513,12 +1520,11 @@ function buildMatchCard(match) {
           : `重疊 ${Math.floor(mins / 60)} 小時${mins % 60 ? ` ${mins % 60} 分` : ''}`;
     conflictNote.hidden = false;
     conflictNote.textContent = `與「${earlierOverlap.name}」${clause}`;
-    // Only dims the card when it's the weaker of the two AND the earlier
-    // one is itself recommended - "you could be watching a better game
-    // right now instead" is worth de-emphasizing for; two matches that are
-    // BOTH recommended and simply overlap are both worth full attention,
-    // so neither gets muted just for that.
-    if (!match.recommended && earlierOverlap.recommended) node.classList.add('is-muted');
+    // Only dims the card when it's the weaker of the two - "you could be
+    // watching a better game right now instead" is worth de-emphasizing
+    // for; two matches that are BOTH recommended and simply overlap are
+    // both worth full attention, so neither gets muted just for that.
+    if (!match.recommended) node.classList.add('is-muted');
     else conflictNote.classList.add('is-info');
   }
   if (match.recommended) node.classList.add('is-recommended');
@@ -1948,12 +1954,6 @@ function renderRecommendedSection() {
   // (day, sport filter, pins) - see computeDayPlan's own comment. Picking
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
-  //
-  // state.recommendationHistory (see renderSections) is built from the
-  // FULL, unfiltered window regardless of today's sport filter - a soft
-  // repeat penalty on "did we recommend this matchup yesterday" has to be
-  // asking about what was ACTUALLY recommended, not what a differently
-  // filtered view would have picked.
   const dayCandidates = dayCandidatesForPlan(dayKey);
   const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   const ordered = pinCurrentOrNext(dayPlan);
@@ -2088,19 +2088,6 @@ function renderAllMatchesSection() {
 }
 
 function renderSections() {
-  // Rebuilds state.recommendationHistory from a fresh, UNFILTERED (every
-  // enabled sport, every fetched day) computeWindowPlan pass, in
-  // chronological order, before either section below reads it - see
-  // renderRecommendedSection's own comment on why this has to stay
-  // independent of the viewer's current sport filter. Cheap enough to
-  // redo on every render (a 14-day window's own DP, not a network call);
-  // its `plan` half is intentionally discarded here since it's this
-  // unfiltered plan, not necessarily what actually renders below.
-  const matchesByDayKey = new Map(state.days.map(day => [day.key, matchesForDay(day.key)]));
-  const windowPlan = computeWindowPlan(matchesByDayKey, state.pinnedChoices);
-  state.recommendationHistory = windowPlan.historyByDayKey;
-  state.recentPicksByDayKey = windowPlan.recentPicksByDayKey;
-  state.sportConcentration = windowPlan.sportConcentration;
   renderRecommendedSection();
   renderAllMatchesSection();
 }
@@ -2406,6 +2393,60 @@ async function refreshNearTerm() {
   }
 }
 
+// ---- New-version check (no service worker on this site - see below) ------
+//
+// This is a plain static site (GitHub Pages, no build step - see this
+// file's own top comment) with no service worker/offline cache at all -
+// `manifest.webmanifest` only makes it installable ("Add to Home Screen"),
+// it doesn't give the OS/browser any way to tell this tab "a new version
+// was deployed". Direct feedback: tapping "立即重新整理" only ever
+// refreshed match DATA, never checked whether the PAGE ITSELF (app.js's
+// own code) had been redeployed since this tab loaded - a viewer who kept
+// a tab open for days could sit on stale logic indefinitely with no signal
+// anything had changed.
+//
+// The fix doesn't need a real service-worker install/activate lifecycle to
+// answer that question - GitHub Pages' own CDN already hands back a real,
+// reliable ETag/Last-Modified per file (confirmed live), which changes the
+// moment that file's own content is redeployed. Snapshotting app.js's own
+// ETag once at load, then comparing it against a fresh, `cache: 'no-store'`
+// HEAD request every time "立即重新整理" runs, is enough to answer "is a
+// newer version of THIS PAGE now live" - the same question a service
+// worker's own update event exists to answer, just asked directly instead
+// of through that whole extra lifecycle.
+const APP_VERSION_CHECK_PATH = './app.js';
+let appVersionEtag = null; // captured once at load - see captureAppVersionBaseline
+
+async function fetchAppVersionMarker() {
+  try {
+    const response = await fetch(APP_VERSION_CHECK_PATH, { method: 'HEAD', cache: 'no-store' });
+    if (!response.ok) return null;
+    return response.headers.get('etag') || response.headers.get('last-modified') || null;
+  } catch {
+    // Offline, or a local dev server that doesn't send either header -
+    // there's simply nothing to compare against yet, not a real failure.
+    return null;
+  }
+}
+
+// Called once, early in init() - fire-and-forget (never awaited/blocking
+// the real startup path), since this only matters much later, whenever the
+// viewer eventually taps "立即重新整理".
+async function captureAppVersionBaseline() {
+  appVersionEtag = await fetchAppVersionMarker();
+}
+
+// Returns true only when a baseline was actually captured AND the current
+// live marker genuinely differs from it - never true just because a marker
+// couldn't be read this time (a transient network hiccup on THIS check
+// isn't "a new version exists", and reloading on that basis would just
+// interrupt the viewer for nothing).
+async function checkForNewAppVersion() {
+  if (!appVersionEtag) return false;
+  const current = await fetchAppVersionMarker();
+  return !!current && current !== appVersionEtag;
+}
+
 // `silent` keeps the background timer from fighting with a viewer who just
 // tapped "立即重新整理" for status text either one might want to set.
 async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
@@ -2416,7 +2457,16 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
   try {
     const { matches, generatedAt } = await buildMatches({ daysAhead: DEFAULT_DAYS_AHEAD, fetchJson: proxyFetchJson });
     applyFreshBuild(matches, generatedAt);
-    if (!silent && statusEl) statusEl.textContent = '資料已更新。';
+    // Only checked on a viewer-initiated refresh (never the silent
+    // background timers) - see this section's own top comment. Runs after
+    // the data refresh, not in parallel with it - a version prompt from a
+    // stale check that raced ahead of the data actually finishing would be
+    // confusing to see before "資料已更新" itself has even shown yet.
+    if (!silent && statusEl) {
+      const hasNewVersion = await checkForNewAppVersion().catch(() => false);
+      statusEl.textContent = '資料已更新。';
+      if (hasNewVersion && reloadAppBtn) reloadAppBtn.hidden = false;
+    }
   } catch (error) {
     console.error('full refresh failed', error);
     if (!silent && statusEl) statusEl.textContent = '重新整理失敗，請稍後再試。';
@@ -2449,6 +2499,11 @@ function scheduleFullRefresh() {
 refreshDataBtn.addEventListener('click', () => {
   refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
 });
+reloadAppBtn.addEventListener('click', () => {
+  // A real reload, not just re-fetching data - the whole point is to get
+  // this tab off whatever OLD app.js it's still running.
+  window.location.reload();
+});
 
 // ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -
 //
@@ -2465,7 +2520,7 @@ refreshDataBtn.addEventListener('click', () => {
 // odds), plus letting recommendation.mjs's own liveExcitementBonus react
 // to a live score change so a live match that turns out to be a genuine
 // nail-biter can bump the day's plan (item 6) - see
-// applyRecentRepeatPenalties's own comment for where that bonus is
+// applyLiveExcitementBonus's own comment for where that bonus is
 // actually applied. Score/status comes from ESPN's own public scoreboard;
 // odds comes from Polymarket instead (see ./lib/polymarket.mjs for why) -
 // two separate fetches below, since not every sport this tracks has both
@@ -2624,20 +2679,22 @@ async function pollLiveMatches() {
     [...sports]
       .filter(sport => POLYMARKET_TAG_ID[sport] != null)
       .map(async sport => {
-        const target = polymarketEventsByTagUrl(POLYMARKET_TAG_ID[sport]);
-        const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
-          cache: 'no-store'
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const events = await response.json();
+        const events = await fetchAllPolymarketEvents(POLYMARKET_TAG_ID[sport], proxyFetchJsonUncached);
         state.allRawMatches.forEach(match => {
           if (match.sport !== sport || match.isFinished) return;
           if (sport === 'F1') {
-            // Only the Race session shows odds - see match-builder.mjs's own
-            // enrichWithPolymarketOdds comment for why `-race` is this
-            // session's own stable id suffix.
-            if (!match.id.endsWith('-race')) return;
-            const favorites = resolveF1WinnerOdds(events, match.startTimeUtc.slice(0, 10));
+            // The Race session shows race-winner odds, Qualifying shows
+            // pole-position odds - see match-builder.mjs's own
+            // enrichWithPolymarketOdds comment for why `-race`/`-qual` are
+            // each session's own stable id suffix, and
+            // resolvePoleWinnerOdds's own comment for the separate
+            // Polymarket market this reads for Qualifying.
+            const sessionDateUtc = match.startTimeUtc.slice(0, 10);
+            const favorites = match.id.endsWith('-race')
+              ? resolveF1WinnerOdds(events, sessionDateUtc)
+              : match.id.endsWith('-qual')
+                ? resolvePoleWinnerOdds(events, sessionDateUtc)
+                : null;
             if (!favorites) return;
             const top3 = favorites.slice(0, 3);
             // A plain array-of-objects compare - cheap for a 3-entry list,
@@ -2781,6 +2838,9 @@ setInterval(renderNextUpdateCountdown, 1000);
 
 async function init() {
   state.proxyUrl = PROXY_URL;
+  // Fire-and-forget - see this section's own top comment. Only matters
+  // once, much later, whenever this viewer eventually taps "立即重新整理".
+  captureAppVersionBaseline();
   // Paint immediately from last visit's own cached build, if one exists and
   // isn't too old (see "Instant-paint snapshot" above) - purely a perceived-
   // latency fix, the real refresh right below still always runs and quietly

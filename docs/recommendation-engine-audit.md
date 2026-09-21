@@ -2702,3 +2702,141 @@ blowout in each sport still correctly capped by
 `MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS`) - see this round's own
 session log. 18 new tests added across `objective-score.test.mjs`/
 `sport-signals.test.mjs`, full suite 351/351.
+
+## Round 25 (2026-09-21): a batch of 7 direct reports - variety removed, a real Polymarket coverage bug fixed, NBA preseason dropped, and a live-time investigation of "10-20 second" refreshes
+
+Seven items reported together in one message; each is its own real fix, not
+a single theme, so this round covers all seven distinctly.
+
+**1. Polymarket coverage: 50 of 91 real upcoming MLB fixtures had no odds
+at all, and F1 Qualifying never had any.** Root cause, confirmed live: the
+Gamma API's own `/events` endpoint caps a single request at 100 regardless
+of the `limit` param (silently truncated), and MLB alone had 170 currently-
+open events for its tag - not one event per game, but a SEPARATE event for
+many games' own `-player-props`/`-first-five-winner`/`-inning-9-winner`
+sub-markets too. The existing code sorted by `order=startDate` (when
+Polymarket itself CREATED the listing, confirmed to differ from the real
+game time) rather than `order=startTime` (the fixture's own real kickoff),
+so which 100 of 170 events actually got fetched was essentially arbitrary
+relative to which games were happening soonest. Fixed by switching to
+`order=startTime` and adding `fetchAllPolymarketEvents` (paginates via
+`offset` past the 100-cap, capped at 5 pages as a runaway-loop guard) in
+both `match-builder.mjs` (build-time) and `app.js` (the live poll tier).
+Re-verified live: MLB's own missing-odds count dropped from 50/91 to 15/91
+- confirmed those remaining 15 (all 2026-09-27 games, 6 days out) have
+genuinely NO Polymarket market open yet at all, not a fetch bug. Separately,
+F1 Qualifying never got odds because `enrichWithPolymarketOdds` only ever
+looked for a race-winner market - Polymarket actually runs a SEPARATE
+"Driver Pole Position" outright market for Qualifying (same per-driver
+Yes/No shape, confirmed live), keyed to the Qualifying session's own real
+UTC date, not the race's. Added `findPoleWinnerEvent`/`resolvePoleWinnerOdds`
+and wired both session types (`-race`/`-qual` id suffixes) into both the
+build-time and live-poll paths; the outright-odds aria-label now also says
+"桿位機率" instead of always "奪冠機率" for a Qualifying card. 12 new tests.
+
+**2. "Variety" removed entirely from the recommendation scheduler.** Direct
+feedback: this viewer mostly doesn't watch on weekdays at all, so the old
+cross-day matchup-repeat penalty and same-sport-concentration penalty
+(`applyRecentRepeatPenalties`, Rounds 2/14) were comparing today's best
+game against whatever won a weekday slot he never actually watched, and
+burying a genuinely great weekend game for a "variety" benefit that never
+applied to him. Removed `RECENT_REPEAT_PENALTY_BY_GAP_DAYS`/
+`recentRepeatPenalty`/`SPORT_CONCENTRATION_*`/`sportConcentrationPenalty`/
+`VARIETY_TIEBREAK_FACTOR`/`daysBetweenDayKeys` entirely; `planningScore` is
+now exactly `effectiveScore` plus the (unrelated, kept) live-match
+excitement bonus, via the renamed `applyLiveExcitementBonus`. This also let
+`computeWindowPlan` drop its whole chronological-history bookkeeping
+(`historyByDayKey`/`recentPicksByDayKey`/`lastRecommendedDayKey`) - each day
+is scored independently now, since there's no more cross-day penalty to
+feed. `computeSportConcentration`/`matchupKey` stay as pure diagnostics
+(still used by `scripts/evaluate-recommendations.mjs`'s own report), just
+no longer wired into any scoring decision. Live-verified: San Diego Padres
+@ Los Angeles Dodgers now correctly stays recommended 3 days running
+(2026-09-23 through 09-25) on its own merits, no longer needing the old
+tie-break-toward-variety logic to lose the coin-flip it used to.
+
+**3. NBA preseason games removed entirely, not just excluded from 推薦賽
+事.** Direct feedback: 愛爾達體育台 (this app's real Taiwan broadcast
+source) doesn't air NBA preseason exhibitions at all, so a fixture no
+viewer can actually watch through this site's own `whereToWatchTw` answer
+has no business appearing anywhere on it. ESPN's own `event.season.type`
+is `1` for the preseason (confirmed live against a real 2026-27 preseason
+fixture: `season.type: 1, season.slug: 'preseason'`), `2` for the regular
+season, `3` for the postseason (already used for `isPostseason`) - added a
+skip for `season.type === 1` right alongside the existing TBD-competitor
+skip in `fetchTeamLeagueMatches`, general to all three team leagues (not
+NBA-special-cased) since the same "not actually broadcast" reasoning holds
+for a hypothetical MLB spring-training fixture too. Live-verified: all 3
+real 2026-27 NBA preseason fixtures that used to appear disappeared
+entirely from a fresh rebuild.
+
+**4. Overlap note no longer names an arbitrary non-recommended match.**
+`buildMatchCard`'s "與「X」重疊 N 分鐘" note used to fall back to whichever
+earlier-overlapping match happened to sort first when none of them were
+actually recommended - direct feedback: this should only ever compare
+against a match actually worth watching (推薦 or a viewer's own 偏好 pin,
+which is always a subset of 推薦 - see `computeDayPlan`'s `forcedIds`),
+never a random unrecommended neighbor. Simplified `earlierOverlaps`'
+filter to require `m.recommended`, with no fallback - a card whose only
+overlaps are unrecommended fixtures now shows nothing at all, rather than
+a comparison nobody asked for.
+
+**5/6. Investigated a live-reported "updating data takes 10-20 seconds,
+sometimes more, sometimes less" as one combined issue** (both reports
+describe the same symptom - how long/how consistently a refresh takes, not
+a separate fixed schedule). Direct timing of `buildMatches` against the
+REAL deployed Shared-Proxy Worker from this sandbox came back fast and
+consistent (~1.3-2.4s, 57 requests) - not reproducible here, since this
+environment's own network path to the Worker has neither the per-request
+latency nor the packet loss a real mobile connection would. Found and
+fixed two real, provable structural issues anyway, both of which directly
+predict exactly the reported symptom (a variable worst case bounded by
+"whichever one of 50+ concurrent requests happened to be slow this
+cycle"):
+  - `buildMatches` had two pairs of independent work awaited in fully
+    SEPARATE serial stages for no reason: the 3 team leagues' own fetch was
+    awaited to completion before F1's fetch even started, and
+    `enrichWithPolymarketOdds` was awaited to completion before the
+    standings/F1-title-race fetch even started - 4 serial round-trip
+    stages where 2 would do, since within each pair neither result depends
+    on the other. Merged each pair into one `Promise.all`.
+  - The Shared-Proxy Worker's own `/sports-proxy` route (jaypengx-collab/
+    shared-proxy) let a single cache-miss upstream request hang for up to
+    15 seconds (`AbortSignal.timeout(15_000)`) before giving up - since
+    every caller already treats a failed/slow sports-proxy request as "no
+    data for this one" (a `.catch`/`Promise.allSettled`, never a fatal
+    error), this 15s ceiling was pure unbounded worst-case latency with no
+    correctness benefit. Cut to `SPORTS_PROXY_UPSTREAM_TIMEOUT_MS = 8_000`
+    (ESPN's own scoreboard responds in well under 1s normally, confirmed
+    live) - directly caps the worst any single one of 50+ concurrent
+    requests can cost a refresh. Also added a matching client-side
+    `PROXY_FETCH_TIMEOUT_MS = 12_000` in `app.js`'s own `proxyFetchJson`/
+    `proxyFetchJsonUncached`, bounding the client→Worker leg the Worker's
+    own timeout can't cover. **Caveat, stated plainly**: the exact reported
+    10-20s figure could not be reproduced or independently confirmed from
+    this sandboxed environment - these are real, verified structural fixes
+    (fewer serial stages, a bounded worst-case latency) rather than a
+    measurement showing the reported number specifically improved.
+
+**7. Manual "立即重新整理" now also checks for a newer deployed version of
+the page itself**, not just fresh match data - direct feedback framed as
+"the PWA... has new push [update]". This site has no service worker at all
+(`manifest.webmanifest` only makes it installable) and no build step to
+stamp a version number into anything, so there's no service-worker update
+lifecycle to hook into. Used GitHub Pages' own real, reliable per-file
+ETag/Last-Modified (confirmed live) instead: `app.js`'s own marker is
+snapshotted once at load (`captureAppVersionBaseline`, fire-and-forget,
+never blocking startup) and re-checked with a fresh `cache: 'no-store'`
+HEAD request every time the refresh button is pressed
+(`checkForNewAppVersion`) - a genuine difference reveals a second "發現新
+版本，點此重新載入" button that does a real `location.reload()`, the only
+way to actually replace a page's own running JavaScript.
+
+Full suite 350/350 (the net change from 351 reflects Round 24's variety-
+mechanism tests being replaced by simpler ones that assert the SAME
+scenarios are no longer penalized, per item 2 above, plus 12 new Polymarket
+tests). Committed and pushed to both branches of Match-Find; the Shared-
+Proxy timeout change was also committed and pushed to both its branches -
+that repo has no deploy automation (see its own README), so it needs a
+manual redeploy (paste `worker.js` into the Cloudflare dashboard) before
+the shorter timeout actually takes effect in production.

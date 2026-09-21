@@ -29,11 +29,10 @@ import { pathToFileURL } from 'node:url';
 import { computeConfidence, matchupKey, schedulingInterval, isQuietHours } from '../public/lib/recommendation.mjs';
 
 // Re-exported so existing importers (this file's own tests included) don't
-// need to know matchupKey moved - it's now the one shared definition of
-// "same matchup" recommendation.mjs's own cross-day repeat penalty
-// (applyRecentRepeatPenalties) uses too, not a second copy of this logic
-// living only here (see docs/recommendation-engine-audit.md's "remove
-// complexity instead of adding more patches").
+// need to know matchupKey moved - it's the one shared definition of "same
+// matchup" this codebase has, not a second copy of this logic living only
+// here (see docs/recommendation-engine-audit.md's "remove complexity
+// instead of adding more patches").
 export { matchupKey };
 
 // Accepts either `{matches: [...]}` (matches.json/the export button's own
@@ -128,9 +127,9 @@ function oracleWeightedSchedule(items, getScore) {
 }
 
 // A match's own scheduling weight, matching whichever score
-// computeDayPlan was actually run with (planningScore once the cross-day
-// repeat penalty exists, effectiveScore otherwise - see that function's
-// own `scoreField` option) - the oracle has to compare against the SAME
+// computeDayPlan was actually run with (planningScore once
+// applyLiveExcitementBonus has set it, effectiveScore otherwise - see that
+// function's own `scoreField` option) - the oracle has to compare against the SAME
 // objective the production planner was optimizing, or a mismatch would
 // just mean "these two used different weights", not "the scheduler is
 // suboptimal".

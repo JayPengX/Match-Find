@@ -306,38 +306,24 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   still had another 25% padded on top of that longer, now-known-wrong
   guess, which kept blocking a next match that could obviously,
   actually follow it.
-- **The same matchup doesn't default to winning every day of a series.**
-  `computeWindowPlan` walks the whole fetched window in date order and
-  applies a small, decaying penalty (`applyRecentRepeatPenalties`) to a
-  matchup that was already the pick on an EARLIER day - strong enough to
-  let a close alternative win instead, never strong enough to override a
-  genuinely much better repeat (see `RECENT_REPEAT_PENALTY_BY_GAP_DAYS`).
-  This only affects which fixture wins the plan, never the underlying
-  score shown on the card. Each day is penalized against its own correct
-  history - `computeWindowPlan` exposes a `historyByDayKey` snapshot taken
-  BEFORE that day's own picks are folded in, and app.js's
-  `dayCandidatesForPlan`/`pinSlotChoice` (which re-derive a single day's
-  candidates outside the original chronological pass) read from that, not
-  from the flat whole-window `lastRecommendedDayKey`. A flat map only
-  remembers one occurrence per matchup - the LAST one anywhere in the
-  fetched window - which for a real short back-to-back series is often a
-  day AFTER the one being re-queried, silently zeroing out the penalty for
-  every earlier occurrence too (a negative or same-day gap is treated as
-  "no history"). This was the direct cause of a reported bug: the same MLB
-  matchup recommended three days running with no visible penalty at all.
-- **Nor does one sport get to dominate the plan by default.** The same
-  function ALSO tracks the last few days' own picks by sport
-  (`SPORT_CONCENTRATION_LOOKBACK_DAYS`) and applies a small penalty once
-  one sport has genuinely dominated that window (≥75% of recent picks,
-  `SPORT_CONCENTRATION_THRESHOLD`) - MLB winning most days is normal and
-  expected, MLB winning literally every day when a comparable alternative
-  exists isn't. `computeWindowPlan`'s own `sportConcentration` return
-  value exposes the whole window's actual sport split for anyone
-  inspecting a `matches.json`-shaped snapshot directly (see "Local dev
-  tooling" below for how to get one), or a copy of it fed to
-  `scripts/evaluate-recommendations.mjs` (see "Evaluating a historical
-  export" below) - there is no in-app export button for this anymore (see
-  "No developer tools in the UI" below).
+- **The same matchup CAN win every day of a series, and the same sport CAN
+  dominate the plan - there is no "variety" penalty anymore.** An earlier
+  version of `computeWindowPlan` applied a small, decaying cross-day
+  repeat penalty to a matchup already picked on an earlier day, plus a
+  sport-concentration penalty once one sport dominated recent picks.
+  Removed entirely per direct feedback: this site's own viewer mostly
+  doesn't watch on weekdays at all, so comparing today's best game against
+  whatever won a weekday slot he never actually watched just buried a
+  genuinely great weekend game for a "variety" benefit that never applied
+  to him. `computeDayPlan`'s `planningScore` is now exactly
+  `effectiveScore` plus a live-match excitement bonus
+  (`applyLiveExcitementBonus`, see below) - nothing else nudges which
+  fixture wins a slot across days. `computeWindowPlan`'s own
+  `sportConcentration` return value still exposes the whole window's
+  actual sport split as a pure diagnostic (for anyone inspecting a
+  `matches.json`-shaped snapshot directly, or a copy of it fed to
+  `scripts/evaluate-recommendations.mjs` - see "Evaluating a historical
+  export" below) - it just no longer feeds any scoring decision.
 - **Swiping a stack is a real commitment, not just a peek - this IS
   "Prefer".** Settling on a different card pins that match as the slot's
   fixed choice (`pinSlotChoice`) and rebuilds the WHOLE day's plan around
@@ -676,6 +662,18 @@ immediately, in your own browser - there's no server-side rebuild to
 dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly as
 fast as the automatic ones.
 
+It also checks whether a NEW VERSION of the page itself has been deployed
+since this tab loaded, not just whether the match data changed. This site
+has no service worker (`manifest.webmanifest` only makes it installable,
+it doesn't add an offline cache or an update lifecycle) - instead,
+`app.js`'s own real ETag/Last-Modified header (GitHub Pages' CDN gives
+every file a reliable one, confirmed live) is snapshotted once at load and
+compared against a fresh, `cache: 'no-store'` check every time this button
+is pressed. A genuine change reveals a second "發現新版本，點此重新載入"
+button that does a real `location.reload()` - the only way to actually
+replace a page's own running JavaScript, which re-fetching match data
+alone can never do.
+
 ### Efficiency: caching and instant paint
 
 Two layers of caching keep this from being as expensive as it sounds, since
@@ -835,16 +833,31 @@ fixture. Chosen over a sportsbook-odds feed (an earlier version of this
 feature used ESPN's own) specifically because a real prediction market's
 own trade price already IS a probability (no American-odds conversion
 needed), and it runs a genuine market on every sport this site tracks,
-including F1 (an outright race-winner market across the whole grid - shown
-as the top 3 favorites, not a two-sided bar, since that wouldn't make
-sense for a 20-driver field) - something no sportsbook feed here ever
-covered. MLB/NBA get a single combined two-outcome market; EPL's own
-market is a genuine three-outcome one (home/draw/away), read from three
-separate binary markets in the same event and devigged together. Each
-side of a two-/three-way bar is colored with that TEAM's own real brand
-color (`public/lib/color.mjs`'s WCAG contrast check - falling back to a
-fixed sport accent only when neither of a team's two colors reads legibly
-against the card's current background).
+including F1 - both the Race (an outright winner market across the whole
+grid) AND Qualifying (a separate "Driver Pole Position" outright market,
+same shape) - shown as the top 3 favorites, not a two-sided bar, since
+that wouldn't make sense for a 20-driver field - something no sportsbook
+feed here ever covered. MLB/NBA get a single combined two-outcome market;
+EPL's own market is a genuine three-outcome one (home/draw/away), read
+from three separate binary markets in the same event and devigged
+together. Each side of a two-/three-way bar is colored with that TEAM's
+own real brand color (`public/lib/color.mjs`'s WCAG contrast check -
+falling back to a fixed sport accent only when neither of a team's two
+colors reads legibly against the card's current background).
+
+Polymarket's own Gamma API caps a single request at 100 events regardless
+of the `limit` requested, and (a real, live-verified case) MLB alone can
+have 170+ currently-open events for its tag at once - not just one event
+per game, but a SEPARATE event for many games' own player-props/first-
+five-winner/inning-9-winner sub-markets too. `fetchAllPolymarketEvents`
+pages past that cap, and every request is sorted by the fixture's own real
+`startTime` (not `startDate`, which is when Polymarket itself created the
+listing - see `polymarket.mjs`'s own comment on the two, and on the exact
+live bug this fixes: sorting by listing-creation time left 50 of 91 real
+upcoming MLB fixtures with no odds shown at all, not because no market
+existed, but because their event fell outside whichever 100 happened to
+sort first by creation time instead of by which game was actually
+soonest).
 
 ## No developer tools in the UI
 

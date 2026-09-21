@@ -29,14 +29,62 @@ export const POLYMARKET_TAG_ID = {
   F1: 100389
 };
 
-// One request per sport gets every open event for that league AND each
+// One request per PAGE gets every open event for that league AND each
 // event's own full `markets` array already nested inside it (confirmed
 // live - no separate per-game request needed, same "one batch request,
-// not one per fixture" shape as ESPN's own scoreboard endpoint). `limit`
-// is generous: even MLB's own ~15-game daily slate plus its many season-
-// long futures markets stays well under 100.
-export function polymarketEventsByTagUrl(tagId, { limit = 150 } = {}) {
-  return `${GAMMA_BASE}/events?tag_id=${tagId}&closed=false&limit=${limit}&order=startDate&ascending=true`;
+// not one per fixture" shape as ESPN's own scoreboard endpoint).
+//
+// `order=startTime` (the fixture's own real kickoff time), not
+// `startDate` (when Polymarket itself CREATED the listing, per
+// findTeamEvent's own comment on the same distinction) - an earlier
+// version of this sorted by `startDate`, on the assumption that "MLB's own
+// ~15-game daily slate plus its many season-long futures markets stays
+// well under 100" (this endpoint's own real per-request cap, confirmed
+// live - a larger `limit` is silently truncated to 100). That assumption
+// was wrong: MLB alone had 170 currently-open events for its tag (many
+// games get a SEPARATE event per sub-market too - "-player-props",
+// "-first-five-winner", "-inning-9-winner" - not just one event per game),
+// and `startDate`-ordering has no relationship to which games are
+// actually happening soonest, since a submarket for a game 3 days out can
+// get created (and therefore rank ahead by `startDate`) before a
+// moneyline market for tomorrow's game does. The direct result, live-
+// verified: 50 of 91 real upcoming MLB fixtures had no odds at all, not
+// because no market existed, but because their event fell outside
+// whichever 100 happened to sort first by creation time. Sorting by the
+// real `startTime` instead guarantees the soonest-happening games are
+// always fetched first, and fetchAllPolymarketEvents below pages past the
+// 100-cap so a tag with more open events than that (MLB's own case) still
+// gets everything currently available.
+export const POLYMARKET_EVENTS_PAGE_SIZE = 100;
+export function polymarketEventsByTagUrl(tagId, { limit = POLYMARKET_EVENTS_PAGE_SIZE, offset = 0 } = {}) {
+  return `${GAMMA_BASE}/events?tag_id=${tagId}&closed=false&limit=${limit}&offset=${offset}&order=startTime&ascending=true`;
+}
+
+// A hard ceiling on how many pages fetchAllPolymarketEvents will ever
+// request for one tag, purely as a runaway-loop safeguard - not a real
+// expected limit. MLB, this app's own largest tag by a wide margin, is 170
+// events (2 pages) as of the live check that found the bug above; 5 pages
+// (500 events) is comfortably beyond anything a single sport's tag has
+// ever actually shown.
+const MAX_EVENT_PAGES = 5;
+
+// Pages through every currently-open event for one tag (see
+// POLYMARKET_EVENTS_PAGE_SIZE's own comment for why this endpoint can't
+// just be asked for "all of them" in one request) - stops the moment a
+// page comes back short of a full page (nothing more to fetch) or empty.
+// `fetchJson` is the same shape every other fetch in this codebase takes
+// (a URL in, parsed JSON out) - Node's own direct fetch in
+// match-builder.mjs, or a browser's fetch-through-the-shared-proxy wrapper
+// in app.js - so this stays usable from both without knowing which.
+export async function fetchAllPolymarketEvents(tagId, fetchJson) {
+  const all = [];
+  for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+    const events = await fetchJson(polymarketEventsByTagUrl(tagId, { offset: page * POLYMARKET_EVENTS_PAGE_SIZE }));
+    if (!Array.isArray(events) || !events.length) break;
+    all.push(...events);
+    if (events.length < POLYMARKET_EVENTS_PAGE_SIZE) break;
+  }
+  return all;
 }
 
 // Strips the generic, non-identifying club-suffix tokens that make an
@@ -239,4 +287,30 @@ export function resolveF1WinnerOdds(events, raceDateUtc) {
   const event = findRaceWinnerEvent(events, raceDateUtc);
   if (!event) return null;
   return parseOutrightWinnerMarkets(event.markets, /^Will (.+?) win the \d{4} F1 .+ Grand Prix\?$/i);
+}
+
+// Same idea as findRaceWinnerEvent, for the Qualifying session instead of
+// the Race: Polymarket runs a genuine per-driver "Driver Pole Position"
+// outright market (confirmed live - same Yes/No-per-driver shape as the
+// winner market, e.g. "Will Pierre Gasly get pole position at the 2026 F1
+// Azerbaijan Grand Prix?"), keyed to the QUALIFYING session's own real UTC
+// date, not the race's (confirmed live: a real Azerbaijan GP Qualifying
+// session started 2026-09-25T12:00Z, and Polymarket's own pole-position
+// market slug/eventDate for that race is also 2026-09-25 - one day before
+// the race itself). Matched on `-driver-pole-position-` specifically, not
+// just `-pole-position-`, since the same event date also carries a
+// SEPARATE "Constructor Pole Position" market this app has no per-driver
+// odds display for.
+export function findPoleWinnerEvent(events, qualifyingDateUtc) {
+  return (
+    (events || []).find(
+      event => event.slug?.endsWith(`-driver-pole-position-${qualifyingDateUtc}`) && event.eventDate === qualifyingDateUtc
+    ) || null
+  );
+}
+
+export function resolvePoleWinnerOdds(events, qualifyingDateUtc) {
+  const event = findPoleWinnerEvent(events, qualifyingDateUtc);
+  if (!event) return null;
+  return parseOutrightWinnerMarkets(event.markets, /^Will (.+?) get pole position at the \d{4} F1 .+ Grand Prix\?$/i);
 }

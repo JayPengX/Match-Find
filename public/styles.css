@@ -238,6 +238,10 @@ button {
 .settings-btn-row .settings-action-btn {
   flex: 1;
 }
+#reload-app-btn {
+  margin-top: 10px;
+  background: #e2453c;
+}
 
 main#app {
   max-width: 760px;

@@ -43,12 +43,9 @@ import {
   matchLifecycleState,
   LIFECYCLE_STATES,
   matchupKey,
-  daysBetweenDayKeys,
-  recentRepeatPenalty,
-  applyRecentRepeatPenalties,
+  applyLiveExcitementBonus,
   computeWindowPlan,
   computeSportConcentration,
-  SPORT_CONCENTRATION_PENALTY,
   naturalSlotChoice,
   estimatedDurationMinutes,
   STARTING_SOON_WINDOW_MINUTES,
@@ -741,12 +738,18 @@ describe('Test 6 - football/F1 keep their tighter timing (no blanket permissiven
   });
 });
 
-describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', () => {
-  test('a close alternative wins the day after its rival matchup was already recommended', () => {
-    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8 })];
+describe('Tests 7/8 - cross-day repeat/concentration penalties were removed', () => {
+  // Direct user feedback: this viewer mostly doesn't watch on weekdays at
+  // all, so a penalty comparing today's best game against whatever won a
+  // weekday slot he never watched anyway just buried a genuinely great
+  // game for a "variety" benefit that never applied to him. These tests
+  // confirm the same matchup (or the same sport) winning its slot on
+  // consecutive days is no longer penalized at all - planningScore is
+  // exactly effectiveScore plus the live-match excitement bonus.
+  test('the same matchup winning on consecutive days is never penalized', () => {
+    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' })];
     const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' });
     const b = footballMatch({ id: 'b2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 7.8, name: 'Different Matchup' });
-    day1[0].name = 'Same Matchup';
     const { plan } = computeWindowPlan(
       new Map([
         ['2026-09-19', day1],
@@ -754,179 +757,13 @@ describe('Tests 7/8 - cross-day matchup variety (soft recent-repeat penalty)', (
       ])
     );
     assert.deepEqual(plan.get('2026-09-19').map(m => m.id), ['a1']);
-    // a2's own matchup was just recommended yesterday (penalty 2.5) -
-    // 8 - 2.5 = 5.5 < b's 7.8, so the alternative wins.
-    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['b2']);
-    assert.equal(a2.recentRepeatPenalty, 2.5);
-  });
-
-  test('a dramatically better repeat still wins - the penalty is soft, never a hard ban', () => {
-    const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 9, name: 'Great Matchup' })];
-    const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 9, name: 'Great Matchup' });
-    const b = footballMatch({ id: 'b2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 3, name: 'Mediocre Matchup' });
-    const { plan } = computeWindowPlan(
-      new Map([
-        ['2026-09-19', day1],
-        ['2026-09-20', [a2, b]]
-      ])
-    );
+    // a2 still wins on its own merits (8 > 7.8) - no repeat penalty drags
+    // it down to lose to the weaker alternative.
     assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['a2']);
+    assert.equal(a2.planningScore, 8);
   });
 
-  test('recentRepeatPenalty decays with distance and disappears after 3 days', () => {
-    assert.equal(recentRepeatPenalty(1), 2.5);
-    assert.equal(recentRepeatPenalty(2), 1.5);
-    assert.equal(recentRepeatPenalty(3), 0.75);
-    assert.equal(recentRepeatPenalty(4), 0);
-    assert.equal(recentRepeatPenalty(0), 0);
-    assert.equal(recentRepeatPenalty(null), 0);
-  });
-
-  test('stacked repeat + sport-concentration penalties are capped, so a clearly better game never loses purely to variety', () => {
-    // "Serve the best game first, THEN optimize for variety" - a match
-    // ahead by more than ALTERNATIVE_MAX_SCORE_GAP (2.5, this codebase's
-    // own settled line for "not really a close call") must never lose its
-    // slot purely because BOTH the matchup-repeat penalty (up to 2.5) and
-    // the sport-concentration penalty (1.5) landed on it at once - stacked
-    // uncapped that's 4.0, comfortably enough to have flipped a 3-point
-    // lead the wrong way before this cap existed.
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' })];
-    const a2 = mlbMatch({ id: 'a2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Same Matchup' });
-    // A different sport, so a2's own repeat penalty (same matchup as
-    // yesterday) and MLB's own 100%-of-recent-picks concentration penalty
-    // both apply to it at once.
-    const b = makeMatch({ id: 'b2', sport: 'NBA', startTimeUtc: '2026-09-20T20:00:00.000Z', durationMinutes: 150, enduranceScore: 10, effectiveScore: 5, name: 'Worse Alternative' });
-    const { plan } = computeWindowPlan(
-      new Map([
-        ['2026-09-19', day1],
-        ['2026-09-20', [a2, b]]
-      ])
-    );
-    // Uncapped, a2's planningScore would have been 8 - 2.5 - 1.5 = 4.0,
-    // losing to b's 5 despite a2's own effectiveScore leading by 3 -
-    // capped at 2.5 (plus a negligible tie-break factor scaled off that
-    // same uncapped 4.0 - see VARIETY_TIEBREAK_FACTOR's own comment),
-    // a2's planningScore is 8 - 2.5 - 4.0*0.001 = 5.496, correctly still
-    // ahead of b.
-    assert.equal(a2.recentRepeatPenalty, 2.5);
-    assert.equal(a2.sportConcentrationPenalty, SPORT_CONCENTRATION_PENALTY);
-    assert.equal(a2.planningScore, 5.496);
-    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['a2']);
-  });
-
-  // Live-verified case (docs/recommendation-engine-audit.md Round 14): San
-  // Diego Padres @ Los Angeles Dodgers, recommended on 9/23, was ALSO
-  // recommended on 9/25's late slot ahead of Houston Astros @ Athletics -
-  // both sequences totaled the exact same whole-day plan value once the cap
-  // above capped both candidates' penalties to the same 2.5, a genuine
-  // coin-flip the DP resolved by array order, not by any real quality
-  // difference. VARIETY_TIEBREAK_FACTOR exists to resolve exactly this: the
-  // MORE heavily penalized (already-repeated) candidate should lose an
-  // otherwise-exact tie to a comparable, less-recently-shown alternative.
-  test('an exact tie between a repeated matchup and a fresh alternative in the SAME slot is broken toward variety', () => {
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Repeated Matchup' })];
-    // Same start time as freshAlt below (and same duration) - a direct,
-    // mutually-exclusive conflict, exactly like two MLB games airing at the
-    // same time. 2 days later: repeat penalty 1.5
-    // (RECENT_REPEAT_PENALTY_BY_GAP_DAYS[2]) + sport concentration 1.5
-    // (day1's only pick was also MLB) = 3.0 uncapped, capped to 2.5.
-    const repeated = mlbMatch({ id: 'repeated', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 9, name: 'Repeated Matchup' });
-    // A different matchup, same sport (still MLB, still hits the same 1.5
-    // concentration penalty alone, no repeat) - deliberately scored so that
-    // WITHOUT the tie-break factor both candidates' planningScore lands on
-    // the exact same 6.5 (9 - 2.5 = 8 - 1.5).
-    const freshAlt = mlbMatch({ id: 'fresh', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 8, name: 'Fresh Matchup' });
-    const { plan } = computeWindowPlan(
-      new Map([
-        ['2026-09-19', day1],
-        ['2026-09-21', [repeated, freshAlt]]
-      ])
-    );
-    assert.ok(repeated.planningScore < freshAlt.planningScore, 'the already-repeated candidate should lose the tie');
-    assert.deepEqual(plan.get('2026-09-21').map(m => m.id), ['fresh']);
-  });
-
-  test('matchupKey is order-independent and keeps F1 session types distinct', () => {
-    const a = makeMatch({ sport: 'MLB', competitors: [{ name: 'Rays' }, { name: 'Yankees' }] });
-    const b = makeMatch({ sport: 'MLB', competitors: [{ name: 'Yankees' }, { name: 'Rays' }] });
-    assert.equal(matchupKey(a), matchupKey(b));
-    const qual = makeMatch({ sport: 'F1', name: 'GP Qualifying', competitors: [] });
-    const race = makeMatch({ sport: 'F1', name: 'GP', competitors: [] });
-    assert.notEqual(matchupKey(qual), matchupKey(race));
-  });
-
-  test('daysBetweenDayKeys diffs two local calendar date strings as whole days', () => {
-    assert.equal(daysBetweenDayKeys('2026-09-20', '2026-09-19'), 1);
-    assert.equal(daysBetweenDayKeys('2026-09-22', '2026-09-19'), 3);
-    assert.equal(daysBetweenDayKeys('2026-09-19', '2026-09-19'), 0);
-  });
-
-  test('a matchup repeated on 3 consecutive days is penalized on day 2 AND day 3 - a later occurrence must never mask an earlier one', () => {
-    // Reproduces the exact reported bug: three real consecutive days of the
-    // same MLB matchup (a genuine short back-to-back series). Day 2 needs
-    // to see gap=1 from day 1, and day 3 needs to see gap=1 from day 2 -
-    // NOT "gap computed against whichever day happens to be LAST in the
-    // whole window" (day 3 itself, for day 3's own query - gap 0, silently
-    // ignored) or "day 3, for day 2's own query" (a NEGATIVE, and
-    // therefore also silently ignored, gap) - which is what reusing one
-    // flat end-of-window map for every day's own re-query produces.
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
-    const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
-    const day3 = [mlbMatch({ id: 'd3', startTimeUtc: '2026-09-21T20:00:00.000Z', effectiveScore: 8, name: 'Repeat Matchup' })];
-    computeWindowPlan(
-      new Map([
-        ['2026-09-19', day1],
-        ['2026-09-20', day2],
-        ['2026-09-21', day3]
-      ])
-    );
-    assert.equal(day2[0].recentRepeatPenalty, 2.5); // gap=1 from day1
-    assert.equal(day3[0].recentRepeatPenalty, 2.5); // gap=1 from day2, not 0
-  });
-
-  test('historyByDayKey holds each day\'s OWN pre-that-day snapshot, not the final whole-window map', () => {
-    const day1 = [footballMatch({ id: 'd1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8, name: 'M' })];
-    const day2 = [footballMatch({ id: 'd2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'M' })];
-    const { historyByDayKey } = computeWindowPlan(
-      new Map([
-        ['2026-09-19', day1],
-        ['2026-09-20', day2]
-      ])
-    );
-    assert.equal(historyByDayKey.get('2026-09-19').size, 0); // nothing recommended before the first day
-    assert.equal(historyByDayKey.get('2026-09-20').get(matchupKey(day2[0])), '2026-09-19');
-  });
-
-  test('applyRecentRepeatPenalties never touches effectiveScore itself, only the new planningScore field', () => {
-    const match = footballMatch({ id: 'a', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8 });
-    applyRecentRepeatPenalties([match], '2026-09-20', new Map([[matchupKey(match), '2026-09-19']]));
-    assert.equal(match.effectiveScore, 8);
-    // 8 - 2.5 (capped repeat penalty) - 2.5*0.001 (VARIETY_TIEBREAK_FACTOR) = 5.4975.
-    assert.equal(match.planningScore, 5.4975);
-  });
-});
-
-describe('§15 sport-level variety (soft concentration penalty)', () => {
-  test('computeSportConcentration reports each sport\'s share of a pick list', () => {
-    const picks = [
-      makeMatch({ id: 'a', sport: 'MLB' }),
-      makeMatch({ id: 'b', sport: 'MLB' }),
-      makeMatch({ id: 'c', sport: 'MLB' }),
-      makeMatch({ id: 'd', sport: 'F1' })
-    ];
-    const shares = computeSportConcentration(picks);
-    assert.equal(shares.get('MLB'), 0.75);
-    assert.equal(shares.get('F1'), 0.25);
-  });
-
-  test('an empty pick list reports no shares at all, not NaN', () => {
-    assert.deepEqual([...computeSportConcentration([])], []);
-  });
-
-  test('a sport dominating the recent lookback window is penalized enough to let a close alternative from another sport win', () => {
-    // Three straight days of MLB winning the slot (100% share in the
-    // lookback window) - a comparably-scored NBA candidate should win
-    // today instead, per section 15's own "MLB MLB MLB MLB MLB" example.
+  test('the same sport winning every day in a row is never penalized', () => {
     const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-17T20:00:00.000Z', effectiveScore: 8 })];
     const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-18T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup 2' })];
     const day3 = [mlbMatch({ id: 'd3', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup 3' })];
@@ -947,31 +784,44 @@ describe('§15 sport-level variety (soft concentration penalty)', () => {
         ['2026-09-20', [mlbToday, nbaToday]]
       ])
     );
-    assert.equal(mlbToday.sportConcentrationPenalty, SPORT_CONCENTRATION_PENALTY);
-    assert.equal(nbaToday.sportConcentrationPenalty, 0); // NBA had zero share of the recent window
-    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['nba-today']);
-  });
-
-  test('two sports roughly splitting recent picks are never penalized - only genuine domination is', () => {
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-18T20:00:00.000Z', effectiveScore: 8 })];
-    const day2 = [makeMatch({ id: 'd2', sport: 'NBA', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 150, enduranceScore: 10, effectiveScore: 8 })];
-    const mlbToday = mlbMatch({ id: 'mlb-today', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' });
-    const { plan } = computeWindowPlan(
-      new Map([
-        ['2026-09-18', day1],
-        ['2026-09-19', day2],
-        ['2026-09-20', [mlbToday]]
-      ])
-    );
-    assert.equal(mlbToday.sportConcentrationPenalty, 0); // MLB was only 50% of the recent window
+    // MLB still wins today (8 > 7.5) despite winning every prior day too -
+    // no sport-concentration penalty ever applied to bury it.
+    assert.equal(mlbToday.planningScore, 8);
     assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['mlb-today']);
   });
 
-  test('a lone sport with no genuine alternative today still wins despite the penalty - it\'s soft, not a ban', () => {
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8 })];
-    const mlbToday = mlbMatch({ id: 'mlb-today', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' });
-    const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [mlbToday]]]));
-    assert.deepEqual(plan.get('2026-09-20').map(m => m.id), ['mlb-today']);
+  test('matchupKey is order-independent and keeps F1 session types distinct', () => {
+    const a = makeMatch({ sport: 'MLB', competitors: [{ name: 'Rays' }, { name: 'Yankees' }] });
+    const b = makeMatch({ sport: 'MLB', competitors: [{ name: 'Yankees' }, { name: 'Rays' }] });
+    assert.equal(matchupKey(a), matchupKey(b));
+    const qual = makeMatch({ sport: 'F1', name: 'GP Qualifying', competitors: [] });
+    const race = makeMatch({ sport: 'F1', name: 'GP', competitors: [] });
+    assert.notEqual(matchupKey(qual), matchupKey(race));
+  });
+
+  test('applyLiveExcitementBonus never touches effectiveScore itself, only the planningScore field', () => {
+    const match = footballMatch({ id: 'a', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8 });
+    applyLiveExcitementBonus([match]);
+    assert.equal(match.effectiveScore, 8);
+    assert.equal(match.planningScore, 8); // no live bonus - not a live match
+  });
+});
+
+describe('sport concentration is a pure diagnostic (no scoring effect)', () => {
+  test('computeSportConcentration reports each sport\'s share of a pick list', () => {
+    const picks = [
+      makeMatch({ id: 'a', sport: 'MLB' }),
+      makeMatch({ id: 'b', sport: 'MLB' }),
+      makeMatch({ id: 'c', sport: 'MLB' }),
+      makeMatch({ id: 'd', sport: 'F1' })
+    ];
+    const shares = computeSportConcentration(picks);
+    assert.equal(shares.get('MLB'), 0.75);
+    assert.equal(shares.get('F1'), 0.25);
+  });
+
+  test('an empty pick list reports no shares at all, not NaN', () => {
+    assert.deepEqual([...computeSportConcentration([])], []);
   });
 
   test('computeWindowPlan exposes sportConcentration over the whole window\'s own final picks', () => {
@@ -980,17 +830,6 @@ describe('§15 sport-level variety (soft concentration penalty)', () => {
     const { sportConcentration } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', day2]]));
     assert.equal(sportConcentration.get('MLB'), 0.5);
     assert.equal(sportConcentration.get('F1'), 0.5);
-  });
-
-  test('recentPicksByDayKey exposes exactly the rolling window each day\'s own penalty was weighed against', () => {
-    const day1 = [mlbMatch({ id: 'd1', startTimeUtc: '2026-09-19T20:00:00.000Z', effectiveScore: 8 })];
-    const day2 = [mlbMatch({ id: 'd2', startTimeUtc: '2026-09-20T20:00:00.000Z', effectiveScore: 8, name: 'Different Matchup' })];
-    const { recentPicksByDayKey } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', day2]]));
-    assert.deepEqual(recentPicksByDayKey.get('2026-09-19'), []); // nothing before the first day
-    assert.deepEqual(
-      recentPicksByDayKey.get('2026-09-20').map(m => m.id),
-      ['d1']
-    );
   });
 });
 
@@ -1052,27 +891,18 @@ describe('Invariant checks', () => {
     assert.deepEqual(plan.map(m => m.id), ['b', 'c']);
   });
 
-  test('Invariant 4: a diversity penalty reduces planningScore but never deletes the match or corrupts effectiveScore', () => {
+  test('Invariant 4: a live-excitement nudge can reduce or raise planningScore but never deletes the match or corrupts effectiveScore', () => {
     const day1 = [footballMatch({ id: 'a1', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 8, name: 'X' })];
     const a2 = footballMatch({ id: 'a2', startTimeUtc: '2026-09-20T18:00:00.000Z', effectiveScore: 8, name: 'X' });
     const { plan } = computeWindowPlan(new Map([['2026-09-19', day1], ['2026-09-20', [a2]]]));
     assert.ok(plan.get('2026-09-20').some(m => m.id === 'a2')); // still recommended - no rival to lose to
     assert.equal(a2.effectiveScore, 8); // never mutated
-    // Both the matchup-repeat penalty (2.5, same matchup as yesterday) AND
-    // the sport-concentration penalty (1.5, day1's only pick was also
-    // Premier League - 100% share) apply here, but their SUM is capped at
-    // ALTERNATIVE_MAX_SCORE_GAP (2.5, see applyRecentRepeatPenalties' own
-    // comment) - variety is a tie-breaker between comparable options, never
-    // a reason to bury a fixture with no real rival, so the two stacked
-    // penalties (2.5 + 1.5 = 4.0 uncapped) never combine to more than that
-    // same 2.5 either. Even uncapped this wouldn't have dropped the pick
-    // when nothing else is competing for the slot - the scheduler's own
-    // score floor (see weightedIntervalSchedule) means a non-conflicting
-    // candidate is never worse than recommending nothing - but the cap
-    // still matters the moment a real (if weaker) rival exists.
-    // 8 - 2.5 (capped) - 4.0*0.001 (VARIETY_TIEBREAK_FACTOR, off the
-    // uncapped 4.0) = 5.496.
-    assert.equal(a2.planningScore, 5.496);
+    // Same matchup as yesterday, same sport as yesterday's only pick - none
+    // of that carries any scoring penalty anymore (see
+    // applyLiveExcitementBonus's own comment on why the cross-day repeat/
+    // sport-concentration penalties were removed). planningScore is just
+    // effectiveScore plus a live bonus of 0 (not a live match).
+    assert.equal(a2.planningScore, 8);
   });
 });
 

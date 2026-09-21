@@ -17,7 +17,12 @@ import {
   resolveTeamOdds,
   findRaceWinnerEvent,
   parseOutrightWinnerMarkets,
-  resolveF1WinnerOdds
+  resolveF1WinnerOdds,
+  findPoleWinnerEvent,
+  resolvePoleWinnerOdds,
+  polymarketEventsByTagUrl,
+  fetchAllPolymarketEvents,
+  POLYMARKET_EVENTS_PAGE_SIZE
 } from '../public/lib/polymarket.mjs';
 
 describe('normalizeTeamName / teamNamesMatch', () => {
@@ -219,5 +224,88 @@ describe('resolveF1WinnerOdds', () => {
   });
   test('returns null when no race is open for that date', () => {
     assert.equal(resolveF1WinnerOdds([REAL_F1_EVENT], '2026-10-03'), null);
+  });
+});
+
+// Real (trimmed) fixture: Azerbaijan Grand Prix Driver Pole Position
+// market, 2026-09-25 (the day BEFORE the race itself - Qualifying's own
+// real date, confirmed live) - same per-driver Yes/No shape as the winner
+// market, plus a same-date Constructor Pole Position event this app has no
+// use for, to prove the "driver" match is specific.
+const REAL_F1_POLE_EVENT = {
+  slug: 'f1-azerbaijan-grand-prix-driver-pole-position-2026-09-25',
+  eventDate: '2026-09-25',
+  markets: [
+    { question: 'Will Max Verstappen get pole position at the 2026 F1 Azerbaijan Grand Prix?', outcomes: '["Yes", "No"]', outcomePrices: '["0.4", "0.6"]' },
+    { question: 'Will Pierre Gasly get pole position at the 2026 F1 Azerbaijan Grand Prix?', outcomes: '["Yes", "No"]', outcomePrices: '["0.26", "0.74"]' }
+  ]
+};
+const REAL_F1_CONSTRUCTOR_POLE_EVENT = {
+  slug: 'f1-azerbaijan-grand-prix-constructor-pole-position-2026-09-25',
+  eventDate: '2026-09-25',
+  markets: [{ question: 'Will Red Bull get pole position?', outcomes: '["Yes", "No"]', outcomePrices: '["0.4", "0.6"]' }]
+};
+
+describe('findPoleWinnerEvent', () => {
+  test('finds the DRIVER pole-position event, not the same-date constructor one', () => {
+    assert.equal(
+      findPoleWinnerEvent([REAL_F1_CONSTRUCTOR_POLE_EVENT, REAL_F1_POLE_EVENT], '2026-09-25'),
+      REAL_F1_POLE_EVENT
+    );
+  });
+  test('returns null for a date with no matching qualifying market', () => {
+    assert.equal(findPoleWinnerEvent([REAL_F1_POLE_EVENT], '2026-09-26'), null);
+  });
+});
+
+describe('resolvePoleWinnerOdds', () => {
+  test('end to end: finds the qualifying market and returns favorites sorted descending', () => {
+    const result = resolvePoleWinnerOdds([REAL_F1_POLE_EVENT], '2026-09-25');
+    assert.equal(result[0].name, 'Max Verstappen');
+    assert.equal(result.length, 2);
+  });
+  test('returns null when no qualifying market is open for that date', () => {
+    assert.equal(resolvePoleWinnerOdds([REAL_F1_POLE_EVENT], '2026-09-26'), null);
+  });
+});
+
+describe('polymarketEventsByTagUrl', () => {
+  test('sorts by the fixture\'s own real startTime, not Polymarket\'s listing-creation startDate', () => {
+    const url = polymarketEventsByTagUrl(100381);
+    assert.ok(url.includes('order=startTime'));
+    assert.ok(!url.includes('startDate'));
+  });
+  test('supports an offset for pagination past the endpoint\'s own per-request cap', () => {
+    const url = polymarketEventsByTagUrl(100381, { offset: 100 });
+    assert.ok(url.includes('offset=100'));
+  });
+});
+
+describe('fetchAllPolymarketEvents', () => {
+  test('stops after a short (non-full) page - the common case, one request', async () => {
+    const calls = [];
+    const fetchJson = async url => {
+      calls.push(url);
+      return [{ id: 1 }, { id: 2 }];
+    };
+    const events = await fetchAllPolymarketEvents(100381, fetchJson);
+    assert.equal(events.length, 2);
+    assert.equal(calls.length, 1);
+  });
+  test('pages past a full page until a short one is found, merging every event', async () => {
+    const fullPage = Array.from({ length: POLYMARKET_EVENTS_PAGE_SIZE }, (_, i) => ({ id: i }));
+    const shortPage = [{ id: 'last' }];
+    let calls = 0;
+    const fetchJson = async () => {
+      calls += 1;
+      return calls === 1 ? fullPage : shortPage;
+    };
+    const events = await fetchAllPolymarketEvents(100381, fetchJson);
+    assert.equal(events.length, POLYMARKET_EVENTS_PAGE_SIZE + 1);
+    assert.equal(calls, 2);
+  });
+  test('stops on an empty or malformed page rather than looping/throwing', async () => {
+    const events = await fetchAllPolymarketEvents(100381, async () => []);
+    assert.deepEqual(events, []);
   });
 });

@@ -25,11 +25,11 @@
 //   under - both optional, defaulting to the whole fetched window.
 //   sport: optional exact match.sport value (e.g. "MLB") to narrow the
 //   printed listing - the plan itself is still always computed over EVERY
-//   sport (unfiltered), matching renderSections' own comment on why the
-//   cross-day history/scheduling has to stay independent of a viewer's
-//   sport filter.
+//   sport (unfiltered), matching app.js's own dayCandidatesForPlan/
+//   applySportFilter split (the scheduler always sees every enabled sport;
+//   only the rendered/printed list is ever narrowed by a sport filter).
 import { readFile } from 'node:fs/promises';
-import { computeWindowPlan, explainWhyNotRecommended, resolveViewingPlan } from '../public/lib/recommendation.mjs';
+import { applyLiveExcitementBonus, computeDayPlan, explainWhyNotRecommended, resolveViewingPlan } from '../public/lib/recommendation.mjs';
 
 function localDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -53,13 +53,17 @@ for (const match of matches) {
   matchesByDayKey.get(dayKey).push(match);
 }
 
-// computeWindowPlan mutates every match in place (.recommended/
-// .alternativeIds/.isPreferred/.planningScore/.recentRepeatPenalty/
-// .sportConcentrationPenalty - see its own comment) - the exact same
+// computeDayPlan mutates every match in place (.recommended/
+// .alternativeIds/.isPreferred - see its own comment) - the exact same
 // side-effecting contract renderSections relies on, which is also why
 // explainWhyNotRecommended below can safely read .planningScore straight
-// off these same objects afterward.
-const windowPlan = computeWindowPlan(matchesByDayKey, new Map());
+// off these same objects afterward. applyLiveExcitementBonus (also
+// in-place) has to run first, per day, since that's what actually sets
+// .planningScore.
+for (const dayMatches of matchesByDayKey.values()) {
+  applyLiveExcitementBonus(dayMatches);
+  computeDayPlan(localDateKey(new Date(dayMatches[0].startTimeUtc)), dayMatches, null, { scoreField: 'planningScore' });
+}
 
 const dayKeys = [...matchesByDayKey.keys()]
   .sort()
@@ -82,7 +86,6 @@ for (const dayKey of dayKeys) {
           `start="${localStart}" durationMinutes=${match.durationMinutes} isFinished=${match.isFinished} ` +
           `skill=${match.skill} competitiveness=${match.competitiveness} watchability=${match.watchability} ` +
           `enduranceScore=${match.enduranceScore} broadcastQuality=${match.broadcastQuality} score=${match.score} planningScore=${round(match.planningScore)} ` +
-          `recentRepeatPenalty=${match.recentRepeatPenalty ?? 0} sportConcentrationPenalty=${match.sportConcentrationPenalty ?? 0} ` +
           `alternativeIds=${JSON.stringify(match.alternativeIds || [])} reason="${match.reason || ''}"`
       );
       if (!match.recommended) {

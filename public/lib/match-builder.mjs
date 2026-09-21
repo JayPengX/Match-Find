@@ -77,9 +77,10 @@ import { computeConfidence } from './recommendation.mjs';
 // built.
 import {
   POLYMARKET_TAG_ID,
-  polymarketEventsByTagUrl,
+  fetchAllPolymarketEvents,
   resolveTeamOdds,
-  resolveF1WinnerOdds
+  resolveF1WinnerOdds,
+  resolvePoleWinnerOdds
 } from './polymarket.mjs';
 // Deterministic, per-fixture broadcast-length formulas (MLB team pace,
 // NBA/EPL modifiers, F1 circuit baselines), plus the rivalry/derby/
@@ -442,6 +443,17 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       // entirely until ESPN itself knows who's actually playing (see this
       // repo's git history for the "TBD @ TBD" case this was written for).
       if (competitors.some(c => c.abbreviation === 'TBD' || c.name === 'TBD')) continue;
+      // ESPN's season.type is 1 for the preseason (confirmed live against a
+      // real 2026-27 NBA preseason fixture: season.type=1,
+      // season.slug='preseason'), 2 for the regular season, 3 for the
+      // postseason. Preseason exhibitions are skipped entirely, not just
+      // excluded from 推薦賽事 - direct feedback: this site's own real
+      // broadcast source (愛爾達體育台) doesn't air NBA preseason games at
+      // all, so a fixture no one can actually watch through this site's own
+      // whereToWatchTw answer has no business appearing anywhere on it, the
+      // same "not a fixture this site can say anything useful about"
+      // reasoning as the TBD-competitor skip just above.
+      if (event.season?.type === 1) continue;
 
       const broadcast = (competition.broadcasts || [])
         .flatMap(b => b.names || [])
@@ -740,7 +752,7 @@ async function enrichWithPolymarketOdds(matches, fetchJson) {
   await Promise.all(
     [...sportsNeeded].map(async sport => {
       try {
-        eventsBySport[sport] = (await fetchJson(polymarketEventsByTagUrl(POLYMARKET_TAG_ID[sport]))) || [];
+        eventsBySport[sport] = await fetchAllPolymarketEvents(POLYMARKET_TAG_ID[sport], fetchJson);
       } catch (error) {
         console.warn(`Failed to fetch Polymarket odds for ${sport}: ${error.message}`);
         eventsBySport[sport] = [];
@@ -754,13 +766,19 @@ async function enrichWithPolymarketOdds(matches, fetchJson) {
     if (!events) continue;
 
     if (match.sport === 'F1') {
-      // Only the Race session gets an outright-winner odds display (see
-      // build-data.mjs's own F1_SESSION_TYPES/match id convention -
-      // `-race` is this session's own stable suffix) - a practice/
-      // qualifying session isn't "who wins the Grand Prix" itself.
-      if (!match.id.endsWith('-race')) continue;
-      const raceDateUtc = match.startTimeUtc.slice(0, 10);
-      const favorites = resolveF1WinnerOdds(events, raceDateUtc);
+      // The Race session gets an outright-winner odds display, and
+      // Qualifying gets Polymarket's own separate "Driver Pole Position"
+      // outright market (confirmed live - same per-driver Yes/No shape,
+      // see resolvePoleWinnerOdds's own comment) - a practice session
+      // isn't "who wins" anything Polymarket has a market for, so it's
+      // left alone (see build-data.mjs's own F1_SESSION_TYPES/match id
+      // convention for the `-race`/`-qual` suffixes checked here).
+      const sessionDateUtc = match.startTimeUtc.slice(0, 10);
+      const favorites = match.id.endsWith('-race')
+        ? resolveF1WinnerOdds(events, sessionDateUtc)
+        : match.id.endsWith('-qual')
+          ? resolvePoleWinnerOdds(events, sessionDateUtc)
+          : null;
       if (favorites) match.oddsFavorites = favorites.slice(0, 3);
       continue;
     }
@@ -800,22 +818,32 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   }
   const windowEndMs = now.getTime() + daysAhead * 24 * 60 * 60 * 1000;
 
-  const teamMatchLists = await Promise.all(
-    TEAM_LEAGUES.map(league =>
-      fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson).catch(error => {
-        console.warn(`Failed to fetch ${league.label}: ${error.message}`);
-        return [];
-      })
-    )
-  );
-  const f1Matches = await fetchF1Matches(now, windowEndMs, daysAhead, fetchJson).catch(error => {
-    console.warn(`Failed to fetch F1: ${error.message}`);
-    return [];
-  });
+  // The 3 team leagues and F1 are entirely independent fetches (no team
+  // league's own result depends on F1's, or on any other league's) - an
+  // earlier version awaited the team leagues' own Promise.all to FULLY
+  // finish before even starting the F1 fetch, adding one whole extra
+  // serial network round-trip for no reason (live-measured as a real,
+  // avoidable contributor to a reported "updating data takes 10-20
+  // seconds, sometimes more, sometimes less" - see this function's own
+  // second Promise.all below for the other half of that same fix).
+  // Bundling them into one Promise.all lets every one of these requests
+  // race in parallel instead.
+  const [teamMatchLists, f1Matches] = await Promise.all([
+    Promise.all(
+      TEAM_LEAGUES.map(league =>
+        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson).catch(error => {
+          console.warn(`Failed to fetch ${league.label}: ${error.message}`);
+          return [];
+        })
+      )
+    ),
+    fetchF1Matches(now, windowEndMs, daysAhead, fetchJson).catch(error => {
+      console.warn(`Failed to fetch F1: ${error.message}`);
+      return [];
+    })
+  ]);
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];
-
-  await enrichWithPolymarketOdds(matches, fetchJson);
 
   // The extra, dedicated-API signals the objective scoring engine needs -
   // fetched ONCE per call, not once per fixture (every MLB game that day
@@ -827,11 +855,19 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   const hasActiveNba = matches.some(m => m.sport === 'NBA' && !m.isFinished);
   const hasActiveEpl = matches.some(m => m.sport === 'Premier League' && !m.isFinished);
   const hasActiveF1 = matches.some(m => m.sport === 'F1' && !m.isFinished);
-  const [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity] = await Promise.all([
-    hasActiveMlb ? fetchMlbStandings(now.getUTCFullYear(), fetchJson) : Promise.resolve(new Map()),
-    hasActiveNba ? fetchNbaStandings(fetchJson) : Promise.resolve(new Map()),
-    hasActiveEpl ? fetchEplStandings(fetchJson) : Promise.resolve(new Map()),
-    hasActiveF1 ? fetchF1TitleRaceIntensity(fetchJson) : Promise.resolve(null)
+  // Polymarket odds enrichment and the standings/title-race fetch above
+  // are ALSO independent of each other (both only need `matches` to exist,
+  // neither reads the other's result) - run together rather than one
+  // fully finishing before the other starts, same reasoning as the
+  // team-league/F1 merge above.
+  const [, [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity]] = await Promise.all([
+    enrichWithPolymarketOdds(matches, fetchJson),
+    Promise.all([
+      hasActiveMlb ? fetchMlbStandings(now.getUTCFullYear(), fetchJson) : Promise.resolve(new Map()),
+      hasActiveNba ? fetchNbaStandings(fetchJson) : Promise.resolve(new Map()),
+      hasActiveEpl ? fetchEplStandings(fetchJson) : Promise.resolve(new Map()),
+      hasActiveF1 ? fetchF1TitleRaceIntensity(fetchJson) : Promise.resolve(null)
+    ])
   ]);
 
   // The WHOLE score - computed for EVERY fixture, finished or not. A
