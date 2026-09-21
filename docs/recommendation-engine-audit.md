@@ -2381,3 +2381,22 @@ against a real live MLB game (confirmed visually - runner on 2nd lit green,
 across a real near-term refresh boundary, and the instant-paint snapshot's
 297ms-vs-1,911ms improvement was measured directly, not estimated. No
 regressions - full suite still 326/326.
+
+## Round 20 (2026-09-21): live status widgets still lagged the rest of the card by up to 30s
+
+Direct follow-up: "why it take quite a few seconds after loading in to show
+the live states". Traced to `scheduleLivePoll` (`public/app.js`): it
+`setTimeout`s for `LIVE_POLL_INTERVAL_MS` (30s) BEFORE ever calling
+`pollLiveMatches` for the first time - a "wait, then run, then reschedule"
+shape, not "run, then wait, then run again". Since `match.live` (everything
+`buildLiveStatusNode` renders - the diamond/flag/pulsing-dot widgets Round
+19 added) is only ever set by `pollLiveMatches`, nothing else on the page
+could make it appear any sooner than 30 seconds after load, no matter how
+fast the rest of the card (teams, score, odds) painted. Fixed by also
+calling `pollLiveMatches()` once, unblocked, immediately in `init()` -
+right before entering the recurring `scheduleLivePoll` timer loop - so the
+FIRST poll happens as soon as the initial match list is loaded instead of
+30 seconds later. Measured live via Playwright: first `.live-chip` now
+appears ~2s after the first `.match-card` (5.4s from navigation) instead of
+the ~25-30s gap measured in Round 19's own flicker test. Full suite still
+326/326.

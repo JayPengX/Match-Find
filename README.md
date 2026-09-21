@@ -684,9 +684,15 @@ each sport's own narrow live-scoreboard endpoint (today ± a day, not the
 whole window) through the same `/sports-proxy` route and merging the
 result straight into the same match objects `buildMatches` already
 produced - never re-running the scoring/duration/objective-factor pipeline
-itself. Paused while the tab is hidden. Score/status comes from ESPN's own
-public scoreboard; odds comes from Polymarket instead (see "Live win%
-odds" below) - two separate fetches, since not every sport this tracks has
+itself. `init()` also runs this once immediately on load, rather than
+letting the FIRST call wait for `LIVE_POLL_INTERVAL_MS` to elapse the way
+every later recurring tick does - without that, the live status widgets
+(see "sport-specific live in-progress widget" below) couldn't appear any
+sooner than 30 seconds after every single page load, since `match.live` is
+only ever set here. Paused while the tab is hidden. Score/status comes from
+ESPN's own public scoreboard; odds comes from Polymarket instead (see "Live
+win% odds" below) - two separate fetches, since not every sport this tracks
+has
 both (F1 has real, live Polymarket odds but no ESPN score to poll at all).
 
 This never re-runs objective scoring - it only updates the same

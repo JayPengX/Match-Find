@@ -2666,6 +2666,20 @@ async function init() {
     errorState.hidden = false;
   }
   scheduleNearTermRefresh();
+  // Also run the very first live poll immediately, rather than only after
+  // scheduleLivePoll's own recurring setTimeout first elapses -
+  // that timer waits a full LIVE_POLL_INTERVAL_MS (30s) BEFORE ever
+  // calling pollLiveMatches for the first time. match.live (what
+  // buildLiveStatusNode actually renders) is only ever set by
+  // pollLiveMatches, so nothing else on this page could make a live
+  // match's diamond/flag/pulsing-dot widget appear sooner than that -
+  // reported directly as "quite a few seconds after loading" before the
+  // live states show up, live-measured at up to ~30s. Unblocked (not
+  // awaited), same reasoning as refreshFullWindow's own call right below -
+  // this shouldn't delay that kickoff either.
+  if (document.visibilityState !== 'hidden') {
+    pollLiveMatches().catch(error => console.error('initial live poll failed', error));
+  }
   scheduleLivePoll();
   refreshFullWindow({ silent: true });
   scheduleFullRefresh();
