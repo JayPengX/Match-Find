@@ -3400,3 +3400,96 @@ factor-string assertion (`'avg points-rate 30.0%'`) updated to
 `'best team points-rate 40.0%'` to match the new factor text. Added 4 new
 tests (2 NBA, 2 EPL) covering the better-team-not-average fix and the
 soft-cap's own bounded-but-real-lift behavior. Full suite 360/360.
+
+## Round 31 (2026-09-26 TW time): why the real Dodgers/Giants game still lost its slot, and a generic (not date-specific) fix
+
+Direct follow-up: "Previous MLB fix didn't push Dodgers vs Giants as
+recommended on 9/26 (TW time), trace why." Pulled the REAL schedule and
+standings for that date from the live MLB Stats API (not a simulated
+fixture) rather than guessing: Dodgers 96-60 (.615, NL West leader by 9)
+@ Giants 64-92 (.410, 32 games back, streak L3).
+
+**Traced it.** `computeMlbObjectiveScore` on the real data produced
+`competitiveness: 5, watchability: 5, skill: 7` - skill IS wired in
+correctly (Round 29's fix works, Dodgers get real credit for being a
+genuinely good team). But the historic-rivalry bonus never fired: MLB's
+rivalry bonus was gated on `isRivalry && competitiveness >=
+MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS(6)`, and 5 is one point under that
+line. Because the rivalry factor string never made it into
+`objectiveFactors`, `recommendation.mjs`'s `isMarqueeFixture()` - which
+detects marquee fixtures purely by string-matching that array - also saw
+nothing, so the SEPARATE, fully undiluted `MARQUEE_FIXTURE_SCORE_BONUS`
+(built in Round 17 specifically to bypass blend-dilution) missed it too.
+One hard gate was silently doing double duty, blocking both the internal
+diluted bonus AND, as an unintended side effect, the external undiluted
+one.
+
+Ran the real 15-game MLB slate for 9/26 through the actual formula:
+Dodgers/Giants ranked **14th of 15**, comfortably behind Cubs (.558) @
+Red Sox (.538) - two teams still fighting for playoff seeding, and
+several other real, tight wild-card-race games that night. Checked
+whether simply lowering/removing the gate would fix it: it would NOT,
+safely - the rivalry bonus firing would also make `isMarqueeFixture` true
+and hand out the FULL undiluted +2 on top of the +2 already blended into
+watchability, jumping Dodgers/Giants to **#1 for the day** purely off
+name value despite the 32-game gap and nothing at stake for either team -
+literally recreating the original Round 23 failure this whole guardrail
+exists to prevent, just via a second path.
+
+Presented this trade-off to the user rather than guessing which side of
+it they wanted. Their answer: "I don't care just let it win some way but
+a more generic rule not a specific case" - explicitly ruling out a
+Dodgers/Giants- or date-specific carve-out.
+
+**The generic fix: replace the hard gate with a graduated ramp, in BOTH
+places it was blocking credit.** Added `marqueeCreditFraction(competitiveness,
+floor=2, ceiling=MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS)` to
+`objective-score.mjs` - a linear ramp from 0 credit at competitiveness 2
+(a real, decided mismatch - same floor value `playoffProximityScore`
+already uses for the same idea) to full credit at competitiveness 6 (the
+OLD gate's exact threshold, reused on purpose: at or above it, behavior is
+byte-for-byte unchanged from before - this is a strict loosening of the
+old rule, not a re-tuning of it). Applies identically to any pairing in
+`MLB_RIVALRY_PAIRS` at any competitiveness level on any date - the only
+thing that varies fixture to fixture is the real win% gap, nothing about
+this rule mentions a specific team or date.
+
+`computeMlbObjectiveScore` now returns this fraction as `marqueeCredit`,
+and `match-builder.mjs` copies it onto the built match object (`undefined`
+for NBA/EPL/F1, which never set it). `recommendation.mjs`'s
+`computeEffectiveScore` now scales the undiluted `MARQUEE_FIXTURE_SCORE_BONUS`
+by `match.marqueeCredit` too, defaulting to 1 (full credit) when the field
+is absent - this is what actually closes the "double gate" gap: without
+it, MLB's now-nonzero-but-partial internal credit would still trip
+`isMarqueeFixture`'s own boolean check and hand out the FULL undiluted
+bonus regardless of how small the internal fraction was, recreating a
+cliff one layer up. NBA/EPL never set `marqueeCredit`, so they default to
+1 and keep their existing unconditional rivalry/derby/big-club bonus
+behavior byte-for-byte (deliberately NOT touched - their own bonuses stay
+unconditional for a different, already-documented reason: no standings-API
+integration yet means a low competitiveness there can still be
+early-season sampling noise a genuinely elite club should survive, e.g.
+Round 14's Liverpool @ AFC Bournemouth case - applying this same
+competitiveness-based ramp to them would have silently reintroduced that
+exact bug).
+
+**Re-ran the real 9/26 slate with the fix.** Dodgers/Giants: competitiveness
+5 -> `marqueeCreditFraction(5) = 0.75` -> partial internal credit (+1.5
+instead of the old all-or-nothing +2/+0) lifts watchability from 5 to 6,
+and the same 0.75 fraction scales the undiluted bonus to +1.5 instead of
++2. Final `effectiveScore` for the day: **Dodgers/Giants 7.15, now edging
+out Cubs/Red Sox's 7.05** - it wins the slot, on a graduated, principled
+credit rather than a name-based override. Verified the guardrail still
+holds for a genuinely decided rivalry blowout (competitiveness at the
+floor, 2): `marqueeCredit` is exactly 0, no factor string, no bonus at
+either layer - not an unconditional "rivalry always wins" rescue.
+
+Added `marqueeCreditFraction` + `MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS` to
+`objective-score.test.mjs`'s imports; added a `describe('marqueeCreditFraction')`
+block (floor/ceiling/linearity/custom-bounds/non-finite-input) and three
+`computeMlbObjectiveScore` tests (full credit unchanged at high
+competitiveness, partial credit on the real 9/26 numbers, zero credit at
+the floor) to `objective-score.test.mjs`; added two tests to
+`recommendation.test.mjs` (proportional scaling by `marqueeCredit`, and
+unchanged full-credit behavior when the field is absent). Full suite
+369/369. Committed and pushed to both branches.

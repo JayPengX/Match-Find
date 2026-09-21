@@ -20,7 +20,9 @@ import {
   computeNbaObjectiveScore,
   computeEplObjectiveScore,
   computeF1ObjectiveScore,
-  skillFromWinPct
+  skillFromWinPct,
+  marqueeCreditFraction,
+  MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS
 } from '../public/lib/objective-score.mjs';
 
 describe('clamp', () => {
@@ -236,6 +238,40 @@ describe('skillFromWinPct', () => {
   });
 });
 
+describe('marqueeCreditFraction', () => {
+  test('zero at or below the floor - a genuinely decided pairing earns no marquee credit', () => {
+    assert.equal(marqueeCreditFraction(2), 0);
+    assert.equal(marqueeCreditFraction(1), 0);
+    assert.equal(marqueeCreditFraction(0), 0);
+  });
+
+  test('full credit (1) at or above the ceiling - same as the old hard gate\'s own "yes" case', () => {
+    assert.equal(marqueeCreditFraction(MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS), 1);
+    assert.equal(marqueeCreditFraction(10), 1);
+  });
+
+  test('linear in between - strictly increasing, not a step function', () => {
+    const low = marqueeCreditFraction(3);
+    const mid = marqueeCreditFraction(4);
+    const high = marqueeCreditFraction(5);
+    assert.ok(low > 0 && low < mid);
+    assert.ok(mid < high);
+    assert.ok(high < 1);
+  });
+
+  test('a custom floor/ceiling is respected', () => {
+    assert.equal(marqueeCreditFraction(5, 5, 9), 0);
+    assert.equal(marqueeCreditFraction(9, 5, 9), 1);
+    assert.equal(marqueeCreditFraction(7, 5, 9), 0.5);
+  });
+
+  test('returns 0, not NaN, for a non-finite competitiveness', () => {
+    assert.equal(marqueeCreditFraction(null), 0);
+    assert.equal(marqueeCreditFraction(undefined), 0);
+    assert.equal(marqueeCreditFraction(NaN), 0);
+  });
+});
+
 describe('computeMlbObjectiveScore', () => {
   test('skill reflects the BETTER team\'s own quality, not the average of both - two elite teams score higher skill than two also-rans, even at the identical win% gap', () => {
     const eliteMatchup = computeMlbObjectiveScore({ awayWinPct: 0.62, homeWinPct: 0.58, away: null, home: null, isPostseason: false });
@@ -270,6 +306,60 @@ describe('computeMlbObjectiveScore', () => {
     const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: false });
     const rivalry = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: true });
     assert.ok(rivalry.watchability > plain.watchability);
+    // At this high a competitiveness, full marquee credit applies - same
+    // as the old hard gate's own "yes" case.
+    assert.equal(rivalry.marqueeCredit, 1);
+  });
+
+  // Round 31 (2026-09-26 TW time): a REAL Dodgers (96-60) @ Giants (64-92)
+  // pairing that night scored competitiveness 5 - one point under the old
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS(6) hard gate, so the rivalry
+  // bonus fell to exactly zero, and (because computeMlbObjectiveScore's own
+  // factor string never fired) recommendation.mjs's fully undiluted
+  // MARQUEE_FIXTURE_SCORE_BONUS silently missed it too. Replaced with a
+  // graduated fraction (marqueeCreditFraction) - generic (applies to any
+  // MLB_RIVALRY_PAIRS pairing at any competitiveness), not a Dodgers/Giants
+  // special case.
+  test('a rivalry below the old hard-gate threshold now gets PARTIAL credit instead of none - a real 2026-09-26 case', () => {
+    const belowGate = computeMlbObjectiveScore({
+      awayWinPct: 96 / 156, // Dodgers 96-60
+      homeWinPct: 64 / 156, // Giants 64-92
+      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
+      home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
+      isPostseason: false,
+      isRivalry: true,
+      oddsSpread: null
+    });
+    assert.equal(belowGate.competitiveness, 5, `expected the real 9/26 competitiveness of 5, got ${belowGate.competitiveness}`);
+    assert.ok(belowGate.competitiveness < MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS);
+    // Partial, not zero - the old gate's exact failure mode.
+    assert.ok(belowGate.marqueeCredit > 0 && belowGate.marqueeCredit < 1);
+    assert.ok(belowGate.factors.includes('known historic rivalry matchup'));
+    const noRivalry = computeMlbObjectiveScore({
+      awayWinPct: 96 / 156,
+      homeWinPct: 64 / 156,
+      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
+      home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
+      isPostseason: false,
+      isRivalry: false,
+      oddsSpread: null
+    });
+    assert.ok(belowGate.watchability > noRivalry.watchability);
+  });
+
+  test('a genuinely decided rivalry blowout (competitiveness at the floor) still gets essentially zero marquee credit - the graduated version is not an unconditional rescue', () => {
+    const result = computeMlbObjectiveScore({
+      awayWinPct: 0.65,
+      homeWinPct: 0.28,
+      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 15, lastTen: { wins: 8, losses: 2 }, streakCode: 'W6' },
+      home: { gamesBack: 40, wildCardGamesBack: 38, lastTen: { wins: 2, losses: 8 }, streakCode: 'L5' },
+      isPostseason: false,
+      isRivalry: true,
+      oddsSpread: null
+    });
+    assert.ok(result.competitiveness <= 2);
+    assert.equal(result.marqueeCredit, 0);
+    assert.ok(!result.factors.includes('known historic rivalry matchup'));
   });
 
   test('an elite-vs-bad blowout scores higher watchability than an equally lopsided also-ran-vs-bad blowout, thanks to skill - without skill ever winning outright over a genuinely competitive game', () => {

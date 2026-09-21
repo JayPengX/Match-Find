@@ -241,19 +241,49 @@ export const NBA_SPREAD_LOPSIDED_AT = 15;
 // "must watch" rating neither the current standings nor tonight's actual
 // game would earn on its own.
 //
-// MLB's own rivalry bonus only gets to fire when tonight's specific
-// pairing is at least this close. MLB-only (not NBA/EPL's rivalry/derby/
-// big-club/national-broadcast bonuses below) - MLB is the one sport this
-// build has real, standings-based signals for late in a 162-game season,
-// where a wide win% gap really does mean a decided mismatch, not sampling
-// noise. NBA/EPL have no standings API integration yet (see this repo's
-// README, "Known limitations") - an early-season win% gap there can still
-// be a small, noisy sample a genuinely elite club will grow out of, which
-// is exactly the real case (Liverpool @ AFC Bournemouth, an early-season
-// noisy 0.2/0.6 split) Round 17's own big-club bonus was written to survive
-// - gating those the same way MLB's is would silence a big-club/derby bonus
-// for precisely the early-season games it exists to correct for.
+// MLB's own rivalry bonus only gets FULL credit once tonight's specific
+// pairing is at least this close (see marqueeCreditFraction below for how
+// anything below this point is now handled). MLB-only (not NBA/EPL's
+// rivalry/derby/big-club/national-broadcast bonuses below) - MLB is the
+// one sport this build has real, standings-based signals for late in a
+// 162-game season, where a wide win% gap really does mean a decided
+// mismatch, not sampling noise. NBA/EPL have no standings API integration
+// yet (see this repo's README, "Known limitations") - an early-season
+// win% gap there can still be a small, noisy sample a genuinely elite
+// club will grow out of, which is exactly the real case (Liverpool @ AFC
+// Bournemouth, an early-season noisy 0.2/0.6 split) Round 17's own
+// big-club bonus was written to survive - gating those the same way
+// MLB's is would silence a big-club/derby bonus for precisely the
+// early-season games it exists to correct for.
 export const MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS = 6;
+
+// Round 31 (2026-09-26 TW time): this used to be a hard yes/no gate - a
+// real Dodgers (96-60) @ Giants (64-92) pairing that night scored
+// competitiveness 5, one point under this threshold, so the ENTIRE
+// rivalry bonus (both the diluted one below and, transitively, the fully
+// undiluted MARQUEE_FIXTURE_SCORE_BONUS in recommendation.mjs, which
+// detects a marquee fixture purely by whether this function's own factor
+// string ever got pushed) fell to exactly zero one point below the line,
+// while an otherwise-identical pairing at competitiveness 6 got full
+// credit - an arbitrary cliff, not a reasoned amount of credit for how
+// much of a real, live contest tonight's specific version of a genuine
+// rivalry actually is. Generic, not a per-team/per-date carve-out: this
+// applies identically to any pairing in MLB_RIVALRY_PAIRS at any
+// competitiveness level, on any date - the only lookup that varies is the
+// pairing's own win% gap. `ceiling` reuses
+// MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's exact old value on purpose, so
+// this is a strict loosening of the old rule, not a re-tuning of it: at or
+// above that threshold, behavior is UNCHANGED (full credit, same as the
+// old gate's "yes") - only the region below it, previously a flat zero,
+// now gets a proportional share instead of an abrupt cliff. Below `floor`,
+// tonight's pairing is close enough to genuinely decided that a
+// real-world name still earns nothing at all - same floor value used
+// elsewhere in this module for "a real, decided mismatch" (see
+// playoffProximityScore's own comment).
+export function marqueeCreditFraction(competitiveness, floor = 2, ceiling = MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS) {
+  if (!Number.isFinite(competitiveness)) return 0;
+  return clamp((competitiveness - floor) / (ceiling - floor), 0, 1);
+}
 
 // However high stakes/a marquee bonus independently read, neither is
 // allowed to lift the final watchability more than this many points above
@@ -408,9 +438,16 @@ export function computeMlbObjectiveScore({
     [skill, 0.25],
     [momentum, 0.15]
   ]) ?? 5;
-  // 2, not NBA's 1.5 - matches EPL's own derby bonus.
-  if (isRivalry && competitiveness >= MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS) {
-    watchability += 2;
+  // 2, not NBA's 1.5 - matches EPL's own derby bonus. Graduated by
+  // marqueeCreditFraction rather than a flat yes/no gate - see that
+  // function's own comment. `marqueeCredit` is also returned below so
+  // recommendation.mjs's own UNDILUTED marquee bonus can scale by the same
+  // fraction instead of either missing this fixture entirely (the old
+  // gate's behavior below competitiveness 6) or over-crediting it at full
+  // strength the moment ANY credit exists at all.
+  const marqueeCredit = isRivalry ? marqueeCreditFraction(competitiveness) : 0;
+  if (marqueeCredit > 0) {
+    watchability += marqueeCredit * 2;
     factors.push('known historic rivalry matchup');
   }
   // Softer replacement for the old `Math.min(watchability, competitiveness +
@@ -436,7 +473,7 @@ export function computeMlbObjectiveScore({
     10
   );
 
-  return { competitiveness, watchability, enduranceScore, skill, factors };
+  return { competitiveness, watchability, enduranceScore, skill, factors, marqueeCredit };
 }
 
 // ---- NBA ------------------------------------------------------------------

@@ -199,6 +199,28 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(marqueeBreakdown.effectiveScore, marqueeBreakdown.bestMatchScore + MARQUEE_FIXTURE_SCORE_BONUS);
   });
 
+  // Round 31: MLB's own computeMlbObjectiveScore now sets a graduated
+  // marqueeCredit fraction (see objective-score.mjs's marqueeCreditFraction)
+  // instead of an all-or-nothing gate. Without threading that fraction
+  // through here too, ANY nonzero internal credit would still trip
+  // isMarqueeFixture's own boolean detection and hand out the FULL
+  // undiluted bonus regardless of how small that credit was - re-creating
+  // an all-or-nothing cliff one layer up.
+  test('marqueeCredit (when present on the match) scales the undiluted marquee bonus proportionally', () => {
+    const full = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 1 });
+    const half = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 0.5 });
+    const none = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 0 });
+    assert.equal(computeEffectiveScore(full, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
+    assert.equal(computeEffectiveScore(half, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS * 0.5);
+    assert.equal(computeEffectiveScore(none, {}).adjustments.marquee, 0);
+  });
+
+  test('a match with no marqueeCredit field at all (NBA/EPL, or any older match object) still gets the full undiluted bonus - unchanged behavior', () => {
+    const match = makeMatch({ objectiveFactors: ['known derby fixture'] });
+    assert.equal(match.marqueeCredit, undefined);
+    assert.equal(computeEffectiveScore(match, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
+  });
+
   test('computeRecommendationScore composes the score breakdown with confidence', () => {
     const match = makeMatch();
     const result = computeRecommendationScore(match, {});

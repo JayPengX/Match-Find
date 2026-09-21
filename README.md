@@ -229,12 +229,28 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
   genuinely elite team in an otherwise-lopsided game can still earn real
   (if diminishing) extra credit instead of being flatly unable to ever
   cross competitiveness+3 - see Round 29 for the worked Dodgers/Giants
-  before/after numbers. MLB's own rivalry bonus additionally doesn't fire
-  at all below a competitiveness floor (`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS`,
-  MLB only - NBA/EPL have no standings-API integration yet, so a low
-  competitiveness there can still be early-season sampling noise a
-  genuinely elite club should survive, see "Known limitations" below). The
-  root cause behind that same Dodgers/Giants case was fixed separately, not
+  before/after numbers. MLB's own rivalry bonus additionally scales by
+  `marqueeCreditFraction(competitiveness)` (Round 31 - MLB only, same
+  reasoning as the gate it replaced: NBA/EPL have no standings-API
+  integration yet, so a low competitiveness there can still be
+  early-season sampling noise a genuinely elite club should survive, see
+  "Known limitations" below) - a real, live Dodgers (96-60) @ Giants
+  (64-92) pairing on 2026-09-26 scored competitiveness 5, one point under
+  the OLD hard `MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS` (6) gate, so the
+  entire rivalry bonus fell to exactly zero - full credit one point above,
+  none at all one point below. Replaced with a linear ramp (0 credit at
+  competitiveness 2 or below, full credit at 6 or above, `ceiling` reusing
+  that exact old threshold) so a fixture just under the old line gets a
+  proportional share instead of a cliff. This same fraction also scales
+  the fully UNDILUTED `MARQUEE_FIXTURE_SCORE_BONUS` in
+  `public/lib/recommendation.mjs` (via `match.marqueeCredit`, set only by
+  MLB - NBA/EPL default to full credit, preserving their own unconditional
+  behavior) - without that, ANY nonzero internal credit would still trip
+  `isMarqueeFixture`'s boolean detection and hand out the FULL undiluted
+  bonus regardless of how small the internal credit was, re-creating the
+  same cliff one layer up.
+
+  The root cause behind that same Dodgers/Giants case was fixed separately, not
   just capped: a division LEADER's own `gamesBack` reads 0 whether its lead
   is a nail-biter or a 20+ game runaway, so `playoffProximityScore` now
   also takes a `divisionLeadMargin` (the runner-up's own `gamesBack`,

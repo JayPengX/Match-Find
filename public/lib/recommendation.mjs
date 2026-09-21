@@ -198,7 +198,18 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
   const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
   const service = resolveService(match.whereToWatchTw);
   const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
-  const marqueeNudge = isMarqueeFixture(match) ? MARQUEE_FIXTURE_SCORE_BONUS : 0;
+  // `match.marqueeCredit` is a 0..1 fraction only MLB's own
+  // computeMlbObjectiveScore sets (see marqueeCreditFraction's own comment
+  // in objective-score.mjs) - undefined for NBA/EPL/F1 (and any older/mocked
+  // match object), which defaults to full credit (1), exactly reproducing
+  // this bonus's original unconditional behavior for those sports. Without
+  // this, a graduated-but-nonzero internal rivalry credit (MLB only) would
+  // still trip `isMarqueeFixture`'s own boolean detection and hand out the
+  // FULL undiluted bonus regardless of how small that internal credit was -
+  // scaling by the same fraction here keeps the two consistent instead of
+  // re-introducing an all-or-nothing cliff at this layer.
+  const marqueeCredit = Number.isFinite(match.marqueeCredit) ? Math.min(1, Math.max(0, match.marqueeCredit)) : 1;
+  const marqueeNudge = isMarqueeFixture(match) ? MARQUEE_FIXTURE_SCORE_BONUS * marqueeCredit : 0;
 
   const baseScore = Number.isFinite(match.score) ? match.score : 0;
   const bestScore = bestMatchScore(match);

@@ -912,6 +912,12 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
     // own comment.
     match.whereToWatchTw = resolveWhereToWatchTw(match);
     match.objectiveFactors = objective.factors;
+    // Only MLB's own computeMlbObjectiveScore sets this (a graduated 0..1
+    // marquee-credit fraction, see marqueeCreditFraction's own comment) -
+    // undefined for NBA/EPL/F1, which recommendation.mjs's own
+    // computeEffectiveScore treats as full credit (1), preserving their
+    // existing unconditional rivalry/derby/big-club bonus behavior exactly.
+    match.marqueeCredit = objective.marqueeCredit;
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
     // How much this score should actually be trusted - see
     // computeConfidence's own comment for what it's grounded in.
