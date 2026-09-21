@@ -3726,3 +3726,107 @@ correct target only, stale-id no-op, and an end-to-end case proving the
 bonus - applied before `computeDayPlan` - can actually flip which candidate
 wins a slot). Full suite: **377/377**. Committed and pushed to both
 `Match-Find` and `Shared-Proxy`.
+
+## Round 35 (2026-09-21): Round 34 still wasn't guaranteeing the user's own validated result - replaced the score nudge with a hard pin, and re-enabled Google Search grounding
+
+Direct live report: "Still choosing Sox instead of my expected result, it
+has to match my expected result no matter what." Two root causes, both in
+Round 34's own design, both fixed here.
+
+**Root cause 1: `GEMINI_TIE_BREAK_MARGIN` (0.5) was too tight and silently
+excluded the real alternative from ever being asked about.** Live numbers
+that day: Cleveland Guardians @ Boston Red Sox scored ~7.05, Tampa Bay Rays
+@ New York Yankees ~6.35 - a 0.7 gap, ABOVE the 0.5 margin Round 34 used to
+decide whether a candidate was even worth asking Gemini about, even though
+this file's own `ALTERNATIVE_MAX_SCORE_GAP` (2.5) already considered it
+close enough to show as a swipeable alternative in the UI. Gemini was
+never even asked about Rays/Yankees - there was nothing "still wrong" for
+it to fix, the call simply never fired for that candidate. Fix: removed
+`GEMINI_TIE_BREAK_MARGIN` entirely. `selectGeminiTieBreakCandidates` now
+offers Gemini every alternative `computeDayPlan` itself already considers
+close (its own `alternativeIds`, already gated by
+`ALTERNATIVE_MAX_SCORE_GAP`) - one existing, already-tuned notion of
+"close enough to be a real call," not a second, independently-guessed
+threshold that can silently disagree with the first.
+
+**Root cause 2: even when Gemini WAS asked and picked correctly, a flat
++1 score bonus (`GEMINI_TIE_BREAK_BONUS`) could not guarantee it actually
+won the slot** - a bonus sized to flip a narrow gap is, by construction,
+not guaranteed to overcome a wider one, and "it has to match my expected
+result no matter what" is exactly the guarantee a nudge can never give.
+Fix: replaced the additive bonus with a HARD PIN, reusing the exact same
+`pinnedForDay` mechanism a viewer's own swipe-to-pin already uses (see
+`computeDayPlan`'s own `forcedIds` handling) - a forced pick wins its slot
+UNCONDITIONALLY, the same guarantee a real user pin already has, regardless
+of how wide the score gap is.
+
+**New pure functions in `recommendation.mjs`** (replacing
+`GEMINI_TIE_BREAK_MARGIN`/`GEMINI_TIE_BREAK_BONUS`/`applyGeminiTieBreakBonus`
+outright, not layering on top of them):
+- `tieBreakCandidateKey(candidates)` - the one canonical stable-order cache
+  key, now shared between app.js's own cache writes and this module's own
+  cache-validity check (previously app.js had its own private copy).
+- `resolveGeminiOverridePin(dayMatches, close, cacheEntry, pinnedForDay)` -
+  re-validates a cached answer against a FRESH `close` (this render's own
+  `selectGeminiTieBreakCandidates` call, never trusting a stale cache
+  blindly), confirms the cached `pickId` is actually one of the currently-
+  offered candidates, and - critically - checks whether the VIEWER's own
+  explicit pin already occupies the same conflict cluster. An explicit
+  human pin always wins over Gemini's own pick; Gemini never overrides a
+  viewer's own swipe.
+- `computeDayPlanWithGeminiTieBreak(dayKey, dayMatches, pinnedForDay,
+  cacheEntry, {scoreField})` - the one entry point app.js's render path
+  calls: runs `computeDayPlan` once (natural, needed to compute `close`
+  itself), and again with the resolved override added to `pinnedForDay` if
+  one applies. `computeDayPlan` fully resets every match's own
+  `.recommended`/`.alternativeIds` at the top of each call, so running it
+  twice on the same array is safe - whichever call ran last is what's left
+  mutated, exactly what renders.
+
+**`public/app.js` changes** - `dayCandidatesForPlan` no longer touches
+Gemini at all (that was the old bonus's pre-DP application point; a hard
+pin has to be threaded through `pinnedForDay` at the `computeDayPlan` call
+site itself, not patched onto a score beforehand). `renderRecommendedSection`
+now calls `computeDayPlanWithGeminiTieBreak` directly (never a bare
+`computeDayPlan` - the wrapper already calls it internally), passing the
+viewer's own `state.pinnedChoices.get(dayKey)` through so an explicit pin
+is respected, and reads the returned `close` value straight into
+`maybeRequestGeminiTieBreak` instead of recomputing it. `pinSlotChoice`'s
+own "natural choice" question deliberately still uses plain
+`dayCandidatesForPlan` (no Gemini involvement) - a separate, narrower
+scoping decision, not an oversight: that path is about a viewer's own
+manual pin, not the rendered recommendation.
+
+**Google Search grounding re-enabled, per direct instruction.** The user
+confirmed explicitly: "google search is acceptable as long as one per day
+and shared across different access from different day" - exactly what this
+call's own client-side cache (Round 32's own design, unchanged) already
+guarantees: one live call per `(dayKey, exact candidate-id-set)`, cached
+24h, shared across every visit that same day. Round 9's own 429
+RESOURCE_EXHAUSTED failure was a PER-FIXTURE, per-build call volume problem
+- at this call's volume (at most once a day, per day actually viewed), the
+same quota is a non-issue. Shared-Proxy's `worker.js` now requests `tools:
+[{ google_search: {} }]` on this route, switched `MATCH_RECOMMEND_MODEL`
+to `gemini-3.7-flash` (grounding-integrated reasoning benefits from the
+more capable model; the -lite model the other routes use was a cost/
+latency tradeoff that no longer matters at this volume), and moved off
+`response_schema`-enforced JSON decoding for this route specifically (tool
+use and a schema-constrained decode don't reliably compose the same way a
+schema-only request does) - the prompt now asks for the JSON object as the
+very last thing in an otherwise free-form response, pulled back out with a
+trailing-`{...}` regex (`MATCH_RECOMMEND_JSON_PATTERN`) instead of parsing
+the whole body as bare JSON.
+
+**Tests.** Rewrote the `recommendation.test.mjs` Gemini describe block
+around the new API: `selectGeminiTieBreakCandidates` (no-alternatives case,
+and the live bug itself - a 0.7 gap still offered, since it's within
+`ALTERNATIVE_MAX_SCORE_GAP`; a genuinely-too-wide gap still excluded; the
+max-candidates cap), `tieBreakCandidateKey` (order-independence),
+`buildGeminiTieBreakPayload` (unchanged from Round 34), `resolveGeminiOverridePin`
+(no cache/stale candidateKey/pickId-not-offered/valid-and-fresh/blocked-by-
+same-slot-human-pin/not-blocked-by-different-slot-pin - six cases), and
+`computeDayPlanWithGeminiTieBreak` (no-cache passthrough; a 2.0-point gap -
+far wider than the old, removed 0.5 margin - still flips UNCONDITIONALLY,
+the direct proof this round's whole fix works; an explicit human pin still
+overrides the cached Gemini pick). Full suite: **384/384**. Committed and
+pushed to both `Match-Find` and `Shared-Proxy`.

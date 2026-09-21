@@ -1124,43 +1124,49 @@ export function applyLiveExcitementBonus(dayMatches) {
 
 // ---- Gemini bounded daily tie-break (Shared-Proxy's /match-recommend) -----
 //
-// Round 32: docs/recommendation-engine-audit.md traced a real mismatch
+// Round 32/34: docs/recommendation-engine-audit.md traced a real mismatch
 // (2026-09-23/24/25 MLB's headline slot) that survived a systematic search
 // for a formula fix - any reweighting of the deterministic score's own axes
 // that corrected that day ALSO flipped an already-correct pick on a
 // different, statistically-identical-shaped day (2026-09-26). That's proof
 // the two days' correct answers depend on real-world context (team
 // storylines, star power, how big a draw a specific matchup is) no
-// deterministic box-score signal here captures - not a coefficient bug. See
-// that round's own writeup for the constraint search and the real data it
-// ran against.
+// deterministic box-score signal here captures - not a coefficient bug.
 //
-// This is NOT a return to the original per-fixture Gemini validation call
-// removed in Round 11 (that one asked Gemini to score EVERY fixture, every
-// build, which is what burned through free-tier quota) - it's called for
-// AT MOST ONE slot per day (today's own headline slot), and only when the
-// deterministic engine's own top few candidates are close enough that the
-// formula genuinely can't distinguish them with confidence. app.js owns
-// the actual network call/caching (this module has no fetch of its own -
-// same "pure scoring, network is someone else's job" split as the rest of
-// this codebase); these three functions are the pure, testable pieces of
-// that flow: which candidates qualify for a tie-break, what to send, and
-// how to apply an answer once one comes back.
+// Round 35: Round 34's own first attempt used a small additive SCORE bonus
+// (enough to flip a close call, never enough to override a clear one) -
+// live-reported as still not reliably matching the user's own validated
+// expectation, for the plain reason that a bonus which "never overrides a
+// clear win" is exactly a bonus that CAN silently lose when the real gap
+// turns out wider than the margin that decided whether to even ask Gemini
+// in the first place (GEMINI_TIE_BREAK_MARGIN, 0.5 - live-verified TOO
+// TIGHT: it excluded Tampa Bay Rays @ New York Yankees, a full-fledged
+// alternative already shown as swipeable in the UI, from ever being asked
+// about at all, purely because its own gap to the top pick, 0.7, exceeded
+// that separate, narrower threshold). Direct instruction from the user:
+// "it has to match my expected result no matter what." This is now a HARD
+// override, not a nudge: `resolveGeminiOverridePin` returns a matchId to
+// FORCE into computeDayPlan's own `pinnedForDay` (the exact same mechanism
+// a viewer's own swipe-to-pin already uses - see computeDayPlan's own
+// comment on `forcedIds`), which wins its slot unconditionally regardless
+// of any score gap, the same guarantee a real user pin already has. The
+// separate, too-tight margin is gone entirely - `selectGeminiTieBreakCandidates`
+// now offers Gemini every alternative computeDayPlan itself already
+// considered close enough to show as swipeable (`alternativeIds`, gated by
+// this file's own ALTERNATIVE_MAX_SCORE_GAP), never a second, independently
+// tuned notion of "close".
+//
+// This is still NOT a return to the original per-fixture Gemini validation
+// call removed in Round 11 (that one asked Gemini to score EVERY fixture,
+// every build, which is what burned through free-tier quota) - it's called
+// for AT MOST ONE slot per day (the currently-viewed day's own headline
+// slot), and only when that slot actually has a real alternative at all.
+// app.js owns the actual network call/caching (this module has no fetch of
+// its own - same "pure scoring, network is someone else's job" split as
+// the rest of this codebase); these functions are the pure, testable
+// pieces of that flow: which candidates qualify for a tie-break, what to
+// send, whether a cached answer still applies, and how to force it in.
 
-// A tie-break is only worth asking for when the top candidates are
-// genuinely close - not just "technically not tied". 0.5 is deliberately
-// tight (a third of ALTERNATIVE_MAX_SCORE_GAP, this file's own "close
-// enough to be a real call" notion for the SWIPE stack) since this is a
-// higher bar: a candidate has to be close enough that the deterministic
-// score itself can't confidently separate it from the top pick, not merely
-// "an alternative worth showing".
-export const GEMINI_TIE_BREAK_MARGIN = 0.5;
-// A one-time nudge on top of planningScore, same scale as
-// PRIORITY_SCORE_DELTA - enough to reliably flip a close call within
-// GEMINI_TIE_BREAK_MARGIN of the top pick, never enough to manufacture a
-// win for a candidate the deterministic engine had genuinely ranked well
-// below the top of its own slot.
-export const GEMINI_TIE_BREAK_BONUS = 1;
 // Bounded to match Shared-Proxy's own MATCH_RECOMMEND_MAX_CANDIDATES - a
 // tie-break asks Gemini to pick among a SMALL handful of genuinely close
 // options, never to rank a whole day's slate.
@@ -1171,25 +1177,32 @@ export const GEMINI_TIE_BREAK_MAX_CANDIDATES = 4;
 // output directly rather than re-deriving overlap/conflict logic itself,
 // so whatever gets offered to Gemini is GUARANTEED to be the exact same
 // conflict cluster already rendered as swipeable alternatives, never a
-// second, possibly-inconsistent computation of "what's in this slot".
-// Returns null when there's nothing to ask about: no recommended pick, no
-// alternatives at all, or every alternative is already clearly behind (a
-// day where the algorithm's own top pick has no real rival needs no
-// second opinion).
+// second, possibly-inconsistent computation of "what's in this slot", and
+// never a second, independently-tuned notion of "close enough" - see this
+// section's own Round 35 comment for why a separate margin was removed.
+// Returns null when there's nothing to ask about: no recommended pick, or
+// no alternatives at all (a day where the algorithm's own top pick has no
+// real rival needs no second opinion).
 export function selectGeminiTieBreakCandidates(dayMatches, { scoreField = 'planningScore' } = {}) {
   const top = dayMatches.find(m => m.recommended);
   if (!top || !Array.isArray(top.alternativeIds) || !top.alternativeIds.length) return null;
-  const topScore = Number.isFinite(top[scoreField]) ? top[scoreField] : top.effectiveScore;
-  if (!Number.isFinite(topScore)) return null;
   const byId = new Map(dayMatches.map(m => [m.id, m]));
   const close = [top, ...top.alternativeIds.map(id => byId.get(id)).filter(Boolean)]
-    .filter(m => {
-      const score = Number.isFinite(m[scoreField]) ? m[scoreField] : m.effectiveScore;
-      return Number.isFinite(score) && topScore - score <= GEMINI_TIE_BREAK_MARGIN;
-    })
+    .filter(m => Number.isFinite(m[scoreField]) || Number.isFinite(m.effectiveScore))
     .sort((a, b) => (b[scoreField] ?? b.effectiveScore) - (a[scoreField] ?? a.effectiveScore))
     .slice(0, GEMINI_TIE_BREAK_MAX_CANDIDATES);
   return close.length >= 2 ? close : null;
+}
+
+// Stable regardless of candidate order - a cache entry must be looked up
+// the same way it was stored even if scores moved slightly between the
+// render that asked and the render that's now checking, as long as the
+// underlying SET of candidate ids is unchanged.
+export function tieBreakCandidateKey(candidates) {
+  return candidates
+    .map(c => c.id)
+    .sort()
+    .join(',');
 }
 
 // The exact request body Shared-Proxy's handleMatchRecommendRequest expects
@@ -1213,22 +1226,57 @@ export function buildGeminiTieBreakPayload(dayKey, candidates, { scoreField = 'p
   };
 }
 
-// Applied BEFORE computeDayPlan runs, same layer as applyLiveExcitementBonus
-// above (see its own comment) - the bonus flows through the DP's own
-// scheduling math instead of patching its output after the fact, so
-// alternativeIds/slotKey bookkeeping stays entirely computeDayPlan's own,
-// undisturbed by this. `pickId` is untrusted (it round-trips through a
-// localStorage cache in app.js, and originates from Shared-Proxy even
-// though that route already validates it against the exact candidate set
-// it was offered) - re-validated here against `dayMatches`'s own current
-// ids, never assumed still valid, so a stale cache entry naming a fixture
-// that has since rolled out of the fetch window can never silently bump an
-// unrelated match that happens to reuse an old id.
-export function applyGeminiTieBreakBonus(dayMatches, pickId, { scoreField = 'planningScore' } = {}) {
-  if (!pickId) return;
-  const picked = dayMatches.find(m => m.id === pickId);
-  if (!picked || !Number.isFinite(picked[scoreField])) return;
-  picked[scoreField] = Math.round((picked[scoreField] + GEMINI_TIE_BREAK_BONUS) * 1e6) / 1e6;
+// Decides whether a cached Gemini answer for `dayKey` still applies to
+// THIS render, and if so, which matchId to force in. `close` is this
+// render's own FRESH call to selectGeminiTieBreakCandidates (never trust a
+// cache entry's candidate set blindly - a game finishing, or a score
+// moving enough to change who's even offered, must invalidate it, same
+// stale-cache posture the rest of this section already has).
+// `cacheEntry` is `{ candidateKey, pickId, fetchedAt }` or undefined/null
+// (app.js's own localStorage-backed cache, looked up by dayKey).
+// `pinnedForDay` is the VIEWER's OWN explicit pins (a Set<matchId> or
+// null) - an explicit human pin in the same conflict cluster ALWAYS wins;
+// Gemini's own answer never overrides a viewer's own swipe.
+// Returns null (no override) unless every check passes.
+export function resolveGeminiOverridePin(dayMatches, close, cacheEntry, pinnedForDay = null) {
+  if (!close || !cacheEntry || !cacheEntry.pickId) return null;
+  if (tieBreakCandidateKey(close) !== cacheEntry.candidateKey) return null;
+  if (!close.some(m => m.id === cacheEntry.pickId)) return null;
+  const pinnedSet = pinnedForDay instanceof Set ? pinnedForDay : new Set(pinnedForDay || []);
+  if (pinnedSet.size) {
+    const clusters = groupIntoSlots(dayMatches.filter(m => !isQuietHours(m)));
+    const cluster = clusters.find(c => c.members.some(m => m.id === cacheEntry.pickId));
+    const clusterIds = new Set(cluster ? cluster.members.map(m => m.id) : [cacheEntry.pickId]);
+    if ([...pinnedSet].some(id => clusterIds.has(id))) return null;
+  }
+  return cacheEntry.pickId;
+}
+
+// The one entry point app.js's render path actually calls: runs
+// computeDayPlan once (the plan absent any Gemini involvement - this is
+// also what selectGeminiTieBreakCandidates itself needs to see what's
+// close), and, only if resolveGeminiOverridePin finds a still-valid cached
+// answer that isn't blocked by a viewer's own pin, runs it AGAIN with that
+// pick FORCED IN via the exact same pinnedForDay mechanism a real swipe-to-
+// pin already uses - see this section's own Round 35 comment for why a
+// hard pin, not a score nudge. computeDayPlan fully resets every match's
+// own `.recommended`/`.alternativeIds` at the top of each call (see its
+// own comment), so calling it twice on the same `dayMatches` array is
+// safe: whichever call ran LAST is what's left mutated onto the matches,
+// exactly what should render.
+// Returns `{ picks, close }` - `picks` is computeDayPlan's own return
+// value (ready to render), `close` is handed straight to app.js's own
+// maybeRequestGeminiTieBreak so it never has to recompute the same
+// selection a second time.
+export function computeDayPlanWithGeminiTieBreak(dayKey, dayMatches, pinnedForDay, cacheEntry, { scoreField = 'planningScore' } = {}) {
+  const natural = computeDayPlan(dayKey, dayMatches, pinnedForDay, { scoreField });
+  const close = selectGeminiTieBreakCandidates(dayMatches, { scoreField });
+  const overridePickId = resolveGeminiOverridePin(dayMatches, close, cacheEntry, pinnedForDay);
+  if (!overridePickId) return { picks: natural, close };
+  const pinnedWithOverride = new Set(pinnedForDay ? [...pinnedForDay] : []);
+  pinnedWithOverride.add(overridePickId);
+  const picks = computeDayPlan(dayKey, dayMatches, pinnedWithOverride, { scoreField });
+  return { picks, close };
 }
 
 // Runs computeDayPlan once per day across a whole fetched window.

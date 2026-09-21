@@ -156,13 +156,17 @@ unaddressed, same posture as `docs/recommendation-engine-audit.md`):
   position stakes signal (Champions League/relegation proximity - see
   `parseEplStandingsResponse`, `public/lib/sport-signals.mjs`), just not
   the recent-form depth MLB/NBA get from their own standings sources.
-- **No injury data, and no real-time media/narrative signal at all.**
-  Neither is knowable from data this build already fetches, and adding
-  either back would mean either a new paid data source or a working
-  real-time search/grounding integration - deliberately not attempted
-  again without that being a real, separate, budgeted decision (see
-  `docs/recommendation-engine-audit.md`'s Round 9/11 for why the AI-search
-  route was tried and abandoned).
+- **No injury data, and no real-time media/narrative signal, in the
+  deterministic scoring engine itself.** Neither is knowable from data
+  `objective-score.mjs`/`sport-signals.mjs` already fetch, and this
+  engine's own per-fixture score still doesn't have either - adding either
+  back INTO the deterministic score for every fixture would mean a new
+  paid data source or the same per-fixture search/grounding integration
+  Round 9/11 tried and abandoned for burning free-tier quota. Round 32/35
+  DID reintroduce real, current, Google-Search-grounded knowledge, but
+  narrowly: as an optional, at-most-once-a-day tie-break for one day's
+  headline slot (see "`MATCH_RECOMMEND_PROXY_URL`" above), never as an
+  input to `objective-score.mjs`'s own score for every fixture.
 - **F1's per-race modifiers (safety car, weather) aren't modeled.** Neither
   is knowable before a race starts from data this build already has, and
   adding real weather data would mean taking on a new API key/dependency
@@ -1087,7 +1091,7 @@ Worker. If you fork this repo and deploy your own shared-proxy Worker,
 update that constant to your own Worker's base URL (**no path suffix**);
 there's no environment variable to set instead.
 
-### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32)
+### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32/35)
 
 As of `docs/recommendation-engine-audit.md`'s Round 11, Match Find's
 deterministic engine was the sole source of truth for every fixture's score
@@ -1095,11 +1099,18 @@ deterministic engine was the sole source of truth for every fixture's score
 (`/match-recommend`, on that repo's *other*, `orbit-workers-proxy` Worker -
 the same one Orbit/Orbit Vocab's AI features already live on, not
 `sports-proxy`), used as an at-most-once-per-day tie-break for whichever
-day's headline slot the deterministic engine's own top few candidates are
-genuinely too close to call with confidence - see `./lib/recommendation.mjs`'s
-"Gemini bounded daily tie-break" section for the concrete trace that led to
-this and why it's a fundamentally different, much narrower shape than the
-per-fixture validation call Round 11 removed.
+day's headline slot the deterministic engine's own top pick has a real
+alternative for - see `./lib/recommendation.mjs`'s "Gemini bounded daily
+tie-break" section for the concrete trace that led to this and why it's a
+fundamentally different, much narrower shape than the per-fixture
+validation call Round 11 removed. Round 35 (live-reported: the deterministic
+pick was still winning over the user's own validated expectation) hardened
+this twice: the answer is now FORCED IN via `computeDayPlan`'s own pin
+mechanism (the exact one a viewer's own swipe-to-pin already uses) rather
+than a score nudge that could fail to overcome a wide-enough gap, and
+Google Search grounding is back on for this one call (per direct
+instruction, since its cached, at-most-once-a-day volume makes the quota
+concern that killed Round 9's PER-FIXTURE grounded calls a non-issue here).
 
 This is entirely optional: `MATCH_RECOMMEND_PROXY_URL` in `public/app.js`
 is empty by default, and every call site (`maybeRequestGeminiTieBreak`)

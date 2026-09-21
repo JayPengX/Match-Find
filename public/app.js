@@ -60,7 +60,6 @@
 import {
   SERVICES,
   resolveService,
-  computeDayPlan,
   resolveViewingPlan,
   slotKeyFromMembers,
   groupIntoSlots,
@@ -73,9 +72,9 @@ import {
   LIFECYCLE_STATES,
   estimatedDurationMinutes,
   estimateLiveDurationMinutes,
-  selectGeminiTieBreakCandidates,
   buildGeminiTieBreakPayload,
-  applyGeminiTieBreakBonus
+  tieBreakCandidateKey,
+  computeDayPlanWithGeminiTieBreak
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 import {
@@ -1162,15 +1161,19 @@ function dayLabelFor(date, { short = false } = {}) {
 
 // ---- Gemini bounded daily tie-break cache ---------------------------------
 //
-// See MATCH_RECOMMEND_PROXY_URL's own comment and ./lib/recommendation.mjs's
-// "Gemini bounded daily tie-break" section for the full design (Round 32).
-// This part owns the actual network call and the per-day cache that keeps
-// it to AT MOST ONE live call per (dayKey, exact candidate-id-set): every
-// other render for the same day+candidates reads the cached answer straight
-// out of localStorage, and applyCachedGeminiTieBreak (called from
-// dayCandidatesForPlan below) applies whatever's cached entirely
-// synchronously, the same layer/timing applyLiveExcitementBonus already
-// uses - a viewer never waits on a network round trip to see a plan render.
+// See MATCH_RECOMMEND_PROXY_URL's own comment and
+// ./lib/recommendation.mjs's "Gemini bounded daily tie-break" section for
+// the full design (Round 32, redesigned Round 35). This part owns the
+// actual network call and the per-day cache that keeps it to AT MOST ONE
+// live call per (dayKey, exact candidate-id-set): every other render for
+// the same day+candidates reads the cached answer straight out of
+// localStorage. Round 35: this is no longer an additive score nudge -
+// `computeDayPlanWithGeminiTieBreak` (called from renderRecommendedSection)
+// forces a valid cached pick in via computeDayPlan's own pinnedForDay
+// mechanism, the same one a real user pin already uses, so it wins its
+// slot UNCONDITIONALLY rather than only when a score bonus happens to be
+// big enough - see that function's own comment for why a bonus wasn't
+// good enough to guarantee the user's own validated result.
 const GEMINI_TIE_BREAK_CACHE_STORAGE_KEY = 'matchfind-gemini-tiebreak-cache';
 // A day's own candidates/scores can shift as standings/odds/live scores
 // update through the day - 24h keeps a good answer from going stale across
@@ -1183,12 +1186,12 @@ const GEMINI_TIE_BREAK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 // full day.
 const GEMINI_TIE_BREAK_FAILURE_TTL_MS = 2 * 60 * 60 * 1000;
 
-// Memoized in-memory after the first read - dayCandidatesForPlan calls
-// applyCachedGeminiTieBreak on every render (including near-term/live-poll
-// refreshes, far more often than this cache ever actually changes), so
-// re-reading and JSON.parse-ing localStorage that often would be pure waste
-// (see this repo's own Round 59/60 client-side performance passes for why
-// that matters here). Invalidated only by saveGeminiTieBreakCache itself.
+// Memoized in-memory after the first read - renderRecommendedSection reads
+// this on every render (including near-term/live-poll refreshes, far more
+// often than this cache ever actually changes), so re-reading and
+// JSON.parse-ing localStorage that often would be pure waste (see this
+// repo's own Round 59/60 client-side performance passes for why that
+// matters here). Invalidated only by saveGeminiTieBreakCache itself.
 let geminiTieBreakCacheMemo = null;
 function loadGeminiTieBreakCache() {
   if (geminiTieBreakCacheMemo) return geminiTieBreakCacheMemo;
@@ -1211,43 +1214,20 @@ function saveGeminiTieBreakCache(cache) {
   }
 }
 
-// Stable regardless of candidate order - two calls offering the same set of
-// fixtures in a different order (a real possibility since scores can move
-// slightly between renders) must hit the same cache entry, not silently
-// bypass it and fire a second live call.
-function geminiTieBreakCandidateKey(candidates) {
-  return candidates.map(c => c.id).sort().join(',');
-}
-
-// Applied from dayCandidatesForPlan, BEFORE computeDayPlan runs - entirely
-// synchronous (no network here), same timing applyLiveExcitementBonus
-// already uses. A cache entry only ever applies to the EXACT candidate-id-
-// set it was fetched for (see geminiTieBreakCandidateKey); once
-// selectGeminiTieBreakCandidates would choose a different set (a game
-// finished, a score moved enough to change who's "close"), the old answer
-// is simply never looked up again - left to expire on its own TTL rather
-// than needing to be actively invalidated.
-function applyCachedGeminiTieBreak(dayKey, dayCandidates) {
-  const entry = loadGeminiTieBreakCache()[dayKey];
-  if (!entry || !entry.pickId || Date.now() - entry.fetchedAt > GEMINI_TIE_BREAK_CACHE_TTL_MS) return;
-  applyGeminiTieBreakBonus(dayCandidates, entry.pickId, { scoreField: 'planningScore' });
-}
-
-// Fire-and-forget: checks whether this day's already-computed plan
-// (dayMatches, post-computeDayPlan - `.recommended`/`.alternativeIds` must
-// already be set) has a genuine close call per selectGeminiTieBreakCandidates,
-// and if so and nothing fresh is cached yet for this exact candidate set,
-// asks Shared-Proxy's /match-recommend for a tie-break and caches the
-// answer. Called after every render of the currently-selected day (see
-// renderRecommendedSection) but almost always a cheap no-op: MATCH_RECOMMEND_
-// PROXY_URL unset, no close call today, or already answered/cached/
-// recently-failed - a live network request only actually fires the first
-// time a given day's close call is seen.
-async function maybeRequestGeminiTieBreak(dayKey, dayMatches) {
-  if (!MATCH_RECOMMEND_PROXY_URL) return;
-  const close = selectGeminiTieBreakCandidates(dayMatches, { scoreField: 'planningScore' });
-  if (!close) return;
-  const candidateKey = geminiTieBreakCandidateKey(close);
+// Fire-and-forget: `close` is renderRecommendedSection's own fresh call to
+// selectGeminiTieBreakCandidates (via computeDayPlanWithGeminiTieBreak's
+// return) - null means today's top pick has no real alternative at all,
+// nothing to ask about. Asks Shared-Proxy's /match-recommend for a tie-
+// break and caches the answer, but only when nothing fresh is already
+// cached for this exact candidate set - almost always a cheap synchronous
+// no-op (MATCH_RECOMMEND_PROXY_URL unset, no close call today, or already
+// answered/cached/recently-failed); a live network request only actually
+// fires the first time a given day's close call is seen. A genuinely NEW
+// pick triggers one re-render so computeDayPlanWithGeminiTieBreak's next
+// call picks it up and forces it in.
+async function maybeRequestGeminiTieBreak(dayKey, close) {
+  if (!MATCH_RECOMMEND_PROXY_URL || !close) return;
+  const candidateKey = tieBreakCandidateKey(close);
   const cache = loadGeminiTieBreakCache();
   const entry = cache[dayKey];
   if (entry && entry.candidateKey === candidateKey) {
@@ -1261,7 +1241,7 @@ async function maybeRequestGeminiTieBreak(dayKey, dayMatches) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildGeminiTieBreakPayload(dayKey, close, { scoreField: 'planningScore' })),
-      signal: AbortSignal.timeout(15_000)
+      signal: AbortSignal.timeout(30_000)
     });
     if (response.ok) {
       const data = await response.json();
@@ -1277,9 +1257,10 @@ async function maybeRequestGeminiTieBreak(dayKey, dayMatches) {
   }
   cache[dayKey] = { candidateKey, pickId, reason, fetchedAt: Date.now() };
   saveGeminiTieBreakCache(cache);
-  // Only a genuinely NEW pick needs a fresh render - it gets picked up via
-  // applyCachedGeminiTieBreak on that next pass. A cached failure needs no
-  // re-render at all: nothing about the already-rendered plan changes.
+  // Only a genuinely NEW pick needs a fresh render - the next
+  // computeDayPlanWithGeminiTieBreak call picks it up and forces it in. A
+  // cached failure needs no re-render at all: nothing about the
+  // already-rendered plan changes.
   if (pickId) renderSections();
 }
 
@@ -1288,11 +1269,13 @@ async function maybeRequestGeminiTieBreak(dayKey, dayMatches) {
 // pinSlotChoice below can ask "what would the algorithm pick here on its
 // own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
 // the actual rendered plan uses, rather than a second, slightly different
-// computation that could disagree with what's on screen.
+// computation that could disagree with what's on screen. Deliberately does
+// NOT involve the Gemini tie-break (see renderRecommendedSection's own
+// comment) - pinSlotChoice's own "natural" question is about a viewer's
+// manual pin, a separate concern.
 function dayCandidatesForPlan(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
   applyLiveExcitementBonus(dayCandidates);
-  applyCachedGeminiTieBreak(dayKey, dayCandidates);
   return dayCandidates;
 }
 
@@ -2142,11 +2125,20 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
-  // Fire-and-forget - never awaited, never blocks this render. See its own
-  // comment: almost always a cheap no-op, and never anything but a NUDGE on
-  // top of the plan that's about to render below either way.
-  maybeRequestGeminiTieBreak(dayKey, dayCandidates);
+  // computeDayPlanWithGeminiTieBreak runs computeDayPlan itself (once, or
+  // twice if a valid cached Gemini pick needs forcing in - see that
+  // function's own comment) - never call computeDayPlan directly here as
+  // well, or the second call would just overwrite whatever this one did.
+  const { picks: dayPlan, close } = computeDayPlanWithGeminiTieBreak(
+    dayKey,
+    dayCandidates,
+    state.pinnedChoices.get(dayKey),
+    loadGeminiTieBreakCache()[dayKey],
+    { scoreField: 'planningScore' }
+  );
+  // Fire-and-forget - never awaited, never blocks this render. Almost
+  // always a cheap no-op; see its own comment.
+  maybeRequestGeminiTieBreak(dayKey, close);
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {

@@ -57,9 +57,9 @@ import {
   ALTERNATIVE_MAX_SCORE_GAP,
   selectGeminiTieBreakCandidates,
   buildGeminiTieBreakPayload,
-  applyGeminiTieBreakBonus,
-  GEMINI_TIE_BREAK_MARGIN,
-  GEMINI_TIE_BREAK_BONUS,
+  tieBreakCandidateKey,
+  resolveGeminiOverridePin,
+  computeDayPlanWithGeminiTieBreak,
   GEMINI_TIE_BREAK_MAX_CANDIDATES
 } from '../public/lib/recommendation.mjs';
 
@@ -1249,99 +1249,193 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
-describe('Gemini bounded daily tie-break (selectGeminiTieBreakCandidates/buildGeminiTieBreakPayload/applyGeminiTieBreakBonus)', () => {
-  function planFor(matches) {
+describe('Gemini bounded daily tie-break (Round 35: a hard pin, not a score nudge)', () => {
+  function planFor(matches, pinnedForDay = null) {
     applyLiveExcitementBonus(matches);
-    computeDayPlan('2026-09-19', matches, null, { scoreField: 'planningScore' });
+    computeDayPlan('2026-09-19', matches, pinnedForDay, { scoreField: 'planningScore' });
     return matches;
   }
 
-  test('returns null when the top pick has no alternatives at all', () => {
-    const a = makeMatch({ id: 'a', effectiveScore: 8 });
-    const day = planFor([a]);
-    assert.equal(selectGeminiTieBreakCandidates(day), null);
-  });
-
-  test('returns null when the runner-up is not within GEMINI_TIE_BREAK_MARGIN', () => {
-    const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-    const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 - GEMINI_TIE_BREAK_MARGIN - 0.1 });
-    const day = planFor([a, b]);
-    assert.equal(selectGeminiTieBreakCandidates(day), null);
-  });
-
-  test('returns the close candidates, highest score first, when within the margin', () => {
-    const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-    const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 - GEMINI_TIE_BREAK_MARGIN + 0.01 });
-    const day = planFor([a, b]);
-    const close = selectGeminiTieBreakCandidates(day);
-    assert.ok(close);
-    assert.equal(close.length, 2);
-    assert.equal(close[0].id, 'a');
-    assert.equal(close[1].id, 'b');
-  });
-
-  test('caps the offered set at GEMINI_TIE_BREAK_MAX_CANDIDATES even when more are within the margin', () => {
-    const matches = [0, 1, 2, 3, 4].map(i =>
-      makeMatch({ id: `m${i}`, startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 - i * 0.1 })
-    );
-    const day = planFor(matches);
-    const close = selectGeminiTieBreakCandidates(day);
-    assert.equal(close.length, GEMINI_TIE_BREAK_MAX_CANDIDATES);
-  });
-
-  test('buildGeminiTieBreakPayload carries id/sport/name/score/reason/facts straight from each candidate', () => {
-    const a = makeMatch({
-      id: 'a',
-      name: 'A @ B',
-      sport: 'MLB',
-      startTimeUtc: NOON_UTC,
-      durationMinutes: 190,
-      effectiveScore: 8,
-      reason: 'r',
-      objectiveFactors: ['f1', 'f2']
+  describe('selectGeminiTieBreakCandidates', () => {
+    test('returns null when the top pick has no alternatives at all', () => {
+      const a = makeMatch({ id: 'a', effectiveScore: 8 });
+      const day = planFor([a]);
+      assert.equal(selectGeminiTieBreakCandidates(day), null);
     });
-    const b = makeMatch({ id: 'b', name: 'C @ D', sport: 'MLB', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.6 });
-    const day = planFor([a, b]);
-    const close = selectGeminiTieBreakCandidates(day);
-    const payload = buildGeminiTieBreakPayload('2026-09-19', close);
-    assert.equal(payload.day, '2026-09-19');
-    assert.equal(payload.candidates.length, 2);
-    assert.deepEqual(payload.candidates[0], {
-      id: 'a',
-      sport: 'MLB',
-      name: 'A @ B',
-      score: day.find(m => m.id === 'a').planningScore,
-      reason: 'r',
-      facts: ['f1', 'f2']
+
+    test('offers every alternative computeDayPlan itself already considers close (no separate, extra margin)', () => {
+      // A gap of 0.7 - live-verified TOO WIDE for the old, separate
+      // GEMINI_TIE_BREAK_MARGIN (0.5) that Round 35 removed, but well
+      // within this file's own ALTERNATIVE_MAX_SCORE_GAP (2.5), so
+      // computeDayPlan already shows b as a swipeable alternative. It must
+      // still be offered to Gemini - this is the exact live bug (Tampa Bay
+      // Rays @ New York Yankees excluded from ever being asked about) this
+      // round fixes.
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      assert.ok(close);
+      assert.equal(close.length, 2);
+      assert.equal(close[0].id, 'a');
+      assert.equal(close[1].id, 'b');
     });
-    // A candidate with no reason/facts set still gets safe defaults, never
-    // undefined - this becomes a prompt string on Shared-Proxy's side.
-    assert.equal(payload.candidates[1].reason, '');
-    assert.deepEqual(payload.candidates[1].facts, []);
+
+    test('returns null when there genuinely is no alternative (gap beyond ALTERNATIVE_MAX_SCORE_GAP)', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 - ALTERNATIVE_MAX_SCORE_GAP - 0.1 });
+      const day = planFor([a, b]);
+      assert.equal(selectGeminiTieBreakCandidates(day), null);
+    });
+
+    test('caps the offered set at GEMINI_TIE_BREAK_MAX_CANDIDATES', () => {
+      const matches = [0, 1, 2, 3, 4].map(i =>
+        makeMatch({ id: `m${i}`, startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 - i * 0.1 })
+      );
+      const day = planFor(matches);
+      const close = selectGeminiTieBreakCandidates(day);
+      assert.equal(close.length, GEMINI_TIE_BREAK_MAX_CANDIDATES);
+    });
   });
 
-  test('applyGeminiTieBreakBonus adds GEMINI_TIE_BREAK_BONUS to only the picked candidate', () => {
-    const a = makeMatch({ id: 'a', planningScore: 5 });
-    const b = makeMatch({ id: 'b', planningScore: 6 });
-    applyGeminiTieBreakBonus([a, b], 'a');
-    assert.equal(a.planningScore, 5 + GEMINI_TIE_BREAK_BONUS);
-    assert.equal(b.planningScore, 6);
+  describe('tieBreakCandidateKey', () => {
+    test('is stable regardless of input order', () => {
+      const a = { id: 'a' };
+      const b = { id: 'b' };
+      assert.equal(tieBreakCandidateKey([a, b]), tieBreakCandidateKey([b, a]));
+    });
   });
 
-  test('applyGeminiTieBreakBonus is a no-op for an id no longer present (stale cache safety)', () => {
-    const a = makeMatch({ id: 'a', planningScore: 5 });
-    applyGeminiTieBreakBonus([a], 'stale-id-from-an-old-cache-entry');
-    assert.equal(a.planningScore, 5);
+  describe('buildGeminiTieBreakPayload', () => {
+    test('carries id/sport/name/score/reason/facts straight from each candidate, with safe defaults', () => {
+      const a = makeMatch({
+        id: 'a',
+        name: 'A @ B',
+        sport: 'MLB',
+        startTimeUtc: NOON_UTC,
+        durationMinutes: 190,
+        effectiveScore: 8,
+        reason: 'r',
+        objectiveFactors: ['f1', 'f2']
+      });
+      const b = makeMatch({ id: 'b', name: 'C @ D', sport: 'MLB', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.6 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      const payload = buildGeminiTieBreakPayload('2026-09-19', close);
+      assert.equal(payload.day, '2026-09-19');
+      assert.equal(payload.candidates.length, 2);
+      assert.deepEqual(payload.candidates[0], {
+        id: 'a',
+        sport: 'MLB',
+        name: 'A @ B',
+        score: day.find(m => m.id === 'a').planningScore,
+        reason: 'r',
+        facts: ['f1', 'f2']
+      });
+      assert.equal(payload.candidates[1].reason, '');
+      assert.deepEqual(payload.candidates[1].facts, []);
+    });
   });
 
-  test('applied before computeDayPlan, the bonus can flip which candidate wins the slot', () => {
-    const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-    const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.6 });
-    applyLiveExcitementBonus([a, b]);
-    // b trails by 0.4 (within GEMINI_TIE_BREAK_MARGIN) - a bonus of 1 flips it.
-    applyGeminiTieBreakBonus([a, b], 'b');
-    computeDayPlan('2026-09-19', [a, b], null, { scoreField: 'planningScore' });
-    assert.equal(a.recommended, false);
-    assert.equal(b.recommended, true);
+  describe('resolveGeminiOverridePin', () => {
+    test('returns null when there is no cached pick at all', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      assert.equal(resolveGeminiOverridePin(day, close, null), null);
+      assert.equal(resolveGeminiOverridePin(day, close, { candidateKey: tieBreakCandidateKey(close), pickId: null }), null);
+    });
+
+    test('returns null when the cached candidateKey no longer matches (stale cache safety)', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      const stale = { candidateKey: 'some-other-id,another-id', pickId: 'b' };
+      assert.equal(resolveGeminiOverridePin(day, close, stale), null);
+    });
+
+    test('returns null when the cached pickId is not one of the currently-offered candidates', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'not-actually-offered' };
+      assert.equal(resolveGeminiOverridePin(day, close, entry), null);
+    });
+
+    test('returns the pickId when the cache is fresh and valid', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([a, b]);
+      const close = selectGeminiTieBreakCandidates(day);
+      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
+      assert.equal(resolveGeminiOverridePin(day, close, entry), 'b');
+    });
+
+    test('an explicit human pin in the same conflict cluster always wins over Gemini\'s own pick', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      // The viewer has pinned 'a' for this exact slot.
+      const day = planFor([a, b], new Set(['a']));
+      const close = selectGeminiTieBreakCandidates(day);
+      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
+      assert.equal(resolveGeminiOverridePin(day, close, entry, new Set(['a'])), null);
+    });
+
+    test('a human pin on a DIFFERENT, non-conflicting slot does not block Gemini\'s own pick', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      // c starts well after a/b's own slot ends - a totally separate pin.
+      const c = makeMatch({ id: 'c', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 5 });
+      const day = planFor([a, b, c], new Set(['c']));
+      const close = selectGeminiTieBreakCandidates(day);
+      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
+      assert.equal(resolveGeminiOverridePin(day, close, entry, new Set(['c'])), 'b');
+    });
+  });
+
+  describe('computeDayPlanWithGeminiTieBreak', () => {
+    test('with no cache entry, behaves exactly like a plain computeDayPlan call', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      applyLiveExcitementBonus([a, b]);
+      const { picks, close } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], null, null, { scoreField: 'planningScore' });
+      assert.equal(a.recommended, true);
+      assert.equal(b.recommended, false);
+      assert.equal(picks.length, 1);
+      assert.equal(picks[0].id, 'a');
+      assert.equal(close.length, 2); // still surfaces the close call for app.js to ask about
+    });
+
+    test('a valid cached pick wins its slot UNCONDITIONALLY, regardless of how wide the score gap is - this is the whole point of Round 35', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
+      // b trails by a full 2.0 - nowhere near the old, removed 0.5 margin,
+      // and still not enough for a mere score bonus to safely guarantee a
+      // flip - the hard pin guarantees it regardless.
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.0 });
+      applyLiveExcitementBonus([a, b]);
+      computeDayPlan('2026-09-19', [a, b], null, { scoreField: 'planningScore' });
+      const naturalClose = selectGeminiTieBreakCandidates([a, b], { scoreField: 'planningScore' });
+      const cacheEntry = { candidateKey: tieBreakCandidateKey(naturalClose), pickId: 'b' };
+      const { picks } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], null, cacheEntry, { scoreField: 'planningScore' });
+      assert.equal(a.recommended, false);
+      assert.equal(b.recommended, true);
+      assert.equal(picks.length, 1);
+      assert.equal(picks[0].id, 'b');
+    });
+
+    test('a viewer\'s own explicit pin still overrides the cached Gemini pick', () => {
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.0 });
+      applyLiveExcitementBonus([a, b]);
+      computeDayPlan('2026-09-19', [a, b], null, { scoreField: 'planningScore' });
+      const naturalClose = selectGeminiTieBreakCandidates([a, b], { scoreField: 'planningScore' });
+      const cacheEntry = { candidateKey: tieBreakCandidateKey(naturalClose), pickId: 'b' };
+      const { picks } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], new Set(['a']), cacheEntry, { scoreField: 'planningScore' });
+      assert.equal(a.recommended, true);
+      assert.equal(picks[0].id, 'a');
+    });
   });
 });
