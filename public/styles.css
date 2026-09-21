@@ -1024,8 +1024,17 @@ main#app {
    fetch funnel through) hides this the moment either produces something to
    show; init()'s own total-failure path hides it too, in favor of
    #error-state's own explicit message - a spinner that never resolves
-   would be worse than the blank page it replaces. */
-.loading-state {
+   would be worse than the blank page it replaces.
+
+   `:not([hidden])` matters here, not just style - a plain `.loading-state`
+   selector has the SAME specificity as the browser's own built-in
+   `[hidden] { display: none }` rule, but an author stylesheet's normal
+   rules always beat the user-agent stylesheet's, specificity tie or not -
+   so setting `display: flex` unconditionally here silently overrode
+   `loadingStateEl.hidden = true` in app.js: the attribute got set, but the
+   element never actually disappeared. Live-reported as "the spinner is
+   still up even after everything's loaded" - this is that bug. */
+.loading-state:not([hidden]) {
   display: flex;
   flex-direction: column;
   align-items: center;
