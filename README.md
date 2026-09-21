@@ -719,6 +719,12 @@ report, plus two further, real-time-only refinements built from them:
   corrects its schedule-blocking length in real time instead of staying
   pinned to a single pre-game guess for its whole broadcast.
 
+Each team row also shows a `.team-score` (`buildTeamRow` in `public/app.js`)
+whenever the match is genuinely LIVE/ENDING_SOON or already finished - never
+pre-game, where ESPN's own "0" isn't a real score yet, just the absence of
+one. This is the actual score; the widgets below only ever show in-progress
+DETAIL (inning, quarter, lap) around it, never the score itself.
+
 Each live poll also writes a `match.live` object with whatever in-progress
 detail ESPN reports for that sport, rendered as a small icon-led widget
 right under the team names (`buildLiveStatusNode` in `public/app.js`, only
@@ -728,15 +734,22 @@ was reported as easy to miss scanning a busy list of cards:
 
 - **MLB**: a small broadcast-style diamond (`.live-diamond`) with a dot at
   each of 1st/2nd/3rd that lights up green exactly when a runner is
-  actually on it, next to the inning + half ("第 6 局上/下/中/完"), an
-  outs indicator (3 dots, filled as outs accrue), and the current
-  ball-strike count - from ESPN's own `competition.situation` object
-  (`public/lib/espn.mjs`'s `extractLiveUpdates`).
+  actually on it, next to the inning + half ("第 6 局上/下/中/完") and an
+  outs indicator (3 dots, filled as outs accrue) - from ESPN's own
+  `competition.situation` object (`public/lib/espn.mjs`'s
+  `extractLiveUpdates`). The ball-strike count from that same object is
+  deliberately NOT shown - it changes on every single pitch (seconds
+  apart), so a fixed 30s poll interval almost never catches the current
+  count, only a stale one.
 - **NBA**: a pulsing live dot plus the quarter ("第 N 節", OT beyond the
-  4th) and game clock.
+  4th) and ESPN's own last-reported game clock - never locally ticked
+  between polls, so it correctly holds at the exact recorded time until
+  the next update lands rather than counting down on its own.
 - **Premier League**: a pulsing live dot plus the half (上半場/下半場) and
-  match clock, or ESPN's own state word (e.g. a halftime label) shown as-is
-  when there's no numeric clock to attach it to.
+  ESPN's own match clock (which already includes stoppage time in its own
+  text, e.g. "45'+2'") - or ESPN's own state word (e.g. a halftime label)
+  shown as-is when there's no numeric clock to attach it to. Same as NBA,
+  this is ESPN's own last-reported value, never locally ticked.
 - **F1**: a small colored flag icon (green/yellow/red/safety-car/checkered,
   read from ESPN's own status text, e.g. "Safety Car" or "Checkered Flag" -
   the caution flags flash to catch the eye the way a real broadcast overlay
@@ -745,9 +758,37 @@ was reported as easy to miss scanning a busy list of cards:
   match-builder.mjs already uses for the schedule, this time for its
   per-session `competitors` array (drivers, ordered by ESPN's own live
   classification). The race's current top 3 also renders as its own row of
-  medal-colored rank chips (gold/silver/bronze) right under the static
-  outright win% chips (see "Live win% odds" below) - live running order as
-  context for those odds, not a replacement.
+  medal-colored rank chips (gold/silver/bronze), each with that driver's
+  own nationality flag (`athlete.flag` - the one real per-driver icon this
+  API actually has; there's no headshot or constructor/team field at all)
+  and a gap/interval figure IF ESPN ever reports one (checked against
+  several real race weekends - `competitor.statistics` came back empty
+  every time, so this is read defensively rather than guessed/computed),
+  right under the static outright win% chips (see "Live win% odds" below) -
+  live running order as context for those odds, not a replacement.
+
+## Foreground-return refresh and the "next update" countdown
+
+Every refresh timer above (near-term/full-window/live-poll) reschedules
+itself on its own fixed interval even while the tab is hidden - it just
+skips the actual fetch each tick (see each one's own comment in
+`public/app.js`). Left alone, a tab backgrounded for several minutes and
+brought back gets nothing fresher until whichever timer next happens to
+fire, by accident of when it was hidden - reads as "the app doesn't notice
+I came back" even though a refresh was genuinely overdue. A
+`visibilitychange` listener (`handleForegroundReturn`) tracks how long the
+tab was actually hidden and, once it's visible again, forces an immediate
+near-term refresh + live poll right away (plus the full window too, if the
+tab was away at least `FULL_REFRESH_MS` itself) - but only once the tab was
+away longer than `FOREGROUND_STALE_MS` (30 seconds), so a quick app-switch-
+and-back doesn't double up on a refresh that just ran moments ago.
+
+A small `#next-update-note` readout in the footer ticks down every second
+to the soonest of the three tiers' own next-scheduled instant (the live
+poll only counts while something's actually worth polling - see
+`matchWorthPollingNow`), so a viewer watching a live match can see exactly
+when its next update is coming rather than only finding out after the
+fact.
 
 ## Live win% odds
 

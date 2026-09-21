@@ -151,9 +151,32 @@ export function f1LiveScoreboardUrl(now = new Date()) {
 
 // Top three by `order` (ESPN's own current-classification field - live
 // running order during the race itself, final finishing order once it's
-// over) as {name, position} - just enough for a short "誰目前領先" line
-// alongside this sport's own Polymarket outright-winner odds (see
-// app.js's f1LeaderboardLine), not a full 20-driver standings table.
+// over) as {name, position, flagUrl, flagAlt, interval} - just enough for a
+// short "誰目前領先" line alongside this sport's own Polymarket
+// outright-winner odds (see app.js's f1LeaderboardLine), not a full
+// 20-driver standings table. flagUrl/flagAlt come from ESPN's own
+// `athlete.flag` (a small nationality-flag image ESPN already serves for
+// every driver) - the only per-driver "icon" this API actually has; ESPN's
+// F1 competitor object has no headshot and no constructor/team field at
+// all (live-checked against several real race weekends, finished and
+// upcoming), so a flag is the one real, non-fabricated visual this can show
+// per driver rather than a generic silhouette. `interval` is read from
+// `competitor.statistics` on a best-effort basis ONLY - live-checked
+// against several real race weekends (both finished and in the days
+// immediately around one) and this array was empty([]) every single time,
+// suggesting ESPN's public site API may never actually populate a
+// live gap/interval figure here at all (that level of live timing detail
+// looks like it may be exclusive to F1's own timing feed, not ESPN's) -
+// this still reads it defensively (never guessed/computed locally) so it
+// picks it up automatically the moment ESPN ever does report it, rather
+// than requiring another code change later.
+function f1DriverInterval(statistics) {
+  const stat = (statistics || []).find(s =>
+    ['GAP', 'INTERVAL', 'TIME'].includes(String(s?.abbreviation || s?.name || '').toUpperCase())
+  );
+  return typeof stat?.displayValue === 'string' && stat.displayValue ? stat.displayValue : null;
+}
+
 export function extractF1LiveUpdates(scoreboardJson) {
   const updates = new Map();
   for (const event of scoreboardJson?.events || []) {
@@ -165,7 +188,13 @@ export function extractF1LiveUpdates(scoreboardJson) {
         .slice()
         .sort((a, b) => (Number(a.order) || 999) - (Number(b.order) || 999))
         .slice(0, 3)
-        .map(c => ({ name: c.athlete?.shortName || c.athlete?.fullName || '', position: Number(c.order) || null }));
+        .map(c => ({
+          name: c.athlete?.shortName || c.athlete?.fullName || '',
+          position: Number(c.order) || null,
+          flagUrl: c.athlete?.flag?.href || '',
+          flagAlt: c.athlete?.flag?.alt || '',
+          interval: f1DriverInterval(c.statistics)
+        }));
       const lap = Number(session.status?.period);
       updates.set(`f1-${event.id}-${abbreviation.toLowerCase()}`, {
         isLive: statusType.state === 'in',

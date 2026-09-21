@@ -148,9 +148,9 @@ describe('extractF1LiveUpdates', () => {
     assert.equal(update.lap, 23);
     assert.equal(update.statusDetail, 'Lap 23/53 - Safety Car');
     assert.deepEqual(update.leaderboard, [
-      { name: 'M. Verstappen', position: 1 },
-      { name: 'L. Norris', position: 2 },
-      { name: 'O. Piastri', position: 3 }
+      { name: 'M. Verstappen', position: 1, flagUrl: '', flagAlt: '', interval: null },
+      { name: 'L. Norris', position: 2, flagUrl: '', flagAlt: '', interval: null },
+      { name: 'O. Piastri', position: 3, flagUrl: '', flagAlt: '', interval: null }
     ]);
   });
 
@@ -172,7 +172,7 @@ describe('extractF1LiveUpdates', () => {
     const update = extractF1LiveUpdates(scoreboard).get('f1-600052060-race');
     assert.equal(update.isFinished, true);
     assert.equal(update.lap, 53);
-    assert.deepEqual(update.leaderboard, [{ name: 'M. Verstappen', position: 1 }]);
+    assert.deepEqual(update.leaderboard, [{ name: 'M. Verstappen', position: 1, flagUrl: '', flagAlt: '', interval: null }]);
   });
 
   test('a not-yet-started session (period 0, no competitors yet) has no lap/leaderboard', () => {
@@ -211,5 +211,41 @@ describe('extractF1LiveUpdates', () => {
     assert.equal(extractF1LiveUpdates({}).size, 0);
     assert.equal(extractF1LiveUpdates(null).size, 0);
     assert.equal(extractF1LiveUpdates({ events: [{ id: '1' }] }).size, 0);
+  });
+
+  test('reads each driver\'s nationality flag and a gap/interval stat when ESPN reports one', () => {
+    const scoreboard = {
+      events: [
+        {
+          id: '1',
+          competitions: [
+            {
+              type: { abbreviation: 'Race' },
+              status: { period: 10, type: { state: 'in' } },
+              competitors: [
+                {
+                  order: 1,
+                  athlete: {
+                    shortName: 'M. Verstappen',
+                    flag: { href: 'https://a.espncdn.com/i/teamlogos/countries/500/ned.png', alt: 'Netherlands' }
+                  },
+                  statistics: [{ abbreviation: 'GAP', displayValue: '+2.341' }]
+                },
+                { order: 2, athlete: { shortName: 'L. Norris' }, statistics: [] }
+              ]
+            }
+          ]
+        }
+      ]
+    };
+    const update = extractF1LiveUpdates(scoreboard).get('f1-1-race');
+    assert.deepEqual(update.leaderboard[0], {
+      name: 'M. Verstappen',
+      position: 1,
+      flagUrl: 'https://a.espncdn.com/i/teamlogos/countries/500/ned.png',
+      flagAlt: 'Netherlands',
+      interval: '+2.341'
+    });
+    assert.deepEqual(update.leaderboard[1], { name: 'L. Norris', position: 2, flagUrl: '', flagAlt: '', interval: null });
   });
 });

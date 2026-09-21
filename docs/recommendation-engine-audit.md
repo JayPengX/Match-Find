@@ -2437,3 +2437,86 @@ Live-verified post-fix (Playwright, same real Brewers @ Orioles game): the
 score rendered correctly (3-0) on the live card, correctly on two separate
 already-finished cards (7-2, 3-4), and stayed hidden on every pre-game
 card. Full suite still 326/326.
+
+## Round 22 (2026-09-21): foreground-return refresh, an update countdown, dropping the ball/strike count, F1 driver flags, and per-sport live coverage for real
+
+Six requests in one batch, since no game was actually live at request time
+(MLB is in-season but nothing in progress at the moment this was worked) -
+every claim below was verified with fabricated-but-real ESPN payloads (a
+real event, cloned and mutated only in `status`/`score`/`date`, never
+hand-typed from scratch) through the same Playwright network-relay harness
+prior rounds used, plus screenshots, rather than left unverified because
+"nothing's live right now".
+
+1. **Foreground-return refresh**: every refresh timer (`scheduleNearTermRefresh`/
+   `scheduleFullRefresh`/`scheduleLivePoll`, `public/app.js`) already
+   reschedules itself on its own fixed interval even while the tab is
+   hidden - it just skips the fetch each tick. A tab backgrounded for
+   several minutes and brought back got nothing fresher until whichever
+   timer next happened to fire, by accident of when it was hidden - reads
+   as "doesn't notice I came back". Added a `visibilitychange` listener
+   that tracks how long the tab was actually hidden and, once it's visible
+   again, forces an immediate near-term refresh + live poll (and the full
+   window too, if the tab was away at least as long as `FULL_REFRESH_MS`
+   itself) - but only past `FOREGROUND_STALE_MS` (30s) away, so a quick
+   app-switch-and-back doesn't double up on a refresh that just ran.
+   Live-verified via Playwright (`document.visibilityState` + a dispatched
+   `visibilitychange` event): 0 proxy calls while hidden, 0 calls within 2s
+   of a return from a SHORT (5s, under threshold) backgrounding, and 3
+   calls within 44ms-364ms of a return from a 35s backgrounding.
+2. **"Next update" countdown**: added `#next-update-note` (footer,
+   `public/index.html`) ticking down every second to the soonest of the
+   three refresh tiers' own next-scheduled instant (live poll only counted
+   while something's actually worth polling - no reason to dangle a
+   countdown for an idle no-op tick). Each `scheduleX` function now stamps
+   its own `nextXAt` the moment it (re)arms its timer, including from
+   `handleForegroundReturn` above, so this can never drift from what's
+   actually scheduled.
+3. **Dropped the ball/strike count**: `baseballLiveNode` used to show
+   ESPN's own `situation.balls`/`.strikes` (e.g. "2–1") next to the
+   diamond. Reported directly as useless: the count changes on every
+   single pitch (seconds apart), so a fixed 30s `LIVE_POLL_INTERVAL_MS`
+   tick almost never catches the CURRENT count, only a stale one from up to
+   half a minute ago. Removed; outs/baserunners/inning stay, since those
+   change on an at-bat-scale cadence this refresh rate actually keeps up
+   with. Live odds were already refreshed on every poll tick regardless of
+   lifecycle state (`matchWorthPollingNow` already returns true for
+   LIVE/ENDING_SOON) - re-verified, no change needed there.
+4. **F1 driver flag icons**: `extractF1LiveUpdates` (`public/lib/espn.mjs`)
+   now also reads each leaderboard driver's `athlete.flag` (a small
+   nationality-flag image ESPN already serves) - there is no headshot and
+   no constructor/team field anywhere in this API (checked against several
+   real race weekends, finished and upcoming), so a flag is the one real,
+   non-fabricated per-driver visual available, rather than a generic
+   silhouette that wouldn't actually distinguish drivers. Rendered as a
+   small `<img>` in each `live-leaderboard-chip` (`f1LeaderboardNode`,
+   `public/app.js`).
+5. **F1 interval/gap**: investigated whether ESPN's F1 scoreboard ever
+   reports a live gap-to-leader. `competitor.statistics` came back an empty
+   array `[]` on every real event checked - multiple different race
+   weekends, both finished races and ones several days out - suggesting
+   this level of live-timing detail may not be something ESPN's public
+   site API exposes at all (likely exclusive to F1's own timing feed).
+   Added best-effort, defensive extraction (`f1DriverInterval` reads
+   `competitor.statistics` for a GAP/INTERVAL/TIME-abbreviated stat if one
+   ever shows up) so this picks it up automatically the moment ESPN does
+   report it, without guessing or fabricating a number now. F1's own
+   flag-status detection (safety car/red flag/yellow, `f1FlagKey`) was
+   already in place from Round 19 - unchanged, re-verified with a
+   fabricated "Lap 23/53 - Safety Car" status.
+6. **Per-sport live coverage, confirmed with fixtures**: since nothing was
+   actually live, built `build_fixtures.mjs` (scratch, not committed) that
+   clones one real event per sport from ESPN's real scoreboard and mutates
+   only status/score/date to look live right now, then served those
+   through the same Playwright route-relay harness. Confirmed against real
+   rendered screenshots: MLB shows score + diamond/bases + outs (no
+   ball/strike count, see above); NBA shows score + quarter + `displayClock`
+   (already just ESPN's own last-reported clock text, never locally
+   ticked, so it already "stops at the exact recorded time until update" as
+   requested); EPL shows score + `displayClock` including ESPN's own
+   stoppage-time notation ("45'+2'" rendered correctly, unchanged code -
+   ESPN already includes stoppage minutes in this field); F1 shows lap,
+   flag-colored status, and a top-3 leaderboard with flags. Full suite
+   still 327/327 (2 existing F1 leaderboard-shape assertions updated for
+   the new flagUrl/flagAlt/interval fields, 1 new test added covering that
+   extraction).

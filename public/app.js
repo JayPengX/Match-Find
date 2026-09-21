@@ -418,6 +418,7 @@ const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
+const nextUpdateNote = document.getElementById('next-update-note');
 const tbdSection = document.getElementById('tbd-section');
 const tbdListEl = document.getElementById('tbd-list');
 const cardTemplate = document.getElementById('match-card-template');
@@ -836,15 +837,14 @@ function baseballLiveNode(match) {
     inningEl.textContent = inningLabel;
     textWrap.appendChild(inningEl);
   }
-  if (situation) {
-    if (Number.isFinite(situation.outs)) textWrap.appendChild(outDotsNode(situation.outs));
-    if (Number.isFinite(situation.balls) && Number.isFinite(situation.strikes)) {
-      const countEl = document.createElement('span');
-      countEl.className = 'live-chip-count';
-      countEl.textContent = `${situation.balls}–${situation.strikes}`;
-      textWrap.appendChild(countEl);
-    }
-  }
+  // Ball/strike count deliberately NOT shown, even though ESPN's own
+  // `situation` reports it - it changes on every single pitch (seconds
+  // apart), so a fixed LIVE_POLL_INTERVAL_MS (30s) tick almost never
+  // catches the CURRENT count, only a stale one from up to half a minute
+  // ago - reported directly as "useless" for exactly that reason. Outs and
+  // baserunners change on a much slower, at-bat-scale cadence this refresh
+  // rate actually keeps up with, so only those still render.
+  if (situation && Number.isFinite(situation.outs)) textWrap.appendChild(outDotsNode(situation.outs));
   wrap.appendChild(textWrap);
   return wrap;
 }
@@ -967,9 +967,32 @@ function f1LeaderboardNode(match) {
     rank.className = 'live-leaderboard-rank';
     rank.textContent = String(i + 1);
     chip.appendChild(rank);
+    // The nationality flag ESPN itself already serves per driver (see
+    // extractF1LiveUpdates's own comment - there's no headshot or
+    // constructor/team field in this API at all) - the one real per-driver
+    // icon available, rather than a generic helmet silhouette that
+    // wouldn't actually distinguish one driver from another.
+    if (driver.flagUrl) {
+      const flag = document.createElement('img');
+      flag.className = 'live-leaderboard-flag';
+      flag.src = driver.flagUrl;
+      flag.alt = driver.flagAlt || '';
+      flag.loading = 'lazy';
+      flag.referrerPolicy = 'no-referrer';
+      chip.appendChild(flag);
+    }
     const name = document.createElement('span');
     name.textContent = driver.name;
     chip.appendChild(name);
+    // Only ever shown when ESPN itself actually reported a gap - see
+    // extractF1LiveUpdates's own comment on why this has come back empty
+    // every time this was checked; never a locally-computed/guessed value.
+    if (driver.interval) {
+      const interval = document.createElement('span');
+      interval.className = 'live-leaderboard-interval';
+      interval.textContent = driver.interval;
+      chip.appendChild(interval);
+    }
     wrap.appendChild(chip);
   });
   return wrap;
@@ -2365,6 +2388,14 @@ const FULL_REFRESH_MS = 5 * 60_000;
 
 let nearTermRefreshTimer = null;
 let fullRefreshTimer = null;
+// The wall-clock instant each tier's OWN next tick is due - read by
+// renderNextUpdateCountdown below to show "下次更新：Ns" without that
+// display needing to know a single thing about which of the three timers
+// it's actually reflecting. Set at the exact moment each setTimeout below
+// is (re)armed, including from a manual/foreground-return refresh (see
+// handleForegroundReturn) - never computed once at load and left stale.
+let nextNearTermRefreshAt = null;
+let nextFullRefreshAt = null;
 
 async function refreshNearTerm() {
   try {
@@ -2396,6 +2427,7 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
 
 function scheduleNearTermRefresh() {
   if (nearTermRefreshTimer) clearTimeout(nearTermRefreshTimer);
+  nextNearTermRefreshAt = Date.now() + NEAR_TERM_REFRESH_MS;
   nearTermRefreshTimer = setTimeout(async () => {
     // A backgrounded tab still gets rescheduled (so it picks back up the
     // moment it's visible again) but skips the actual fetch - no point
@@ -2407,6 +2439,7 @@ function scheduleNearTermRefresh() {
 
 function scheduleFullRefresh() {
   if (fullRefreshTimer) clearTimeout(fullRefreshTimer);
+  nextFullRefreshAt = Date.now() + FULL_REFRESH_MS;
   fullRefreshTimer = setTimeout(async () => {
     if (document.visibilityState !== 'hidden') await refreshFullWindow({ silent: true });
     scheduleFullRefresh();
@@ -2439,6 +2472,7 @@ refreshDataBtn.addEventListener('click', () => {
 // (F1 has real, live Polymarket odds but no ESPN score to poll at all).
 const LIVE_POLL_INTERVAL_MS = 30_000;
 let livePollTimer = null;
+let nextLivePollAt = null;
 // How far before kickoff this starts polling a still-PRE fixture purely for
 // odds movement (never score, which doesn't exist yet) - live-verified a
 // real MLS moneyline already posted ~3.3 hours before kickoff, so this errs
@@ -2650,6 +2684,7 @@ async function pollLiveMatches() {
 
 function scheduleLivePoll() {
   if (livePollTimer) clearTimeout(livePollTimer);
+  nextLivePollAt = Date.now() + LIVE_POLL_INTERVAL_MS;
   livePollTimer = setTimeout(async () => {
     // A backgrounded tab still gets rescheduled (so it picks back up the
     // moment it's visible again) but skips the actual network request -
@@ -2661,6 +2696,88 @@ function scheduleLivePoll() {
     scheduleLivePoll();
   }, LIVE_POLL_INTERVAL_MS);
 }
+
+// ---- Foreground-return refresh + "next update" countdown -----------------
+//
+// Every timer above already reschedules itself on the SAME fixed interval
+// even while the tab is hidden (it just skips the actual fetch each tick -
+// see each one's own comment) - so a tab backgrounded for, say, 10 minutes
+// and then brought back doesn't get anything fresher until whichever timer
+// next happens to fire, which could itself be seconds OR most of a minute
+// away, entirely by accident of when the tab happened to get hidden. That
+// reads as "the app doesn't notice I came back" even though a real refresh
+// was in fact already overdue. This listens for exactly that transition and
+// forces an immediate refresh instead of waiting on the accident of timing -
+// but only when the tab was actually away long enough (FOREGROUND_STALE_MS)
+// that background timers alone clearly wouldn't have kept up; a quick
+// app-switch-and-back well under that (checking a notification) is left
+// alone rather than doubling up on a refresh that just ran moments ago.
+const FOREGROUND_STALE_MS = 30_000;
+let hiddenSinceAt = null;
+
+async function handleForegroundReturn(awayMs) {
+  try {
+    await refreshNearTerm();
+  } catch (error) {
+    console.error('foreground-return near-term refresh failed', error);
+  }
+  scheduleNearTermRefresh();
+  if (document.visibilityState !== 'hidden' && anyMatchWorthPollingNow()) {
+    try {
+      await pollLiveMatches();
+    } catch (error) {
+      console.error('foreground-return live poll failed', error);
+    }
+  }
+  scheduleLivePoll();
+  // The full multi-week window is only worth re-forcing here if the tab was
+  // away for at least ITS OWN normal interval - a fixture 10 days out was
+  // never "live" in the sense the other two tiers are, so a 45-second
+  // backgrounding doesn't need to force ~50+ requests just to be thorough.
+  if (awayMs >= FULL_REFRESH_MS) {
+    await refreshFullWindow({ silent: true }).catch(() => {});
+    scheduleFullRefresh();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    hiddenSinceAt = Date.now();
+    return;
+  }
+  if (hiddenSinceAt == null) return;
+  const awayMs = Date.now() - hiddenSinceAt;
+  hiddenSinceAt = null;
+  if (awayMs < FOREGROUND_STALE_MS) return;
+  handleForegroundReturn(awayMs);
+});
+
+// A small, ticking "下次更新：Ns" readout - the soonest of the three
+// scheduled tiers above (live poll only counted while something's actually
+// worth polling; a fixture with no live poll running has no reason to
+// dangle a countdown for one that's really just an idle no-op tick), so a
+// viewer watching a live match can literally see when its next update is
+// coming instead of only ever finding out after the fact.
+function nextUpdateEtaMs() {
+  const now = Date.now();
+  const candidates = [nextNearTermRefreshAt, nextFullRefreshAt];
+  if (anyMatchWorthPollingNow()) candidates.push(nextLivePollAt);
+  const finite = candidates.filter(Number.isFinite);
+  return finite.length ? Math.max(0, Math.min(...finite) - now) : null;
+}
+
+function renderNextUpdateCountdown() {
+  if (!nextUpdateNote) return;
+  const ms = nextUpdateEtaMs();
+  if (ms == null) {
+    nextUpdateNote.textContent = '';
+    return;
+  }
+  const secs = Math.round(ms / 1000);
+  nextUpdateNote.textContent = secs > 0 ? `下次更新：${secs} 秒後` : '更新中…';
+}
+
+setInterval(renderNextUpdateCountdown, 1000);
 
 async function init() {
   state.proxyUrl = PROXY_URL;
