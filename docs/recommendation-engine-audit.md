@@ -2962,3 +2962,102 @@ confirmed via the GitHub Actions API that Shared-Proxy's own CI run for
 this change completed successfully (both Wrangler deploy steps green)
 before Match Find's own `PROXY_URL` was pointed at the new Worker, so the
 switch never risked a dead URL going live.
+
+## Round 27 (2026-09-21)
+
+Direct confirmation the Round 26 fix worked ("A lot faster now"), plus three
+new reports in the same message: (1) add a loading indicator so the blank
+period before first paint doesn't read as broken, (2) a fixture from 9/19
+was still showing when today is 9/21 - only one day prior (Yesterday)
+should ever be kept, and (3) a general ask for more performance work, both
+client- and proxy-side.
+
+**1. Loading indicator.** Before this, `#app`, `#empty-state`, and
+`#error-state` in `index.html` all started `hidden` - so the gap before the
+first real content landed (a first-ever visit with no instant-paint
+snapshot yet, or one just wiped by `APP_BUILD_ID` right after Round 26's
+own deploy - which, in hindsight, is almost certainly why this got noticed
+right now) rendered as a totally blank page with zero indication anything
+was happening. Added `#loading-state` (a spinner + "載入中…"), visible by
+default (no `hidden` in the markup, unlike the other three), hidden inside
+`applyFreshBuild` - the one function both the instant-paint snapshot and
+every real refresh tier funnel through - so it disappears the instant
+either has something to show; `init()`'s own total-failure branch (nothing
+loaded at all, near-term fetch failed outright) hides it too, swapping in
+`#error-state`'s explicit message instead of leaving a spinner spinning
+forever over a page that's actually stuck.
+
+**2. Retention cap: root-caused, not just re-worded.** The site's own
+design already treats "昨天" (Yesterday, 1 day prior) as a real, intended
+day - `dayLabelFor`'s own `diffDays === -1` case, and
+`fetchTeamLeagueMatches`'s 2-UTC-day lookback margin exists specifically so
+a US-evening MLB fixture that lands on the Taiwan viewer's own "yesterday"
+actually gets fetched (see Round 11's own "Yesterday only shows Premier
+League, no MLB" fix). The bug: nothing ever enforced the OTHER end of that
+window. `mergeFreshMatches`'s own upsert-by-id (`byId` seeded from
+`state.allRawMatches`, only ever added to or overwritten, never pruned)
+meant a match fetched once - during that same 2-day lookback margin, or
+just because "today" was closer to it on an earlier visit - stayed in
+`state.allRawMatches`/the `localStorage` snapshot forever, regardless of
+whether any CURRENT fetch's own window still includes it. `buildDayList`
+then dutifully gives ANY day present in `matches` its own pill, past or
+future, with no age check at all - so a two-plus-day-old finished fixture
+could sit there indefinitely, showing up as its own day pill well past the
+site's intended one-day design. Fixed with `MATCH_RETENTION_PAST_DAYS = 1`
+and `isWithinRetentionWindow`, applied inside `mergeFreshMatches` itself
+(the one choke point every merge - snapshot or real fetch - goes through):
+a match whose LOCAL calendar day (via the new shared `daysFromToday`
+helper, factored out of `dayLabelFor`'s own inline version) is more than 1
+day before today is dropped from the retained set outright, not merely
+hidden at render time. Verified: `daysFromToday` gives 9/19 vs. a 9/21
+"today" as `-2` (dropped) and 9/20 as `-1` (kept) - exactly the Yesterday-
+only boundary the site was always supposed to have.
+
+**3. Performance, both sides.**
+
+- **Client: skip fetching a disabled sport entirely.** `buildMatches`
+  never had any concept of "which sports the viewer actually wants" - it
+  always fetched all 3 team leagues plus F1, every single refresh tier,
+  regardless of Settings' 已啟用的運動 toggles; only the RENDER step
+  (`applyEnabledSportsAndRender`'s own `.filter`) ever excluded a disabled
+  sport. A viewer who's turned 3 of 4 sports off was still paying for all
+  four's ESPN/F1 fetches (and, transitively, their own Polymarket odds
+  enrichment and standings fetches) on every tier, for data that could
+  never appear on screen. Added an `enabledSports` param to `buildMatches`
+  (a `Set` of `match.sport` labels; `null`/omitted still fetches
+  everything, so `scripts/build-data.mjs`/`dump-day-plan.mjs`, which have
+  no such concept, are unaffected) - `TEAM_LEAGUES` is filtered down to it
+  before the fetch `Promise.all`, and the F1 fetch is skipped outright when
+  `'F1'` isn't in the set. `enrichWithPolymarketOdds`'s and the standings
+  fetches' own existing `hasActiveX`/`sportsNeeded` checks (both keyed off
+  `matches`, which now simply won't contain a disabled sport) already skip
+  those for free once the team-league fetch itself is skipped - no separate
+  change needed there. `pollLiveMatches`'s own `sportsWorthPollingNow` reads
+  `state.allRawMatches` too, so the live-poll tier benefits the same way.
+  Wired into both `refreshNearTerm` and `refreshFullWindow` via
+  `state.enabledSports`. One real trade-off this creates: re-enabling a
+  sport means `state.allRawMatches` genuinely has zero fixtures for it
+  until a fetch actually happens - handled by kicking off a fire-and-forget
+  `refreshFullWindow({ silent: true })` right in the enable-toggle's own
+  click handler, so it backfills immediately rather than waiting up to
+  `FULL_REFRESH_MS` (5 minutes) for the next scheduled tier.
+- **Proxy: stop serializing the KV rate-limit check ahead of the upstream
+  fetch.** `sports-proxy-worker.js`'s `handleSportsProxyRequest`, on a cache
+  MISS, used to `await isRateLimited(...)` (a Workers KV read) and only
+  THEN start the actual upstream `fetch()` - a real round trip added to the
+  front of every single non-cached request, previously invisible next to
+  the [placement]-pin latency Round 26 removed, now proportionally a much
+  bigger slice of what's left. Restructured to run the KV check and the
+  upstream fetch concurrently via `Promise.all`, deciding what to do with
+  each only once both resolve - a rate-limited request still never receives
+  the fetched data (correctness unchanged), it just also costs one upstream
+  call it wouldn't have before, an acceptable trade since that's the rare,
+  already-abusive case, not the common one this route optimizes for.
+
+Full suite still 350/350 (no scoring/data-shape logic touched - the new
+`enabledSports` param defaults to fetching everything, and `buildMatches`
+itself has no existing test coverage to update, by that test file's own
+long-standing design - see its own top comment: pure-helper tests only,
+never a live/mocked full build). Verified live: `sports-proxy-worker.js`
+still parses and responds correctly after the restructuring. Committed and
+pushed to both branches of Match-Find and both branches of Shared-Proxy.

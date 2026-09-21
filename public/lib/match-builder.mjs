@@ -812,15 +812,29 @@ async function enrichWithPolymarketOdds(matches, fetchJson) {
 // small-`daysAhead` call for near-term freshness, a slower full-
 // `DEFAULT_DAYS_AHEAD` call for the rest of the day-scroller's window) can
 // both call this same function instead of two different code paths.
-export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_AHEAD, fetchJson }) {
+export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_AHEAD, fetchJson, enabledSports = null }) {
   if (typeof fetchJson !== 'function') {
     throw new TypeError('buildMatches requires a fetchJson(url) function - see this file\'s own top comment');
   }
   const windowEndMs = now.getTime() + daysAhead * 24 * 60 * 60 * 1000;
 
-  // The 3 team leagues and F1 are entirely independent fetches (no team
-  // league's own result depends on F1's, or on any other league's) - an
-  // earlier version awaited the team leagues' own Promise.all to FULLY
+  // `enabledSports` (a Set/array of the exact `match.sport` labels below,
+  // e.g. from app.js's own Settings toggle) skips fetching a league's
+  // fixtures entirely when it isn't one of them - left `null` (the
+  // default), every league is fetched, same as before this existed
+  // (scripts/build-data.mjs and dump-day-plan.mjs have no such concept of
+  // "the viewer's own enabled sports", so they always get everything).
+  // Direct performance win: a viewer who's turned off 3 of 4 sports in
+  // Settings was still paying for ALL of them on every single refresh
+  // tier - fetching (and, via hasActiveX below, standings-fetching and
+  // Polymarket-odds-enriching) fixtures for a league nothing on screen
+  // will ever show.
+  const leagues = enabledSports ? TEAM_LEAGUES.filter(league => enabledSports.has(league.label)) : TEAM_LEAGUES;
+  const shouldFetchF1 = !enabledSports || enabledSports.has('F1');
+
+  // The (filtered) team leagues and F1 are entirely independent fetches (no
+  // team league's own result depends on F1's, or on any other league's) -
+  // an earlier version awaited the team leagues' own Promise.all to FULLY
   // finish before even starting the F1 fetch, adding one whole extra
   // serial network round-trip for no reason (live-measured as a real,
   // avoidable contributor to a reported "updating data takes 10-20
@@ -830,17 +844,19 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   // race in parallel instead.
   const [teamMatchLists, f1Matches] = await Promise.all([
     Promise.all(
-      TEAM_LEAGUES.map(league =>
+      leagues.map(league =>
         fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson).catch(error => {
           console.warn(`Failed to fetch ${league.label}: ${error.message}`);
           return [];
         })
       )
     ),
-    fetchF1Matches(now, windowEndMs, daysAhead, fetchJson).catch(error => {
-      console.warn(`Failed to fetch F1: ${error.message}`);
-      return [];
-    })
+    shouldFetchF1
+      ? fetchF1Matches(now, windowEndMs, daysAhead, fetchJson).catch(error => {
+          console.warn(`Failed to fetch F1: ${error.message}`);
+          return [];
+        })
+      : Promise.resolve([])
   ]);
 
   const matches = [...teamMatchLists.flat(), ...f1Matches];

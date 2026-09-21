@@ -424,6 +424,7 @@ function buildSportIcon(sport) {
 // currently affect scoring.
 const DEFAULT_MY_SERVICE_IDS = ['elta', 'appletv', 'netflix'];
 
+const loadingStateEl = document.getElementById('loading-state');
 const appEl = document.getElementById('app');
 const dayScrollerEl = document.getElementById('day-scroller');
 const filtersRow = document.getElementById('sport-filters');
@@ -681,6 +682,19 @@ function renderEnabledSportsPanel() {
           state.enabledSports.delete(sport);
         } else {
           state.enabledSports.add(sport);
+          // buildMatches skips fetching a disabled sport's league entirely
+          // (see its own `enabledSports` param) - a real performance win
+          // while it stays off, but it also means state.allRawMatches
+          // genuinely has zero fixtures for it the moment it's re-enabled,
+          // not just filtered-out ones. applyEnabledSportsAndRender below
+          // would otherwise show an empty day for a sport that actually has
+          // real fixtures, until whichever refresh tier happens to fire
+          // next (up to FULL_REFRESH_MS later) backfills it - kicking off a
+          // full-window refresh right here closes that gap immediately.
+          // Fire-and-forget, same reasoning as every other unblocked
+          // refresh call in this file: the toggle itself should feel
+          // instant, not wait on ~50 requests before the panel closes.
+          refreshFullWindow({ silent: true }).catch(error => console.error('sport re-enable refresh failed', error));
         }
         persistSettings();
         renderEnabledSportsPanel();
@@ -1025,10 +1039,18 @@ function localDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function dayLabelFor(date, { short = false } = {}) {
+// Local-calendar day offset from today (0 = today, 1 = tomorrow, -1 =
+// yesterday) - shared by dayLabelFor's own label logic below and
+// MATCH_RETENTION_PAST_DAYS' pruning (see mergeFreshMatches), since both
+// are really the same "how many local calendar days off is this" question.
+function daysFromToday(date) {
   const today = new Date();
   const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(date) - startOfDay(today)) / 86_400_000);
+  return Math.round((startOfDay(date) - startOfDay(today)) / 86_400_000);
+}
+
+function dayLabelFor(date, { short = false } = {}) {
+  const diffDays = daysFromToday(date);
   if (diffDays === 0) return '今天';
   if (diffDays === 1) return '明天';
   // Yesterday is a real, explicitly reachable day now (see match-builder.mjs's
@@ -2186,6 +2208,22 @@ function pickInitialDay(days, matches) {
 // match set with a result where one league came back empty would delete
 // every match of that league from the page over a single transient
 // network blip, not just fail to refresh it.
+// How many local-calendar days BEFORE today a match is still allowed to
+// linger in state.allRawMatches - 1 keeps "昨天" (Yesterday) reachable, per
+// this site's own established design (see dayLabelFor's own diffDays===-1
+// case), without also keeping the day before that. Enforced in
+// mergeFreshMatches below, not at fetch time in match-builder.mjs: that
+// file's own 2-UTC-day lookback (see fetchTeamLeagueMatches's comment) is a
+// deliberately WIDER net, needed only to correctly capture this viewer's
+// own local "yesterday" from a UTC-anchored query - which days actually get
+// KEPT afterward is a local-calendar-day question only the browser (which
+// alone knows the real viewer's own timezone) can answer correctly.
+const MATCH_RETENTION_PAST_DAYS = 1;
+
+function isWithinRetentionWindow(match) {
+  return daysFromToday(new Date(match.startTimeUtc)) >= -MATCH_RETENTION_PAST_DAYS;
+}
+
 function mergeFreshMatches(freshMatches) {
   const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
   const byTbdKey = new Map(state.tbdMatches.map(m => [m.id, m]));
@@ -2212,7 +2250,19 @@ function mergeFreshMatches(freshMatches) {
     }
     byId.set(m.id, m);
   });
-  return { rawMatches: [...byId.values()], tbdMatches: [...byTbdKey.values()] };
+  // Without this, an id that ages out of every fetch's own window (near-term
+  // and full-window both only ever query forward from "now" plus a couple
+  // of lookback days - see match-builder.mjs) never gets removed either: the
+  // upsert above only ever ADDS/overwrites by id, so a match fetched once,
+  // days ago, would otherwise sit in state.allRawMatches (and the
+  // localStorage snapshot it feeds - see saveMatchSnapshot) forever,
+  // growing this array without bound over a long-lived tab and directly
+  // causing a real, live-reported bug: a fixture from two-plus days ago
+  // still showing up as its own day pill (buildDayList adds a pill for
+  // every day any match falls on, past or future - see that function's own
+  // comment) well past this site's own one-day "昨天" retention design.
+  const retained = [...byId.values()].filter(isWithinRetentionWindow);
+  return { rawMatches: retained, tbdMatches: [...byTbdKey.values()] };
 }
 
 // ---- Instant-paint snapshot (perceived load time) --------------------------
@@ -2302,6 +2352,12 @@ function loadMatchSnapshot() {
 // own first run), so "how a fresh batch of matches turns into what's on
 // screen" only exists in one place.
 function applyFreshBuild(matches, generatedAt) {
+  // Both the instant-paint-from-snapshot call and every real refresh funnel
+  // through here (see this function's own call sites) - hiding the
+  // loading spinner right at the top, unconditionally, means it disappears
+  // the instant EITHER one has something to show, without needing its own
+  // copy of this logic at every call site.
+  if (loadingStateEl) loadingStateEl.hidden = true;
   const previousIds = new Set(state.allRawMatches.map(m => m.id));
   const { rawMatches, tbdMatches } = mergeFreshMatches(matches);
   // A genuine add/remove (a new fixture entering the window, a
@@ -2433,7 +2489,11 @@ let nextFullRefreshAt = null;
 
 async function refreshNearTerm() {
   try {
-    const { matches, generatedAt } = await buildMatches({ daysAhead: NEAR_TERM_DAYS_AHEAD, fetchJson: proxyFetchJson });
+    const { matches, generatedAt } = await buildMatches({
+      daysAhead: NEAR_TERM_DAYS_AHEAD,
+      fetchJson: proxyFetchJson,
+      enabledSports: state.enabledSports
+    });
     applyFreshBuild(matches, generatedAt);
   } catch (error) {
     console.error('near-term refresh failed', error);
@@ -2502,7 +2562,11 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
     if (button) button.disabled = true;
   }
   try {
-    const { matches, generatedAt } = await buildMatches({ daysAhead: DEFAULT_DAYS_AHEAD, fetchJson: proxyFetchJson });
+    const { matches, generatedAt } = await buildMatches({
+      daysAhead: DEFAULT_DAYS_AHEAD,
+      fetchJson: proxyFetchJson,
+      enabledSports: state.enabledSports
+    });
     applyFreshBuild(matches, generatedAt);
     // Only checked on a viewer-initiated refresh (never the silent
     // background timers) - see this section's own top comment. Runs after
@@ -2915,7 +2979,10 @@ async function init() {
     // outright, e.g. the proxy is unreachable) - say so rather than
     // leaving a silently empty page; refreshFullWindow below and the
     // scheduled retries can still recover this once network/the proxy
-    // comes back.
+    // comes back. applyFreshBuild (which would otherwise hide the loading
+    // spinner) never ran in this branch, so it's still up - swap it for
+    // the explicit error message instead of leaving both up at once.
+    if (loadingStateEl) loadingStateEl.hidden = true;
     errorState.hidden = false;
   }
   scheduleNearTermRefresh();

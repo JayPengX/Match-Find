@@ -512,6 +512,17 @@ order is stored in `localStorage` (per-browser, nothing sent anywhere) and
 re-ranking re-runs the whole plan and re-renders immediately, without
 closing the panel or reloading.
 
+### Enabled sports settings (⚙, 已啟用的運動)
+
+A hard on/off per sport, not a ranking - unlike priority order above, a
+disabled sport never appears anywhere on the page at all, not even in "所有
+賽事" (also `localStorage`, per-browser). At least one sport must stay on.
+Turning a sport off also means `buildMatches` stops fetching it entirely on
+the next refresh (see "Efficiency: caching and instant paint" above) - a
+real performance win while it stays off, restored immediately (a background
+full-window refresh kicks off the moment you turn it back on) rather than
+waiting for the next scheduled tier.
+
 ## Duration and Taiwan broadcast source are deterministic, not AI-guessed
 
 Two things that used to be either a flat guess or a per-fixture Gemini
@@ -657,6 +668,30 @@ earlier version didn't, so the live status widget visibly disappeared and
 reappeared on every single near-term/full-window tick until the next live
 poll (up to 30s later) put it back.
 
+`mergeFreshMatches` also caps how far into the PAST a match is allowed to
+linger (`MATCH_RETENTION_PAST_DAYS`, 1 - i.e. 昨天/Yesterday, never the day
+before that): without this, a match fetched once during a lookback window
+(see `fetchTeamLeagueMatches`'s own 2-UTC-day margin, needed to correctly
+capture Yesterday for a Taiwan viewer from a UTC-anchored query) never got
+removed just because a later fetch's own window moved past it - the upsert-
+by-id merge only ever adds/overwrites, never deletes - so it sat in
+`state.allRawMatches`/the localStorage snapshot indefinitely, both an
+unbounded memory grow over a long-lived tab and a real, live-reported bug
+(a fixture from two days ago still showing its own day pill, well past this
+site's own one-day "Yesterday" design). The cutoff is in the viewer's OWN
+local calendar day, the same concept `dayLabelFor`'s 今天/明天/昨天 labels
+already use, not UTC.
+
+Before either refresh tier's first result lands (a first-ever visit with no
+instant-paint snapshot yet, or one just invalidated by a new deploy - see
+"Efficiency: caching and instant paint" below), a `#loading-state` spinner
+is shown by default rather than leaving the page blank while `#app`/
+`#empty-state`/`#error-state` all still say `hidden` - live-reported as
+confusing before this existed. `applyFreshBuild`, the one function both the
+snapshot paint and every real refresh funnel through, hides it the instant
+either produces something to show; a total failure with nothing loaded at
+all swaps it for `#error-state`'s own explicit message instead.
+
 Settings' **立即重新整理** button just re-runs the full-window tier
 immediately, in your own browser - there's no server-side rebuild to
 dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly as
@@ -695,7 +730,23 @@ the shared proxy's own per-IP rate limit on a single open tab alone:
   the upstream URL alone, so concurrent viewers (and this tab's own live-poll
   tier, which isn't covered by the in-tab cache above) share one real
   upstream fetch instead of each paying for their own; a cache hit doesn't
-  count against that route's own rate limit either.
+  count against that route's own rate limit either. On a cache MISS, that
+  Worker also runs its own rate-limit check (a Workers KV read) and the
+  actual upstream fetch CONCURRENTLY rather than one after the other -
+  removes a real KV round trip from the critical path of every ordinary
+  request, which now matters proportionally more with the cross-region
+  latency below fixed.
+- **Skips a disabled sport's fetch entirely** - `buildMatches`' own
+  `enabledSports` param (Settings' 已啟用的運動 toggles, see "Enabled
+  sports settings" below) means a league you've turned off isn't just
+  filtered out of what's shown, its ESPN/F1 fetch, Polymarket odds
+  enrichment, and standings fetch never happen at all on either refresh
+  tier - a real reduction in requests-per-refresh (and in load on
+  `/sports-proxy` itself) proportional to how many of the 4 sports you
+  actually keep on. Turning a sport back ON immediately kicks off a
+  full-window refresh in the background (see that toggle's own handler) so
+  it backfills right away instead of waiting for whichever refresh tier
+  happens to fire next.
 
 `/sports-proxy` is its own dedicated Cloudflare Worker (see that repo's own
 README), deliberately separate from the Worker `jaypengx-collab/shared-proxy`
