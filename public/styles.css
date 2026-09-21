@@ -640,6 +640,24 @@ main#app {
   letter-spacing: 0.06em;
   padding-left: 33px;
 }
+/* The actual current score - only shown while a match is genuinely LIVE/
+   ENDING_SOON or already finished (see buildMatchCard's own showScore) -
+   reported directly that the live status widget (inning/quarter/lap, see
+   .live-chip above) showed in-progress DETAIL but never the score itself,
+   so there was no way to see who was actually ahead without leaving the
+   page. Pushed to the row's own far end (margin-left: auto) rather than
+   sitting next to the name, so it reads as its own distinct number at a
+   glance rather than part of the team's own label. No `display` set here
+   deliberately - unlike .match-odds/.match-watch elsewhere in this file,
+   a plain `[hidden] { display: none }` already wins with nothing to
+   override, so this doesn't need that same cascade-specificity fix. */
+.team-score {
+  margin-left: auto;
+  font-weight: 800;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
 
 .recommended-tag {
   font-size: 0.68rem;

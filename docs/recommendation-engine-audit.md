@@ -2400,3 +2400,40 @@ FIRST poll happens as soon as the initial match list is loaded instead of
 appears ~2s after the first `.match-card` (5.4s from navigation) instead of
 the ~25-30s gap measured in Round 19's own flicker test. Full suite still
 326/326.
+
+## Round 21 (2026-09-21): the actual score was never shown while a match was live
+
+Direct follow-up: "I think the live state is not being updated consistently
+after shown and it's not showing current scores but only states". Checked
+both halves separately:
+
+- **Real bug, exactly as reported**: `team-row-template`
+  (`public/index.html`) had no element for a score at all - `.team-side`,
+  `.team-logo`, `.team-name-en`, `.team-name-zh`, nothing else.
+  `match.competitors[].score` was fetched, live-polled, and updated in
+  memory correctly the whole time; it just had nowhere on the page to
+  render. Round 19's own live-status widget (the diamond/flag/pulsing-dot)
+  only ever showed in-progress DETAIL (inning, quarter, lap) - genuinely
+  never the score itself, which is exactly the "only states" the report
+  named. Fixed by adding a `.team-score` element per team row, shown only
+  while `isCurrentlyLive || match.isFinished` (never pre-game, where
+  ESPN's own "0" isn't a real score yet) - `buildMatchCard` now computes
+  `lifecycle`/`isCurrentlyLive` once, up front, and reuses it for this,
+  the live-status widget, and the `.is-live`/`.is-finished` class toggle,
+  rather than three separate call sites each re-deriving it.
+- **"Not updated consistently"**: watched a real live MLB card for a full 4
+  minutes (24 samples, one every 10s) via the Playwright network-relay
+  harness. The inning progressed correctly and in real time (第 7 局上 →
+  中 → 下) and the score held steady at the correct 3-0 the whole time (no
+  runs scored in that span, confirmed against the same real ESPN data) -
+  no dropped ticks, no regressions, nothing reverting backward. Found no
+  actual update-delivery bug in this run; the likely explanation is that
+  this perception was simply downstream of the score bug above - with no
+  number to check against and only an inning/quarter changing every couple
+  of minutes, there was nothing to visibly confirm the page was still
+  live-updating at all.
+
+Live-verified post-fix (Playwright, same real Brewers @ Orioles game): the
+score rendered correctly (3-0) on the live card, correctly on two separate
+already-finished cards (7-2, 3-4), and stayed hidden on every pre-game
+card. Full suite still 326/326.
