@@ -238,26 +238,6 @@ button {
 .settings-btn-row .settings-action-btn {
   flex: 1;
 }
-#reload-app-btn {
-  margin-top: 10px;
-  background: #e2453c;
-}
-/* Same cascade gap as .loading-state/.match-odds/.match-watch above (see
-   their own comments) - .settings-action-btn's own `display: block` is an
-   author-stylesheet rule, and author rules always beat the UA stylesheet's
-   `[hidden] { display: none }` regardless of the `hidden` attribute, since
-   origin/importance is compared before specificity at all. So this button
-   was rendering unconditionally from the very first page load - completely
-   independent of whatever checkForNewAppVersion in app.js ever returned -
-   which is the real reason it was live-reported as "never hides even on
-   the newest version" even after the build-id check and the reload
-   button's own click handler were both already fixed and confirmed
-   correct: neither one had ever had any influence on whether this button
-   was visible at all. */
-#reload-app-btn[hidden] {
-  display: none;
-}
-
 main#app {
   max-width: 760px;
   margin: 0 auto;

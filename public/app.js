@@ -451,7 +451,6 @@ const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
 const updateStatusText = document.getElementById('update-status-text');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
-const reloadAppBtn = document.getElementById('reload-app-btn');
 
 // ---- Sport priority settings ---------------------------------------------
 //
@@ -2550,8 +2549,7 @@ async function fetchLiveAppBuildId() {
     // do nothing at that layer anyway, only add noise. The CDN side turned
     // out not to be the actual bug: GitHub Pages purges/repopulates its edge
     // cache on every deploy, confirmed live serving the correct just-deployed
-    // build id within seconds. See reloadAppBtn's own click handler for
-    // where the real "still doesn't hide" bug actually was - not here.
+    // build id within seconds.
     const response = await fetch(APP_VERSION_CHECK_PATH, { cache: 'no-store' });
     if (!response.ok) return null;
     const text = await response.text();
@@ -2589,16 +2587,7 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
       enabledSports: state.enabledSports
     });
     applyFreshBuild(matches, generatedAt);
-    // Only checked on a viewer-initiated refresh (never the silent
-    // background timers) - see this section's own top comment. Runs after
-    // the data refresh, not in parallel with it - a version prompt from a
-    // stale check that raced ahead of the data actually finishing would be
-    // confusing to see before "資料已更新" itself has even shown yet.
-    if (!silent && statusEl) {
-      const hasNewVersion = await checkForNewAppVersion().catch(() => false);
-      statusEl.textContent = '資料已更新。';
-      if (hasNewVersion && reloadAppBtn) reloadAppBtn.hidden = false;
-    }
+    if (!silent && statusEl) statusEl.textContent = '資料已更新。';
   } catch (error) {
     console.error('full refresh failed', error);
     if (!silent && statusEl) statusEl.textContent = '重新整理失敗，請稍後再試。';
@@ -2628,29 +2617,38 @@ function scheduleFullRefresh() {
   }, FULL_REFRESH_MS);
 }
 
-refreshDataBtn.addEventListener('click', () => {
-  refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
-});
-reloadAppBtn.addEventListener('click', () => {
-  // A real reload, not just re-fetching data - the whole point is to get
-  // this tab off whatever OLD app.js it's still running. A bare
-  // window.location.reload() is NOT guaranteed to do that: index.html
-  // itself is served with cache-control: max-age=600 (confirmed live via
-  // curl), so an ordinary reload made within 10 minutes of this tab's own
-  // last load can be satisfied entirely from THIS BROWSER's own local HTTP
-  // cache without ever reaching the network - reloading the exact same
-  // stale index.html (and the old app.js?v=<sha> it references) this tab
-  // already had. That's the real reason this stayed live-reported as
-  // "still doesn't hide even on the newest version" even after fixing the
-  // check itself (see fetchLiveAppBuildId's own comment): the CHECK was
-  // correct, but clicking the button to act on it did nothing.
-  //
-  // A browser's own local cache is keyed on the full URL including its
-  // query string (unlike GitHub Pages' CDN, which was confirmed to ignore
-  // query strings for ITS cache key) - so navigating to a cache-busted URL
-  // forces a genuine network request this browser can't shortcut from disk.
-  const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
-  window.location.replace(bustedUrl);
+// One button now does both jobs a separate "click to update" button used to
+// split across two clicks (and which, even after fixing the check and the
+// reload itself, kept getting live-reported as broken because a THIRD,
+// unrelated CSS cascade bug was showing it unconditionally regardless of
+// either fix - see this repo's own git history). Checking first means the
+// common case (no new deploy) costs nothing extra: the check is a single
+// small HEAD-adjacent fetch of the live app.js, done before the heavier
+// buildMatches() fetch, not after it.
+refreshDataBtn.addEventListener('click', async () => {
+  refreshDataBtn.disabled = true;
+  updateStatusText.textContent = '檢查版本中…';
+  const hasNewVersion = await checkForNewAppVersion().catch(() => false);
+  if (hasNewVersion) {
+    // A real reload, not just re-fetching data - the whole point is to get
+    // this tab off whatever OLD app.js it's still running. A bare
+    // window.location.reload() is NOT guaranteed to do that: index.html
+    // itself is served with cache-control: max-age=600 (confirmed live via
+    // curl), so an ordinary reload made within 10 minutes of this tab's own
+    // last load can be satisfied entirely from THIS BROWSER's own local HTTP
+    // cache without ever reaching the network - reloading the exact same
+    // stale index.html (and the old app.js?v=<sha> it references) this tab
+    // already had.
+    //
+    // A browser's own local cache is keyed on the full URL including its
+    // query string (unlike GitHub Pages' CDN, which was confirmed to ignore
+    // query strings for ITS cache key) - so navigating to a cache-busted URL
+    // forces a genuine network request this browser can't shortcut from disk.
+    const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
+    window.location.replace(bustedUrl);
+    return;
+  }
+  await refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
 });
 
 // ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -
