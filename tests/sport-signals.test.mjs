@@ -107,6 +107,30 @@ describe('parseMlbStandingsResponse', () => {
     assert.equal(parseMlbStandingsResponse(null).size, 0);
     assert.equal(parseMlbStandingsResponse({ records: null }).size, 0);
   });
+
+  test('the leader gets divisionLeadMargin = the runner-up\'s own gamesBack', () => {
+    const json = {
+      records: [
+        {
+          division: { name: 'NL West' },
+          teamRecords: [
+            { team: { id: 119 }, gamesBack: '-' }, // Dodgers, leading
+            { team: { id: 135 }, gamesBack: '9.0' }, // Padres, runner-up
+            { team: { id: 137 }, gamesBack: '32.0' } // Giants, last place
+          ]
+        }
+      ]
+    };
+    const parsed = parseMlbStandingsResponse(json);
+    assert.equal(parsed.get(119).divisionLeadMargin, 9.0, 'leader\'s margin is the CLOSEST rival, not the farthest');
+    assert.equal(parsed.get(135).divisionLeadMargin, undefined, 'only ever set for the leader itself');
+    assert.equal(parsed.get(137).divisionLeadMargin, undefined);
+  });
+
+  test('a lone team in its own division group has no runner-up, so no margin', () => {
+    const json = { records: [{ teamRecords: [{ team: { id: 119 }, gamesBack: '-' }] }] };
+    assert.equal(parseMlbStandingsResponse(json).get(119).divisionLeadMargin, null);
+  });
 });
 
 describe('computeTitleRaceIntensity', () => {

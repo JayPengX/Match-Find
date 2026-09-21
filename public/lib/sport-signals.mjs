@@ -137,10 +137,31 @@ export function parseMlbTeamRecord(teamRecord) {
 export function parseMlbStandingsResponse(json) {
   const byTeamId = new Map();
   for (const group of json?.records || []) {
-    for (const teamRecord of group?.teamRecords || []) {
+    const teamRecords = group?.teamRecords || [];
+    // The division LEADER's own gamesBack is always 0 by definition (see
+    // parseGamesBack's own comment) - that alone can't tell a real,
+    // down-to-the-wire race apart from a 20+ game runaway. The runner-up's
+    // OWN gamesBack IS that missing number (how far back the closest rival
+    // actually is), so it doubles as the leader's own lead margin -
+    // computed here, once per division, from data already in this same
+    // response, no second fetch needed. See objective-score.mjs's
+    // playoffProximityScore for why this exists: a live 2026-09-26 case
+    // had a 96-60 division leader blowing out a last-place team still
+    // score a maxed-out "stakes" reading, identical to a genuine
+    // nail-biter, purely because its own gamesBack read 0 either way.
+    const runnerUpGamesBack = teamRecords
+      .map(r => parseGamesBack(r?.gamesBack))
+      .filter(gb => Number.isFinite(gb) && gb > 0)
+      .reduce((min, gb) => (min == null || gb < min ? gb : min), null);
+    for (const teamRecord of teamRecords) {
       const teamId = teamRecord?.team?.id;
       if (typeof teamId !== 'number') continue;
-      byTeamId.set(teamId, parseMlbTeamRecord(teamRecord));
+      const signal = parseMlbTeamRecord(teamRecord);
+      // Only meaningful for the leader itself (gamesBack === 0) - a team
+      // that's already behind has its own real deficit in `gamesBack`
+      // already, this field would just be noise for it.
+      if (signal.gamesBack === 0) signal.divisionLeadMargin = runnerUpGamesBack;
+      byTeamId.set(teamId, signal);
     }
   }
   return byTeamId;

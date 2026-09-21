@@ -79,10 +79,28 @@ export function closenessFromSpread(absSpread, lopsidedAt) {
 // unlike the closeness functions above, this is allowed to floor at 0, not
 // 1, since a genuinely decided race really does contribute nothing to
 // stakes, as opposed to "still contributes a LITTLE".
-export function playoffProximityScore(gamesBack, wildCardGamesBack) {
+//
+// `divisionLeadMargin` (division LEADERS only - see sport-signals.mjs's
+// parseMlbStandingsResponse) is the real fix for a gap this function used
+// to have: `gamesBack === 0` reads identically whether a team is tied for
+// the lead or is 20+ games clear of the field, since a leader's own
+// gamesBack is 0 either way by definition - it has no way to see the size
+// of its OWN cushion. Live case this fixes (2026-09-26): a 96-60 Dodgers
+// team, up 9 games on the Padres, blowing out the last-place Giants still
+// scored a maxed-out stakes=10, identical to a genuine nail-biter. When a
+// real margin is known, a comfortable leader is discounted the same
+// 0.8-per-game way a team chasing from behind already is - a 10+ game
+// division lead isn't realistically "a race" just because this team's own
+// deficit reads zero. Never discounted below 2 - a leader still has real
+// stakes (a magic number to reach, a division title/home-field edge to
+// protect), just not a live race's full 10.
+export function playoffProximityScore(gamesBack, wildCardGamesBack, divisionLeadMargin) {
   const candidates = [gamesBack, wildCardGamesBack].filter(Number.isFinite);
   if (!candidates.length) return null;
   const proximity = Math.min(...candidates);
+  if (proximity <= 0 && Number.isFinite(divisionLeadMargin) && divisionLeadMargin > 0) {
+    return clamp(Math.round(10 - divisionLeadMargin * 0.8), 2, 10);
+  }
   return clamp(Math.round(10 - proximity * 0.8), 0, 10);
 }
 
@@ -263,8 +281,8 @@ export function computeMlbObjectiveScore({
     10
   );
 
-  const awayProximity = playoffProximityScore(away?.gamesBack, away?.wildCardGamesBack);
-  const homeProximity = playoffProximityScore(home?.gamesBack, home?.wildCardGamesBack);
+  const awayProximity = playoffProximityScore(away?.gamesBack, away?.wildCardGamesBack, away?.divisionLeadMargin);
+  const homeProximity = playoffProximityScore(home?.gamesBack, home?.wildCardGamesBack, home?.divisionLeadMargin);
   const proximityInputs = [awayProximity, homeProximity].filter(Number.isFinite);
   let stakes = proximityInputs.length ? Math.max(...proximityInputs) : 5;
   if (proximityInputs.length) factors.push(`playoff proximity ${proximityInputs.join('/')}`);

@@ -2575,3 +2575,50 @@ byte unchanged - this narrowly targets the one real failure, nothing else.
 Full suite 327/327 (one existing EPL big-club test conflicted with an
 overly-broad first draft of this fix that gated ALL THREE sports the same
 way - narrowed to MLB-only per the reasoning above, test passes unchanged).
+
+**Follow-up same day**: a requested final validation pass re-scanned the
+whole rebuilt window for any OTHER "low competitiveness, high watchability"
+case the cap above only softened rather than actually fixed, and found one:
+Brewers @ Cardinals (Brewers 98-58, MLB's best record, already clinched;
+Cardinals 76-80, 22 games back) - not a rivalry pair at all, so the
+MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS gate never touched it, and the cap
+alone still let it reach watchability=8 purely from `playoffProximityScore`
+reading the Brewers' own gamesBack=0 as a perfect stakes=10, same root
+cause as the Dodgers/Giants case - a cap that only limits the SYMPTOM
+(how far watchability can be pushed) rather than the actual miscalibrated
+signal (stakes) leaves every other division-leader-vs-non-contender
+blowout still inflated up to that same ceiling.
+
+Fixed at the root instead: `parseMlbStandingsResponse`
+(`public/lib/sport-signals.mjs`) now computes each division's real
+`divisionLeadMargin` for its leader specifically - the runner-up's own
+`gamesBack` (already present in the same standings response, no second
+fetch needed), which IS the number a leader's own `gamesBack: 0` can never
+show on its own. `playoffProximityScore` (`public/lib/objective-score.mjs`)
+now discounts a leader's stakes by that real margin using the same
+0.8-point-per-game slope it already uses for a team chasing from behind
+(floored at 2, never all the way to 0 - a leader always keeps SOME real
+stakes: a magic number, a division title/seeding to protect), instead of
+reading gamesBack=0 as an automatic, undifferentiated 10.
+
+Live-verified against the same real rebuild: Dodgers/Giants' watchability
+dropped further to 5 (proximity 3/0, from a real 9-game Dodgers division
+cushion); Brewers/Cardinals dropped to 4 (proximity 2/2, floored - a
+20+ game laugher). A follow-up scan of the full rebuilt window found ZERO
+remaining MLB matches with competitiveness ≤5 and watchability ≥7 (down
+from 6 before this fix, including the two above). Every other pick across
+the full 2026-09-22 to 2026-10-05 window is either unchanged or reshuffled
+only among already-legitimate playoff-race candidates (e.g. 9/23 shifted
+from Rays/Yankees to Guardians/Red Sox - both real, both fine). Added
+5 new tests (`playoffProximityScore`'s margin discount/floor,
+`parseMlbStandingsResponse`'s new `divisionLeadMargin` field) - full suite
+333/333.
+
+**Known, accepted limitation, not fixed**: 2026-09-28 (Taiwan calendar day)
+still recommends nothing at all - every real MLB game bucketed there is a
+Sunday US day-game (a real "getaway day" scheduling pattern), landing
+03:05-03:20 Taiwan time, squarely inside the 00:00-05:00 quiet-hours
+window. This is the system telling the truth (there is genuinely no MLB
+game worth a reasonable Taiwan viewing hour that calendar day), not a bug
+to route around - loosening quiet hours to fill the gap would violate the
+Taiwan-time rule specifically to avoid an empty day, which is backwards.

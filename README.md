@@ -199,7 +199,16 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
   at all below a competitiveness floor (`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS`,
   MLB only - NBA/EPL have no standings-API integration yet, so a low
   competitiveness there can still be early-season sampling noise a
-  genuinely elite club should survive, see "Known limitations" below).
+  genuinely elite club should survive, see "Known limitations" below). The
+  root cause behind that same Dodgers/Giants case was fixed separately, not
+  just capped: a division LEADER's own `gamesBack` reads 0 whether its lead
+  is a nail-biter or a 20+ game runaway, so `playoffProximityScore` now
+  also takes a `divisionLeadMargin` (the runner-up's own `gamesBack`,
+  computed once per division in `parseMlbStandingsResponse` from data
+  already in the same standings response) and discounts a comfortable
+  leader's stakes the same way it already discounts a team chasing from
+  behind - floored at 2, never automatically maxed at 10 just for holding
+  first place.
 - **enduranceScore** - does the contest actually stay meaningful all the
   way through, not just at kickoff
 - **broadcastQuality** - production quality of watching it

@@ -103,6 +103,27 @@ describe('playoffProximityScore', () => {
   test('returns null when neither figure is known', () => {
     assert.equal(playoffProximityScore(null, undefined), null);
   });
+
+  test('a division leader tied for the lead (margin 0) still scores a perfect 10', () => {
+    assert.equal(playoffProximityScore(0, 5, 0), 10);
+  });
+
+  test('a division leader with a comfortable lead is discounted, not maxed out', () => {
+    // Live case this fixes (2026-09-26): a 96-60 Dodgers team up 9 games
+    // on the Padres - gamesBack reads 0 either way, but a real 9-game
+    // cushion is not a live race.
+    const comfortable = playoffProximityScore(0, 0, 9);
+    assert.ok(comfortable < 10);
+    assert.ok(comfortable >= 2, 'never floors below 2 - a leader still has real stakes');
+  });
+
+  test('a huge division lead floors at 2, not 0 - a leader always keeps some stakes', () => {
+    assert.equal(playoffProximityScore(0, 0, 30), 2);
+  });
+
+  test('divisionLeadMargin is ignored for a team that is NOT leading (gamesBack > 0)', () => {
+    assert.equal(playoffProximityScore(8, 8, 30), playoffProximityScore(8, 8, undefined));
+  });
 });
 
 describe('streakMomentum', () => {
