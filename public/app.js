@@ -95,15 +95,31 @@ import {
 // once at build time.
 import { buildMatches, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 
-// The shared Cloudflare Worker's base URL (jaypengx-collab/shared-proxy) -
-// a plain, public value, not a secret (a static site's own client bundle
-// can't keep anything truly hidden anyway - see that repo's own worker.js
+// jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
+// public value, not a secret (a static site's own client bundle can't keep
+// anything truly hidden anyway - see that repo's own sports-proxy-worker.js
 // comment on /sports-proxy). Used to be injected into matches.json at
 // build time from a GitHub Actions repo Variable; hardcoded directly here
 // now that there's no more build step to inject it from (see this file's
 // own top comment on why) - confirmed live to still be the real deployed
 // Worker's own URL.
-const PROXY_URL = 'https://orbit-workers-proxy.pengzjay.workers.dev';
+//
+// A DIFFERENT Worker/URL than the rest of that repo's routes
+// (`orbit-workers-proxy`, still used by Orbit Class/Vocab) - not a typo.
+// /sports-proxy used to live on that same shared Worker, but that Worker's
+// wrangler.toml pins [placement] to region gcp:us-east4 (needed for its
+// /gemini route to dodge Google's Gemini-in-Hong-Kong block), a
+// whole-SCRIPT setting with no per-route override - so every request this
+// app made was being forced through a Virginia isolate regardless of this
+// app's own real audience being Taiwan-based, live-confirmed via
+// X-Worker-Colo: IAD on a plain /sports-proxy call. That was a real,
+// significant contributor to this app's own live-reported "first load
+// blank for 10+ seconds" / "updating data takes 10-20 seconds" symptoms -
+// see that repo's README ("Match Find live data") for the full story.
+// Pointing at this Worker's own separate, unpinned deployment instead lets
+// Cloudflare's default placement apply: run near whichever colo actually
+// received the request, i.e. near this app's own real viewers.
+const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 
 // Every host buildMatches needs (ESPN, Polymarket, the MLB Stats API,
 // Jolpica) sends no CORS headers, so a browser can't fetch any of them
@@ -2217,6 +2233,27 @@ const MATCH_SNAPSHOT_STORAGE_KEY = 'matchfind-match-snapshot';
 // for a real fetch, same as this app already did before this existed.
 const MATCH_SNAPSHOT_MAX_AGE_MS = 30 * 60_000;
 
+// A snapshot saved by a PREVIOUS deploy's own code can be built from a
+// match/rawMatches shape that deploy's applyFreshBuild/buildMatchCard/etc
+// no longer agree with (a renamed field, a new one a newer buildMatchCard
+// assumes is always present) - painting it instantly, before this load's
+// own real fetch has replaced it, risked showing broken-looking cards (or
+// throwing inside applyFreshBuild, per its own try/catch below) for
+// whatever the near-term refresh's first few seconds take, on every single
+// load after a deploy shipped ANY shape change, not just ones a viewer
+// happened to hit mid-refresh. `deploy.yml`'s own cache-busting step (see
+// index.html's own `?v=` query string) rewrites the literal placeholder
+// below to that build's real commit sha on every deploy - a snapshot
+// tagged with a DIFFERENT (or missing/pre-this-change) buildId is always
+// from a different deploy, and gets thrown away unread rather than risking
+// a shape mismatch; this build's own fetch fills the gap within seconds
+// regardless, same as a first-ever visit with no snapshot at all. Stays
+// the literal placeholder locally/in a dev checkout (this sed step only
+// ever runs in the GitHub Actions runner's own working copy, never
+// committed back to git) - harmless there since a local snapshot always
+// carries that same placeholder back, so the check always passes.
+const APP_BUILD_ID = '__BUILD_ID__';
+
 function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
   try {
     // `.live` is stripped - it's pollLiveMatches's own poll-tier detail
@@ -2226,6 +2263,7 @@ function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
     // matchWorthPollingNow), so keeping a frozen copy here would only risk
     // briefly showing a long-over inning as if it were still happening.
     const snapshot = {
+      buildId: APP_BUILD_ID,
       generatedAt,
       rawMatches: rawMatches.map(({ live, ...rest }) => rest),
       tbdMatches
@@ -2243,6 +2281,15 @@ function loadMatchSnapshot() {
   try {
     const snapshot = JSON.parse(localStorage.getItem(MATCH_SNAPSHOT_STORAGE_KEY));
     if (!snapshot || !Array.isArray(snapshot.rawMatches) || !snapshot.generatedAt) return null;
+    // A snapshot from a DIFFERENT deploy than this one - see APP_BUILD_ID's
+    // own comment - is never safe to instant-paint; wiped outright rather
+    // than merely ignored, so it can't linger and get read again by a
+    // later load that also fails to overwrite it (e.g. one that errors out
+    // before applyFreshBuild's own saveMatchSnapshot call is reached).
+    if (snapshot.buildId !== APP_BUILD_ID) {
+      localStorage.removeItem(MATCH_SNAPSHOT_STORAGE_KEY);
+      return null;
+    }
     if (Date.now() - Date.parse(snapshot.generatedAt) > MATCH_SNAPSHOT_MAX_AGE_MS) return null;
     return snapshot;
   } catch {

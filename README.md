@@ -690,12 +690,26 @@ the shared proxy's own per-IP rate limit on a single open tab alone:
   to `pollLiveMatches`'s own faster tier, which always makes a fresh request
   every tick since live score/odds data can't tolerate a 45s-old cache.
 - **Shared edge cache** (`SPORTS_PROXY_CACHE_TTL_SECONDS` in
-  `jaypengx-collab/shared-proxy`'s `worker.js`) - `/sports-proxy` itself
-  caches every successful upstream response for 20 seconds, keyed by the
-  upstream URL alone, so concurrent viewers (and this tab's own live-poll
+  `jaypengx-collab/shared-proxy`'s `sports-proxy-worker.js`) - `/sports-proxy`
+  itself caches every successful upstream response for 20 seconds, keyed by
+  the upstream URL alone, so concurrent viewers (and this tab's own live-poll
   tier, which isn't covered by the in-tab cache above) share one real
   upstream fetch instead of each paying for their own; a cache hit doesn't
   count against that route's own rate limit either.
+
+`/sports-proxy` is its own dedicated Cloudflare Worker (see that repo's own
+README), deliberately separate from the Worker `jaypengx-collab/shared-proxy`
+also runs for Orbit Class/Vocab's Gemini-backed features - that other
+Worker's `[placement]` region pin (needed to dodge Google's Gemini-in-Hong-
+Kong block) applies to its whole script, and used to force this route
+through the same pinned Virginia isolate too, adding a real, live-confirmed
+Taiwan↔Virginia round trip to every single one of this app's requests for a
+codebase that calls no AI service at all. That was a genuine, previously
+undiscovered contributor to reports of the first load going blank for 10+
+seconds and refreshes taking 10-20+ seconds - see `PROXY_URL`'s own comment
+in `public/app.js` for the live confirmation (`X-Worker-Colo: IAD` on a
+plain `/sports-proxy` call) and `docs/recommendation-engine-audit.md`'s
+Round 26 for the full writeup.
 
 Every successful build is also cached to `localStorage`
 (`matchfind-match-snapshot`) and painted immediately on the NEXT page load,
@@ -706,7 +720,13 @@ on a slow connection sees last visit's own list instantly instead of a blank
 shell), never a substitute for a real fetch. A snapshot older than
 `MATCH_SNAPSHOT_MAX_AGE_MS` (30 minutes) is ignored rather than painted,
 since a stale-enough copy is more likely to mislead (a finished-vs-still-
-scheduled fixture) than to help.
+scheduled fixture) than to help. It's also tagged with the deploy that built
+it (`APP_BUILD_ID`, stamped by `deploy.yml`'s own sed step with that build's
+commit sha) - a snapshot from a DIFFERENT deploy than the one currently
+running is wiped rather than painted, since a code change can change the
+shape this app's own rendering assumes (a renamed field, a newly-required
+one), and a viewer who never manually refreshes could otherwise sit on a
+stale, mismatched snapshot indefinitely.
 
 ## Live score/odds polling
 
@@ -887,16 +907,25 @@ Actions** (no branch to pick — the workflow handles publishing).
 
 ## The shared proxy (required - this is how live data actually reaches the page)
 
-`public/app.js`'s own `PROXY_URL` constant points at a shared Cloudflare
-Worker in its own dedicated repo,
-[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy),
-that also backs two sibling sites' own AI/sync features (Orbit, Orbit
-Vocab) - but as of `docs/recommendation-engine-audit.md`'s Round 11, Match
-Find itself no longer calls it for any AI/scoring purpose at all. The one
-route this site's browser talks to, `/sports-proxy`, is a plain,
-host-allowlisted CORS passthrough with no Gemini involvement - see "Live
-match data and manual refresh" above for why this page needs it at all
-(ESPN/the MLB Stats API/Jolpica/Polymarket send no CORS headers, so a
+`public/app.js`'s own `PROXY_URL` constant points at a Cloudflare Worker in
+its own dedicated repo,
+[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy)
+- but as of `docs/recommendation-engine-audit.md`'s Round 26, it's a
+*different* Worker deployment from the one Orbit/Orbit Vocab's own AI/sync
+features use there, not the same URL with a different path. `/sports-proxy`
+used to live on that same shared Worker as those two sites' Gemini-backed
+features, but that Worker's `[placement]` region pin (see that repo's own
+README) is a whole-script setting that was forcing this route through a
+pinned Virginia isolate too, adding real, live-confirmed latency for this
+site's own Taiwan-based audience with no benefit (nothing `/sports-proxy`
+calls has Gemini's region restriction). It was pulled out into its own
+separately deployed, unpinned Worker to fix that - `PROXY_URL` here points
+at THAT Worker, not `orbit-workers-proxy`. As of `docs/
+recommendation-engine-audit.md`'s Round 11, Match Find itself no longer
+calls either Worker for any AI/scoring purpose at all - `/sports-proxy` is a
+plain, host-allowlisted CORS passthrough with no Gemini involvement - see
+"Live match data and manual refresh" above for why this page needs it at
+all (ESPN/the MLB Stats API/Jolpica/Polymarket send no CORS headers, so a
 browser can't read any of their responses directly).
 
 Unlike Orbit/Orbit Vocab's own `PROXY_URL` (a GitHub Actions Variable

@@ -2840,3 +2840,125 @@ Proxy timeout change was also committed and pushed to both its branches -
 that repo has no deploy automation (see its own README), so it needs a
 manual redeploy (paste `worker.js` into the Cloudflare dashboard) before
 the shorter timeout actually takes effect in production.
+
+**Correction, made in Round 26 below**: that last sentence was wrong.
+Shared-Proxy *does* have real deploy automation
+(`.github/workflows/deploy.yml`, Wrangler via CI on every push touching
+`worker.js`/`wrangler.toml`) - confirmed after the fact by checking that
+workflow's own run history, which showed the Round 25 timeout commit had
+already deployed successfully on push, no manual dashboard step needed.
+Round 26 also found the actual dominant cause behind this same "10-20s,
+inconsistent" complaint, which the serial-fetch-stage and timeout fixes
+here were real but insufficient explanations for.
+
+## Round 26 (2026-09-21)
+
+Two more direct reports, given together: (1) "New push should wipe local
+cache so new data can build properly", and (2) the first-load blank period
+(reported as 10+ seconds) was called out again as still bad, with a
+specific hypothesis attached this time - "Could be proxy set in North
+America previously to prevent Gemini API being blocked, but I doubt this is
+the only reason."
+
+**1. New-deploy cache invalidation.** `public/app.js`'s own instant-paint
+snapshot (`matchfind-match-snapshot` in `localStorage` - see Round 22/23's
+own notes, or the README's "Live match data and manual refresh" section)
+gets painted to the screen BEFORE this load's own real fetch has run at
+all. That's fine as long as the snapshot's own shape still matches what the
+CURRENTLY RUNNING code expects - but a snapshot saved by a previous deploy
+could, in principle, predate a field rename or a newly-required field this
+deploy's own rendering code now assumes is always there, painting something
+broken (or throwing inside `applyFreshBuild`'s own try/catch) for however
+long the near-term refresh takes to quietly correct it. Fixed by stamping
+every saved snapshot with `APP_BUILD_ID`, a literal `'__BUILD_ID__'`
+placeholder in the committed source that `deploy.yml`'s own new sed step
+rewrites to that build's real commit sha in the GitHub Actions runner's own
+working copy only (never committed back to git - same never-committed
+pattern as the existing `?v=<sha>` cache-busting step for `app.js`/
+`styles.css` in `index.html`). `loadMatchSnapshot` now discards (removes
+from `localStorage`, not just ignores) any snapshot whose `buildId` doesn't
+match the currently-running code's own `APP_BUILD_ID` - so the very first
+load after any deploy always falls back to the normal from-scratch fetch,
+same as a first-ever visit, rather than risking an incompatible instant
+paint.
+
+**2. The user's own hypothesis was right, and was the dominant cause.**
+Re-read `jaypengx-collab/shared-proxy`'s `wrangler.toml` end to end rather
+than re-measuring `buildMatches` again (Round 25's own sandboxed
+measurements had already been unable to reproduce the reported magnitude,
+which in hindsight was itself a clue rather than a dead end - see below).
+That file pins `[placement] region = "gcp:us-east4"` (Virginia) - added,
+per its own comment, specifically so `/gemini`'s outbound call to Google's
+Gemini API wouldn't get run from Cloudflare's Hong Kong colo, which Gemini
+refuses outright. **`[placement]` is a whole-Worker-*script* setting, not a
+per-route one** - Cloudflare has no way to pin only some routes of a
+multi-route Worker to a region while leaving others on the default
+"run near whichever colo the request itself arrived at." Since
+`/sports-proxy` (Match Find's own route) lived on that SAME shared Worker
+as `/gemini`, it was being forced through that same Virginia isolate too,
+for every single request, regardless of where the actual caller was.
+Confirmed live with a plain curl against the deployed Worker:
+
+```
+$ curl -sI "https://orbit-workers-proxy.pengzjay.workers.dev/sports-proxy?url=..."
+x-worker-colo: IAD
+```
+
+`IAD` (Washington Dulles / Ashburn, Virginia) on an ordinary `/sports-proxy`
+call - not a Gemini call, not anything with a region restriction at all.
+For a viewer in Taiwan, every one of Match Find's dozens of near-term/
+full-window/live-poll requests per refresh was paying a full Taiwan↔
+Virginia round trip on top of whatever the upstream API itself took,
+regardless of Round 25's own fixes (fewer serial fetch stages, a shorter
+upstream timeout) - both real, both still worth having, but neither one
+touches a cost that exists on every request before either fix's own logic
+even runs. This also explains Round 25's own stated caveat: a sandboxed
+test of this same route from what is very likely a US-based environment
+would already land near Virginia with nothing to gain from Smart
+Placement-style rerouting, so the region pin's real cost was structurally
+invisible from there - only a caller on the other side of the world would
+ever see it, which is exactly what the live reports kept describing.
+
+Fixed by splitting `/sports-proxy` out of the shared Worker entirely: a new
+`sports-proxy-worker.js` (a copy of the route handler plus its own small
+copy of the CORS/rate-limiting helpers - see that file's own top comment)
+deployed as its own separate Cloudflare Worker via a second Wrangler config
+(`wrangler.sports-proxy.toml`), deliberately with **no** `[placement]`
+override at all, so Cloudflare's own default applies: run the isolate near
+whichever colo actually received the request. `worker.js` keeps `/gemini`,
+`/nl-edit`, `/sync`, `/vocab-sync`, `/vocab-ai` (all still correctly pinned
+to `us-east4`) - none of Orbit Class/Orbit Vocab's own code needed to
+change, since neither of those apps ever called `/sports-proxy`. Match
+Find's own `PROXY_URL` constant in `public/app.js` now points at this new
+Worker's own separate `*.workers.dev` URL rather than
+`orbit-workers-proxy`'s. `.github/workflows/deploy.yml` (Shared-Proxy's own)
+now runs two Wrangler deploy steps in the same job, one per config, so a
+single push redeploys both Workers; confirmed live after pushing that both
+steps succeeded and the new Worker actually serves real data
+(`sports-proxy.pengzjay.workers.dev/sports-proxy?url=...` returned a real
+15-event MLB scoreboard, `X-RateLimit-Backend: kv` confirming its own KV
+binding - shared with `orbit-workers-proxy`'s own namespace, safe since
+this route's rate-limit keys carry no `feature` prefix to collide with the
+other Worker's `gemini:`/`sync:`/etc keys - deployed and working
+correctly).
+
+**Caveat, stated plainly, same as Round 25's own**: this sandboxed
+environment cannot directly confirm the actual latency improvement a real
+Taiwan-based viewer will see, for the same underlying reason Round 25
+couldn't reproduce the original 10-20s figure - a request from here still
+shows `X-Worker-Colo: IAD` against the NEW Worker too, most likely because
+this environment's own network path already resolves near Virginia by
+default even with no pin forcing it there, so there's nothing for removing
+the pin to change from this vantage point. What's confirmed live is that
+the pin itself is gone (no `[placement]` block in
+`wrangler.sports-proxy.toml`, and the new Worker deploys/serves correctly)
+- the real proof of the latency fix will be a real device in Taiwan seeing
+a colo other than `IAD` and a materially faster refresh, which only the
+site's actual user can confirm.
+
+Full suite still 350/350 (no scoring/data-shape logic touched). Committed
+and pushed to both branches of Match-Find and both branches of Shared-Proxy;
+confirmed via the GitHub Actions API that Shared-Proxy's own CI run for
+this change completed successfully (both Wrangler deploy steps green)
+before Match Find's own `PROXY_URL` was pointed at the new Worker, so the
+switch never risked a dead URL going live.

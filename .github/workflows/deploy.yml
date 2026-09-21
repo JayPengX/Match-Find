@@ -95,6 +95,19 @@ jobs:
         # exactly as authored).
         run: |
           sed -i "s|src=\"./app.js\"|src=\"./app.js?v=${{ github.sha }}\"|; s|href=\"./styles.css\"|href=\"./styles.css?v=${{ github.sha }}\"|" public/index.html
+      - name: Tag app.js with this build's own id (for the local match-snapshot cache)
+        # public/app.js's own APP_BUILD_ID comment explains the full
+        # reasoning - short version: a viewer's cached localStorage match
+        # snapshot (saveMatchSnapshot/loadMatchSnapshot) is instant-painted
+        # BEFORE this load's own real fetch replaces it, so a snapshot built
+        # by an OLDER deploy's code needs to be recognizably older, not
+        # silently trusted, in case that deploy changed the match/rawMatches
+        # shape this one's own rendering code assumes. Same
+        # never-committed-back, runner-working-copy-only approach as the
+        # cache-busting step above - public/app.js in the repo keeps the
+        # literal '__BUILD_ID__' placeholder.
+        run: |
+          sed -i "s|__BUILD_ID__|${{ github.sha }}|" public/app.js
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
