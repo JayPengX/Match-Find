@@ -939,6 +939,28 @@ own real brand color (`public/lib/color.mjs`'s WCAG contrast check -
 falling back to a fixed sport accent only when neither of a team's two
 colors reads legibly against the card's current background).
 
+F1's own outright markets (Race winner, Pole position) use a DIFFERENT
+devig function than the team-sport markets above - `devigPowerMethod`
+instead of `devigNWay` - because they're structurally different: MLB/NBA/
+EPL each have ONE single combined market whose own two or three sides
+already sum close to 1 on their own (real, tiny vig). F1's outright field
+is ~23 completely SEPARATE, independently-priced Yes/No books, one per
+driver, with no shared liquidity forcing them to add up correctly -
+live-verified, a real Azerbaijan GP pole-position market's 23 raw "Yes"
+prices summed to 4.52, not ~1. Naive proportional rescaling (divide every
+price by that total) assumes every driver's book carries the SAME
+proportional overround, which is false: a rarely-traded longshot's own
+price is inflated far more than a heavily-traded favorite's (a
+well-documented prediction-market effect, "favorite-longshot bias") -
+live-reported as a leading driver showing an oddly low, flat-looking
+percentage (e.g. a real ~45.5% favorite reading as "10%"), indistinguishable
+from "no real favorite" even though the market disagreed. `devigPowerMethod`
+solves for an exponent k such that `sum(p_i^k) = 1` instead of dividing by
+the raw total - raising to a power above 1 shrinks a small price much
+faster than a large one, so a longshot's own larger excess gets corrected
+more than a favorite's smaller one. Percentages still sum to (near) exactly
+100 either way; only how that 100 gets divided up differs.
+
 Polymarket's own Gamma API caps a single request at 100 events regardless
 of the `limit` requested, and (a real, live-verified case) MLB alone can
 have 170+ currently-open events for its tag at once - not just one event

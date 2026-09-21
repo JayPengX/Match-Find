@@ -3175,3 +3175,69 @@ first added.
 
 Full suite still 350/350 (styles.css only, no logic touched). Committed
 and pushed to both branches of Match-Find.
+
+## Round 28 (2026-09-21)
+
+Direct question, not a bug report this time: "Is it normal a lot of MLB's
+match odds is 50/50, also why qualifying odds is lando 10 kimi 7 franco 7,
+that's kind of weird." Investigated both against LIVE `gamma-api.
+polymarket.com` data (not simulated fixtures), since both are exactly the
+kind of claim this app's own README says never to trust a synthetic
+sample for.
+
+**MLB near-50/50: real, not a bug.** Pulled today's actual moneyline
+markets: Blue Jays @ Orioles 50.5/49.5, Twins @ Giants 51.5/48.5,
+Nationals @ Tigers 41.5/58.5. Also verified the parser is reading the
+right market in the first place - a real MLB game event nests ~27
+markets (moneyline, spread, run-line, 1st-5-innings, per-inning winner,
+player props), several of which ALSO use the two team names as their own
+two outcomes (a spread market's outcomes are still `[awayTeam, homeTeam]`,
+just priced against a run line instead of a straight win) - live-checked
+across several games that the real head-to-head moneyline market
+consistently sorts first in Polymarket's own `markets` array for a game
+event, which is the one `parseCombinedMoneylineMarket` actually returns.
+Baseball moneylines cluster near 50/50 far more than NBA/NFL because
+single-game variance is high regardless of team quality (even a clearly
+better team still loses ~35-40% of individual games) - the market is
+telling the truth, not showing a parsing bug.
+
+**F1 qualifying odds: a real distortion, traced and fixed.** See
+`polymarket.mjs`'s own comment on `devigPowerMethod` for the full
+mechanism - short version: F1's outright markets (Race winner, Pole
+position) are ~23 SEPARATE, independently-priced Yes/No books, one per
+driver, unlike the team-sport case's one single combined market. Live-
+verified: a real Azerbaijan GP pole-position market's 23 raw "Yes" prices
+summed to 4.52, not ~1 - each driver trades in their own thin book with no
+shared liquidity keeping the field honest. The existing `devigNWay`
+(divide every price by the raw total) assumes that excess is spread
+EVENLY across every outcome, which live data shows is false: a rarely-
+traded longshot's own price is inflated far more than a heavily-traded
+favorite's (the textbook "favorite-longshot bias"). Dividing everyone by
+the same 4.52 crushed a genuine ~45.5% raw favorite (Lando Norris) down to
+a misleadingly flat ~10.1% - reading as "no real favorite" when the raw
+market data said otherwise, and reproducing the live report exactly
+("lando 10 kimi 7 franco 7").
+
+Added `devigPowerMethod`: solves for an exponent k such that
+`sum(p_i^k) = 1` (the "power method", a standard sports-betting devig
+technique) instead of dividing by the raw total - shrinks a small price
+much faster than a large one as k rises above 1, so a longshot's own
+larger excess gets corrected more than a favorite's smaller one, while
+still summing to exactly 100 like `devigNWay` does (explicitly asked for:
+"I still want % and the % represent the total of 100%" - a raw,
+non-rescaled display was considered and rejected, since raw prices don't
+sum to 100 at all and would look broken to a viewer expecting a
+probability distribution). Verified against the real 23-price fixture:
+Norris moves from 10.1% to 17.7%, still the clear #1, with every other
+driver's own relative order unchanged - only `parseOutrightWinnerMarkets`
+(both F1 callers) was switched to it; MLB/NBA/EPL's own `devigNWay` calls
+are untouched, since their real sums are already close to 1 and have no
+such bias to correct.
+
+Added direct test coverage for `devigPowerMethod` (sums to 100 on the
+real 23-price fixture, preserves `devigNWay`'s own ranking, gives the
+real favorite a meaningfully higher share than naive proportional
+rescaling would, and agrees with `devigNWay` on an already-near-exact
+two-way input) - a pure helper function, same test-coverage bar as
+`devigNWay` itself. Full suite 355/355. Committed and pushed to both
+branches of Match-Find.

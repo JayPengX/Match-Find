@@ -11,6 +11,7 @@ import {
   normalizeTeamName,
   teamNamesMatch,
   devigNWay,
+  devigPowerMethod,
   findTeamEvent,
   parseCombinedMoneylineMarket,
   parseSoccerThreeWayMarkets,
@@ -58,6 +59,50 @@ describe('devigNWay', () => {
     assert.equal(devigNWay([0.5, -0.1]), null);
     assert.equal(devigNWay([0.5, NaN]), null);
     assert.equal(devigNWay([0, 0]), null);
+  });
+});
+
+// Real fixture: the 23 raw "Yes" prices from a live Azerbaijan GP driver
+// pole-position market (one independent Yes/No book per driver) - these
+// sum to 4.519, not ~1, since nothing forces separately-priced longshot
+// books to add up correctly the way one single combined market does.
+const REAL_F1_POLE_RAW_PROBABILITIES = [
+  0.455, 0.335, 0.31, 0.305, 0.275, 0.275, 0.275, 0.265, 0.265, 0.26, 0.26, 0.2505, 0.2395, 0.245, 0.23, 0.155,
+  0.0505, 0.0155, 0.0155, 0.0105, 0.0105, 0.0105, 0.006
+];
+
+describe('devigPowerMethod', () => {
+  test('sums to 100 even when raw prices sum to far more than 1 (real F1 pole data)', () => {
+    const result = devigPowerMethod(REAL_F1_POLE_RAW_PROBABILITIES);
+    assert.equal(Math.round(result.reduce((sum, p) => sum + p, 0)), 100);
+  });
+  test('keeps the same favorite-first ranking as naive proportional rescaling', () => {
+    const power = devigPowerMethod(REAL_F1_POLE_RAW_PROBABILITIES);
+    const naive = devigNWay(REAL_F1_POLE_RAW_PROBABILITIES);
+    const powerOrder = power.map((_, i) => i).sort((a, b) => power[b] - power[a]);
+    const naiveOrder = naive.map((_, i) => i).sort((a, b) => naive[b] - naive[a]);
+    assert.deepEqual(powerOrder, naiveOrder);
+  });
+  test('gives the real favorite a noticeably higher share than naive proportional rescaling would', () => {
+    // Naive division by the raw total (4.519) crushes the favorite down to
+    // ~10.1% - live-reported as looking like "no real favorite" even
+    // though the raw price (45.5%) says otherwise. The power method should
+    // recover more of that signal instead of discounting the favorite by
+    // the same proportion as every long-shot driver in the field.
+    const power = devigPowerMethod(REAL_F1_POLE_RAW_PROBABILITIES);
+    const naive = devigNWay(REAL_F1_POLE_RAW_PROBABILITIES);
+    assert.ok(power[0] > naive[0] * 1.5);
+  });
+  test('already-near-exact two-way input is left essentially unchanged (agrees with devigNWay)', () => {
+    const power = devigPowerMethod([0.015, 0.985]);
+    assert.equal(power[0], 1.5);
+    assert.equal(power[1], 98.5);
+  });
+  test('returns null for empty input, a negative probability, or a non-finite one', () => {
+    assert.equal(devigPowerMethod([]), null);
+    assert.equal(devigPowerMethod([0.5, -0.1]), null);
+    assert.equal(devigPowerMethod([0.5, NaN]), null);
+    assert.equal(devigPowerMethod([0, 0]), null);
   });
 });
 

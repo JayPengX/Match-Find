@@ -141,6 +141,49 @@ export function devigNWay(rawProbabilities) {
   return rawProbabilities.map(p => Math.round((p / total) * 1000) / 10);
 }
 
+// Same job as devigNWay - normalize raw market-implied probabilities so
+// they sum to 100 - but for a field of MANY separately-priced longshot
+// books (an outright winner market like F1's, one independent Yes/No
+// market per candidate) rather than one single combined market. Plain
+// proportional rescaling (devigNWay) assumes every outcome carries the
+// SAME proportional overround, which live-verified data shows is false
+// here: a real 23-driver F1 pole-position market's raw "Yes" prices summed
+// to 4.52, not ~1 (each driver trades in their OWN thin book with no
+// shared liquidity forcing the field to sum correctly) - and that excess
+// is NOT spread evenly. A well-documented prediction-market/sportsbook
+// effect ("favorite-longshot bias") means a rarely-traded longshot's own
+// price is inflated far more than a heavily-traded favorite's - dividing
+// everyone by the same total (devigNWay's approach) punishes the genuine
+// favorite just as much as the longshots, live-observed flattening a real
+// ~45.5% raw favorite down to a misleadingly low ~10%, reading as "no real
+// favorite" when the underlying market disagreed.
+//
+// Solves for an exponent k such that sum(p_i^k) = 1 (the "power method",
+// a standard devigging technique) instead of dividing by the raw total.
+// Raising to a power above 1 shrinks a small p much faster than a large
+// one, so a longshot's own larger excess gets undone more than a
+// favorite's smaller one - still produces percentages that sum to (near)
+// exactly 100, same contract as devigNWay, just distributed to reflect
+// that a longshot's overround and a favorite's aren't the same size.
+export function devigPowerMethod(rawProbabilities) {
+  if (!Array.isArray(rawProbabilities) || rawProbabilities.length === 0) return null;
+  if (rawProbabilities.some(p => !Number.isFinite(p) || p < 0)) return null;
+  const total = rawProbabilities.reduce((sum, p) => sum + p, 0);
+  if (total <= 0) return null;
+  // Binary search over k: sum(p_i^k) decreases monotonically as k increases
+  // (for p_i in (0, 1]), so this converges to the unique k with sum == 1.
+  let lo = 0.01;
+  let hi = 100;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    const sum = rawProbabilities.reduce((s, p) => s + p ** mid, 0);
+    if (sum > 1) lo = mid;
+    else hi = mid;
+  }
+  const k = (lo + hi) / 2;
+  return rawProbabilities.map(p => Math.round(p ** k * 1000) / 10);
+}
+
 // Finds the one event (out of a whole league's worth) that's really this
 // fixture - matched by BOTH team names (via Polymarket's own structured
 // `event.teams[]`, confirmed live to carry {name, ordering: 'away'|'home'}
@@ -265,7 +308,11 @@ export function parseOutrightWinnerMarkets(markets, questionRegex) {
     candidates.push({ name: match[1].trim(), prob });
   }
   if (!candidates.length) return null;
-  const devigged = devigNWay(candidates.map(c => c.prob));
+  // devigPowerMethod, not devigNWay - see that function's own comment. This
+  // is exactly the "many separately-priced longshot books" shape it exists
+  // for (one independent Yes/No market per driver), unlike the team-sport
+  // callers above (one single combined market, negligible real overround).
+  const devigged = devigPowerMethod(candidates.map(c => c.prob));
   if (!devigged) return null;
   return candidates.map((c, i) => ({ name: c.name, pct: devigged[i] })).sort((a, b) => b.pct - a.pct);
 }
