@@ -413,7 +413,7 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(postseason.watchability > regularSeason.watchability);
   });
 
-  test('skill is a real, computed value from the two teams average win%', () => {
+  test('skill is a real, computed value from the better team\'s own win%', () => {
     const result = computeNbaObjectiveScore({ awayWinPct: 0.7, homeWinPct: 0.7, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
     assert.ok(result.skill >= 8);
   });
@@ -435,7 +435,13 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(bubbleRace.factors.some(f => f.includes('playoff-seed proximity')));
   });
 
-  test('a real blowout (lopsided record) is NOT rescued by one side coincidentally sitting near a seed cutoff', () => {
+  test('skill reflects the BETTER team\'s own win%, not the average - a contender resting starters against a tanking team still reads as containing a genuinely elite team', () => {
+    const eliteVsTanking = computeNbaObjectiveScore({ awayWinPct: 0.7, homeWinPct: 0.2, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    const mediocreVsTanking = computeNbaObjectiveScore({ awayWinPct: 0.45, homeWinPct: 0.2, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
+    assert.ok(eliteVsTanking.skill > mediocreVsTanking.skill);
+  });
+
+  test('a real blowout is NOT rescued all the way to the maximum, even with a coincidental seed cutoff AND a genuinely elite team\'s own real skill contribution both reading high - the soft cap still meaningfully suppresses it', () => {
     const blowout = computeNbaObjectiveScore({
       awayWinPct: 0.85,
       homeWinPct: 0.15,
@@ -445,7 +451,14 @@ describe('computeNbaObjectiveScore', () => {
       isRivalry: false,
       isNationalBroadcast: false
     });
-    assert.ok(blowout.watchability <= blowout.competitiveness + 3);
+    // Real lift over competitiveness alone (skill/stakes are genuine, not
+    // discarded)...
+    assert.ok(blowout.watchability > blowout.competitiveness);
+    // ...but never rescued all the way to the top just because a seed
+    // cutoff and a real skill signal both happen to read high at once -
+    // this is the direct replacement for the old hard
+    // `competitiveness + 3` wall, softer but still a real ceiling.
+    assert.ok(blowout.watchability < 10);
   });
 
   test('recent form (last 10) and streak feed in the same way MLB\'s own standings do', () => {
@@ -524,7 +537,13 @@ describe('computeEplObjectiveScore', () => {
     assert.ok(clRace.watchability >= 8);
   });
 
-  test('a real blowout is NOT rescued by one side coincidentally sitting near a table cutoff', () => {
+  test('skill reflects the BETTER club\'s own points-rate, not the average - catches a genuinely elite club even when the fixture itself is one-sided', () => {
+    const eliteVsStruggler = computeEplObjectiveScore({ awayWinPct: 0.15, homeWinPct: 0.75, isDerby: false, isBigClub: false });
+    const midTableVsStruggler = computeEplObjectiveScore({ awayWinPct: 0.15, homeWinPct: 0.45, isDerby: false, isBigClub: false });
+    assert.ok(eliteVsStruggler.skill > midTableVsStruggler.skill);
+  });
+
+  test('a real blowout is NOT rescued all the way to the maximum, even with a coincidental table cutoff, a big-club bonus, AND a genuinely elite team\'s own real skill all reading high at once - the soft cap still meaningfully suppresses it', () => {
     const blowout = computeEplObjectiveScore({
       awayWinPct: 0.05,
       homeWinPct: 0.9,
@@ -533,7 +552,16 @@ describe('computeEplObjectiveScore', () => {
       isDerby: false,
       isBigClub: true
     });
-    assert.ok(blowout.watchability <= blowout.competitiveness + 3);
+    // Real lift over competitiveness alone (skill/stakes/the big-club bonus
+    // are genuine, not discarded)...
+    assert.ok(blowout.watchability > blowout.competitiveness);
+    // ...but never rescued all the way to the top just because a table
+    // cutoff, a big-club name, and a real skill signal all happen to read
+    // high at once - this is the direct replacement for the old hard
+    // `competitiveness + 3` wall, softer (and here, the TIGHTEST of the
+    // three sports' own dampings - see EPL_WATCHABILITY_EXCESS_DAMPING's
+    // own comment) but still a real ceiling.
+    assert.ok(blowout.watchability < 10);
   });
 });
 

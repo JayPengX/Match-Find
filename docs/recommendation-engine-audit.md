@@ -3327,3 +3327,76 @@ the new best-team-win% semantics (the test's assertions themselves already
 happened to hold either way). Full suite 358/358. Scoped to MLB only -
 NBA/EPL's own `computeNbaObjectiveScore`/`computeEplObjectiveScore` and
 their hard `+3` cap were not touched.
+
+## Round 30 (2026-09-21): the same direction applied to NBA and EPL, each with its own tailored formula
+
+Direct follow-up request: apply Round 29's fix to NBA and EPL too, but
+"not the same formula but specific designed for them but the same
+direction" - wire `skill` into watchability and soften the hard
+`competitiveness + 3` cap, without literally copying MLB's weights.
+
+**Skill.** Both sports' own `skill` switched from the two-team average to
+the BETTER team's own win%/points-rate, same reasoning and same fix as
+MLB's own Round 29 change (an elite team paired with a bad one averages
+back toward neutral, hiding exactly the signal this axis exists for).
+
+**Watchability weighting - deliberately different per sport, not MLB's
+numbers reused:**
+- **NBA**: `stakes 0.35 / competitiveness 0.3 / skill 0.2 / momentum 0.15`.
+  Stakes keeps the single largest share of any sport (the play-in/playoff
+  cutoff is a more binary, higher-visibility stake than MLB's own
+  wild-card race), and skill gets the SMALLEST share of the three sports
+  (0.2) because NBA already has two separate name/fame-driven additive
+  bonuses (rivalry, national broadcast) that a continuous skill score
+  would otherwise partially duplicate.
+- **EPL**: `stakes 0.4 / competitiveness 0.3 / skill 0.3`. No
+  momentum/recent-form signal exists for EPL at all (unchanged limitation,
+  see this doc's own README cross-reference), so skill gets the LARGEST
+  share of the three sports (0.3) - there's no fourth axis to otherwise
+  spend that weight on.
+
+**Soft-cap damping - also deliberately different per sport:**
+`NBA_WATCHABILITY_FULL_LIFT_ALLOWANCE`/EPL's own equivalent both reuse the
+same 3-point allowance as MLB (a strict loosening of the old rule, not a
+re-tuning of the normal case - excess up to 3 still passes through
+unchanged everywhere). Past that allowance:
+- MLB damps by 0.4 (least conservative - a single rivalry bonus, at most
+  +2, can stack on top of skill).
+- NBA damps by 0.3 (rivalry +1.5 AND national broadcast +1 can both stack
+  on top of skill, more than MLB's single bonus).
+- EPL damps by 0.25, the tightest of the three - a derby (+2) AND a
+  big-club bonus (+2) can BOTH stack on top of skill (up to +4 total),
+  more than either other sport's own bonuses, so it needs the strongest
+  brake to keep a genuinely decided blowout from getting too much lift
+  out of name value alone.
+
+**Verified against hand-built examples** (same style as Round 29, real
+gaps and no simulated fixtures):
+- NBA: an elite (.70) team against a tanking (.20) one scores
+  `skill: 9, watchability: 4`; a mediocre (.45) team against the same
+  tanking side scores `skill: 4, watchability: 5` (a smaller win% gap, so
+  competitiveness alone is already higher there - not a regression, a
+  different scenario). A genuinely close NBA race (.55 vs .53, no
+  standings data) scores `watchability: 7`, comfortably ahead of either
+  blowout.
+- EPL: an elite (.75) club against a struggling (.15) one, no derby/
+  big-club flags at all, scores `skill: 10, watchability: 4` - a
+  genuinely great, unflagged club is no longer invisible to watchability
+  the way it was when only the binary `isBigClub` list could raise it. A
+  close mid-table EPL fixture (.52 vs .50) scores `watchability: 8`.
+
+**Existing tests updated, not just left broken by the intentional
+behavior change:** two "blowout NOT rescued" tests (NBA, EPL) previously
+asserted the OLD flat `watchability <= competitiveness + 3` bound using
+scenarios that happen to also contain a genuinely elite team (.85/.15,
+.05/.90) - under the new formula those blowouts legitimately exceed the
+old bound by a small amount, because skill's own real contribution is
+no longer zero. Rewrote both as: skill uses the better team's own win%
+(a clean, unconfounded check), and the blowout scenario itself is
+still meaningfully suppressed (`watchability > competitiveness` but
+`< 10`, i.e. real lift without ever reaching the maximum) rather than
+literally re-deriving the old hard number. One `match-builder.test.mjs`
+factor-string assertion (`'avg points-rate 30.0%'`) updated to
+`'best team points-rate 40.0%'` to match the new factor text. Added 4 new
+tests (2 NBA, 2 EPL) covering the better-team-not-average fix and the
+soft-cap's own bounded-but-real-lift behavior. Full suite 360/360.

@@ -290,6 +290,23 @@ export const MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS = 3;
 export const MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE = MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS;
 export const MLB_WATCHABILITY_EXCESS_DAMPING = 0.4;
 
+// NBA's own version of the same softening, same allowance (reused, same
+// reasoning as MLB's own) but a more conservative damping - see
+// computeNbaObjectiveScore's own comment on why NBA's is tighter than
+// MLB's (rivalry + national broadcast can both stack on top of skill
+// there, unlike MLB's single rivalry bonus).
+export const NBA_WATCHABILITY_FULL_LIFT_ALLOWANCE = MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS;
+export const NBA_WATCHABILITY_EXCESS_DAMPING = 0.3;
+
+// EPL's own version - see computeEplObjectiveScore's own comment. Tightest
+// damping of the three sports: EPL can stack TWO name-based bonuses
+// (derby +2, big-club +2, up to +4 together) on top of skill, more than
+// either MLB's single +2 rivalry bonus or NBA's +2.5 combined rivalry/
+// national-broadcast bonus, so the excess this needs to keep in check
+// starts from a larger base.
+export const EPL_WATCHABILITY_FULL_LIFT_ALLOWANCE = MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS;
+export const EPL_WATCHABILITY_EXCESS_DAMPING = 0.25;
+
 // ---- MLB ----------------------------------------------------------------
 //
 // `away`/`home` are each either null (no MLB Stats API standings entry
@@ -499,10 +516,30 @@ export function computeNbaObjectiveScore({
   const momentum = momentumInputs.length ? Math.max(...momentumInputs) : null;
   if (Number.isFinite(momentum)) factors.push(`streak ${away?.streakCode || ''}/${home?.streakCode || ''}`.trim());
 
+  // How good the two teams actually are - same MLB-review fix
+  // (Round 29/30, see computeMlbObjectiveScore's own comment for the full
+  // reasoning), applied here for the same underlying reason: a contender
+  // resting starters or blowing out a tanking team averages back toward a
+  // neutral skill reading exactly the way an elite-vs-bad MLB pairing does,
+  // which would hide the one signal this axis exists to capture. Uses the
+  // BETTER team's own win%, not the average of both.
+  const bestTeamWinPct =
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? Math.max(awayWinPct, homeWinPct) : null;
+  const skill = skillFromWinPct(bestTeamWinPct);
+  if (Number.isFinite(skill)) factors.push(`best team win% ${(bestTeamWinPct * 100).toFixed(1)}%`);
+
+  // NBA-specific weighting (not MLB's) - stakes keeps the largest single
+  // share (0.35, vs MLB's 0.3) since the play-in/playoff cutoff is a much
+  // more binary, high-visibility stake than MLB's own wild-card race, and
+  // skill gets a smaller share (0.2, vs MLB's 0.25) since NBA already has
+  // its OWN two separate name/fame-driven signals below (rivalry,
+  // national broadcast) that a continuous skill score would otherwise
+  // partially duplicate.
   let watchability = weightedAverage([
-    [stakes, 0.45],
-    [competitiveness, 0.35],
-    [momentum, 0.2]
+    [stakes, 0.35],
+    [competitiveness, 0.3],
+    [skill, 0.2],
+    [momentum, 0.15]
   ]) ?? 5;
   // Rivalry/national-broadcast are additive bonuses, not blended-in values -
   // a blend can round-collide with (or even pull DOWN) an already-high base
@@ -512,8 +549,8 @@ export function computeNbaObjectiveScore({
   // competitiveness the way MLB's rivalry bonus is (see
   // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - a low
   // competitiveness here can still be early-season noise a real rivalry/
-  // national broadcast should survive. MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS
-  // right below is still the backstop against a genuinely decided blowout.
+  // national broadcast should survive. The soft cap right below is still
+  // the backstop against a genuinely decided blowout.
   if (isRivalry) {
     watchability += 1.5;
     factors.push('known rivalry matchup');
@@ -522,8 +559,27 @@ export function computeNbaObjectiveScore({
     watchability += 1;
     factors.push('national broadcast');
   }
-  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment.
-  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
+  // Softer, NBA-specific replacement for the old flat
+  // `Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS)`
+  // ceiling - same direction and same reasoning as MLB's own
+  // MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE/_EXCESS_DAMPING (a hard wall can't
+  // tell "a famous name propping up a decided blowout" apart from "a
+  // genuinely elite team in an otherwise-lopsided game", so a
+  // now-real skill signal deserves a chance to move past it, just with
+  // diminishing returns rather than unbounded credit). Kept MORE
+  // conservative than MLB's own damping (0.3, vs MLB's 0.4): NBA can stack
+  // rivalry (+1.5) AND national broadcast (+1) on top of skill, so a
+  // gentler damping here keeps the same real protection against a
+  // decided blowout getting rescued by name/broadcast alone that the old
+  // hard cap provided, even with more bonuses able to stack into the
+  // excess than MLB has.
+  const excess = watchability - competitiveness;
+  if (excess > NBA_WATCHABILITY_FULL_LIFT_ALLOWANCE) {
+    watchability =
+      competitiveness +
+      NBA_WATCHABILITY_FULL_LIFT_ALLOWANCE +
+      (excess - NBA_WATCHABILITY_FULL_LIFT_ALLOWANCE) * NBA_WATCHABILITY_EXCESS_DAMPING;
+  }
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(
@@ -531,11 +587,6 @@ export function computeNbaObjectiveScore({
     1,
     10
   );
-
-  const skill = skillFromWinPct(
-    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
-  );
-  if (Number.isFinite(skill)) factors.push(`avg win% ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
 
   return { competitiveness, watchability, enduranceScore, skill, factors };
 }
@@ -589,9 +640,28 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, i
   const stakes = stakesInputs.length ? Math.max(...stakesInputs) : null;
   if (stakesInputs.length) factors.push(`table-position proximity ${stakesInputs.join('/')}`);
 
+  // How good the two teams actually are - same fix as MLB/NBA above, and
+  // for the same reason: a genuinely elite club (Manchester City) grinding
+  // out a currently-lopsided result against a struggling newly-promoted
+  // side would average back toward a neutral skill reading, hiding exactly
+  // the "there's a genuinely great team out there tonight" signal this
+  // exists to capture - and unlike `isBigClub` (a fixed, hand-maintained
+  // list, see sport-duration.mjs's EPL_BIG_CLUBS), this is a continuous,
+  // table-driven signal that also catches a genuinely in-form club that
+  // simply isn't on that list yet.
+  const bestTeamWinPct =
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? Math.max(awayWinPct, homeWinPct) : null;
+  const skill = skillFromWinPct(bestTeamWinPct);
+  if (Number.isFinite(skill)) factors.push(`best team points-rate ${(bestTeamWinPct * 100).toFixed(1)}%`);
+
+  // EPL-specific weighting - skill gets the largest share of the three
+  // (0.3) of any sport in this module, because EPL has no recent-form/
+  // momentum signal at all (see this function's own header comment) to
+  // otherwise fill that weight budget, unlike MLB/NBA's four-way blend.
   let watchability = weightedAverage([
-    [stakes, 0.45],
-    [competitiveness, 0.35]
+    [stakes, 0.4],
+    [competitiveness, 0.3],
+    [skill, 0.3]
   ]) ?? competitiveness;
   // Additive, same reasoning as computeNbaObjectiveScore's own rivalry/
   // national-broadcast bonuses - a derby/big-club fixture should only ever
@@ -606,9 +676,9 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, i
   // Not gated on competitiveness the way MLB's rivalry bonus is (see
   // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - a low
   // competitiveness here can still be the early-season-noise case
-  // (Liverpool @ AFC Bournemouth) this bonus was written to survive.
-  // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS right below is still the
-  // backstop against a genuinely decided blowout.
+  // (Liverpool @ AFC Bournemouth) this bonus was written to survive. The
+  // soft cap right below is still the backstop against a genuinely
+  // decided blowout.
   if (isDerby) {
     watchability += 2;
     factors.push('known derby fixture');
@@ -617,19 +687,27 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, i
     watchability += 2;
     factors.push('known big-club fixture');
   }
-  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - keeps a
-  // stacked derby+big-club (up to +4) plus a high table-stakes reading
-  // from lifting a genuinely lopsided fixture too far past its own
-  // competitiveness either.
-  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
+  // Softer, EPL-specific replacement for the old flat
+  // `Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS)`
+  // ceiling - same direction as MLB/NBA's own softened caps (see
+  // MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE's own comment for the shared
+  // rationale). Uses the TIGHTEST damping of the three sports
+  // (EPL_WATCHABILITY_EXCESS_DAMPING = 0.25) - a stacked derby+big-club
+  // bonus (up to +4) plus a now-real skill signal plus a maxed table-
+  // stakes reading can accumulate more excess here than MLB's single
+  // rivalry bonus or NBA's rivalry+broadcast pair ever can, so this needs
+  // the strongest brake to keep a genuinely decided blowout from getting
+  // too much lift out of name value alone.
+  const excess = watchability - competitiveness;
+  if (excess > EPL_WATCHABILITY_FULL_LIFT_ALLOWANCE) {
+    watchability =
+      competitiveness +
+      EPL_WATCHABILITY_FULL_LIFT_ALLOWANCE +
+      (excess - EPL_WATCHABILITY_FULL_LIFT_ALLOWANCE) * EPL_WATCHABILITY_EXCESS_DAMPING;
+  }
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(Math.round(competitiveness), 1, 10);
-
-  const skill = skillFromWinPct(
-    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
-  );
-  if (Number.isFinite(skill)) factors.push(`avg points-rate ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
 
   return { competitiveness, watchability, enduranceScore, skill, factors };
 }

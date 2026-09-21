@@ -242,7 +242,22 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
   already in the same standings response) and discounts a comfortable
   leader's stakes the same way it already discounts a team chasing from
   behind - floored at 2, never automatically maxed at 10 just for holding
-  first place.
+  first place. Round 30 applied the same direction to NBA and EPL, each
+  with its own tailored formula rather than copying MLB's numbers: NBA
+  blends `skill` in at weight 0.2 (vs MLB's 0.25 - NBA already has rivalry
+  AND national-broadcast bonuses that partially overlap with what a
+  continuous skill score would add) and softens its own cap with a
+  TIGHTER damping (`NBA_WATCHABILITY_EXCESS_DAMPING` = 0.3 vs MLB's 0.4,
+  since NBA's two stackable bonuses can build up more excess than MLB's
+  single rivalry bonus). EPL blends `skill` in at weight 0.3 - the
+  largest of the three sports, since EPL has no recent-form/momentum
+  signal at all to otherwise fill that weight budget - and uses the
+  TIGHTEST damping of the three (0.25), since EPL can stack a derby AND a
+  big-club bonus together (up to +4) on top of skill, more than either
+  other sport's own bonuses. Both use the same "better team's own win%,
+  not the average" fix as MLB for the same reason (an elite club grinding
+  through a currently-lopsided score against a weak side would otherwise
+  average back to a neutral skill reading).
 - **enduranceScore** - does the contest actually stay meaningful all the
   way through, not just at kickoff
 - **broadcastQuality** - production quality of watching it

@@ -187,9 +187,9 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
     // Real win% gap: Palace 1/5=0.2 vs Leeds 2/5=0.4 -> gap 0.2 -> closeness 6.
     // The old (buggy) gap was 0.5 vs 0.4 -> gap 0.1 -> closeness 8.
     assert.ok(result.competitiveness <= 6, `expected the real .2/.4 gap, got competitiveness ${result.competitiveness}`);
-    // avg points-rate (0.2+0.4)/2 = 30.0% - the OLD bug (ignoring ties) would
-    // have reported an inflated (0.5+0.4)/2 = 45.0% here instead.
-    assert.ok(result.factors.some(f => f.includes('avg points-rate 30.0%')));
+    // best team points-rate = max(0.2, 0.4) = 40.0% - the OLD bug (ignoring
+    // ties) would have reported an inflated max(0.5, 0.4) = 50.0% here instead.
+    assert.ok(result.factors.some(f => f.includes('best team points-rate 40.0%')));
   });
 });
 
