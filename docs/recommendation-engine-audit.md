@@ -3493,3 +3493,236 @@ the floor) to `objective-score.test.mjs`; added two tests to
 `recommendation.test.mjs` (proportional scaling by `marqueeCredit`, and
 unchanged full-credit behavior when the field is absent). Full suite
 369/369. Committed and pushed to both branches.
+
+## Round 32 (2026-09-21): merge the separate "click to update" button into the main refresh button
+
+Live-reported: the "發現新版本，點此重新載入" button (`reload-app-btn` -
+only ever shown after a manual "立即重新整理" click found a new deploy) had
+become a confusing extra step - two clicks split across two buttons for
+what's really one decision the viewer wants made for them. Requested fix:
+remove it and fold its job into the one existing "立即重新整理" button -
+check for a new deploy FIRST, reload immediately if one exists, otherwise
+fall through to the exact same data refresh it already did.
+
+`refreshDataBtn`'s click handler now awaits `checkForNewAppVersion()`
+before anything else; on `true` it does the same cache-busted
+`window.location.replace` the old `reloadAppBtn` handler used (a bare
+`location.reload()` can be served from this tab's own local HTTP cache,
+since `index.html` carries `cache-control: max-age=600` - see that code's
+own comment) and returns without ever calling `refreshFullWindow`; on
+`false`/failure it falls through to the unchanged `refreshFullWindow` call.
+`refreshFullWindow` itself lost the post-fetch version-check block that
+used to unhide `reloadAppBtn` - there is no second button left to unhide.
+Removed `reload-app-btn` entirely from `index.html`/`app.js`/`styles.css`,
+including its now-obsolete `#reload-app-btn[hidden] { display: none; }`
+cascade-fix rule from earlier the same day (the button it targeted no
+longer exists).
+
+No test coverage existed for either button (both are pure DOM/event-
+handler glue, not scoring logic) - verified instead with `node --check` on
+`app.js` and a live Playwright smoke load (no `pageerror`s, settings panel
+renders with exactly one update button). Full suite still 369/369
+(untouched - no scoring logic in this change). Committed and pushed to
+both branches.
+
+## Round 33 (2026-09-21): tracing the system against 6 days of human-validated MLB picks - a real result the formula can't reach without breaking something else
+
+User-supplied ground truth: a human-validated "what should have been
+recommended" list for MLB, Taiwan time, 2026-09-22 through 2026-09-27
+(some days offering two "OR"-equivalent options), built from real
+online/media judgment, with an explicit instruction: find the GENERIC
+similarity behind any mismatch, never patch one specific date/pairing.
+
+**Method.** Ran the actual live pipeline, not a hand-built fixture:
+`node scripts/build-data.mjs` against the real MLB Stats API/ESPN/
+Polymarket (today really was 2026-09-21, so 9/22-27 were all still
+upcoming, real, currently-fetchable fixtures), then
+`TZ=Asia/Taipei node scripts/dump-day-plan.mjs 2026-09-22 2026-09-27 MLB`
+to see the actual picks with full score breakdowns and every non-picked
+candidate's own reason.
+
+**Result.** 9/22 (Blue Jays@Orioles + Twins@Giants) and 9/26 (Cubs@Red Sox
++ Dodgers@Giants - the exact Round 31 case) matched the human list exactly,
+confirming those two rounds' fixes hold on live data days later. 9/27
+picked Rays@Phillies, one of the three offered "OR" options - also correct.
+**9/23, 9/24, and 9/25 all picked Cleveland Guardians @ Boston Red Sox**
+for the headline slot instead of the human's **Milwaukee Brewers @
+Philadelphia Phillies OR Tampa Bay Rays @ New York Yankees** - the same
+two 3-game series playing out identically wrong for three consecutive
+nights, i.e. one structural conflict, not three.
+
+**First hypothesis (a redundant-weighting bug in `bestMatchScore`) - tested
+and rejected with a real constraint search, not a guess.** `bestMatchScore`
+blends skill (0.2)/competitiveness (0.2)/watchability (0.35)/enduranceScore
+(0.1)/broadcastQuality (0.15) - but competitiveness is ALSO ~30% of
+watchability's own blend and ~60% of enduranceScore's, so it's structurally
+counted three times over, while skill (the axis that actually distinguishes
+Milwaukee's historic 98-58 season and a `skillFromWinPct` of 8, the day's
+highest, from Guardians/Red Sox's more pedestrian 6) is comparatively
+under-weighted. That reads like exactly the kind of redundancy earlier
+rounds have fixed before. Wrote a small script
+(`scripts/`-adjacent scratch tooling, not committed - grid-searched
+`{skill, competitiveness, watchability, enduranceScore, broadcastQuality}`
+weight combinations against the REAL fetched 9/22-9/27 data) with two hard
+constraints: Brewers/Phillies must beat Guardians/Red Sox on 9/23-25, AND
+Chicago Cubs @ Boston Red Sox must still beat Tampa Bay Rays @ Philadelphia
+Phillies on 9/26 (a real fixture pair that day with the IDENTICAL
+statistical shape - high-competitiveness/lower-skill "X @ Red Sox" vs
+lower-competitiveness/higher-skill "Rays @ Y" - already correctly resolved
+by the current weights). **Every weight combination that satisfies the
+first constraint breaks the second, and vice versa** - the unconstrained
+grid search's own best-margin solution was a degenerate corner
+(`broadcastQuality: 0`, `enduranceScore` UP not down) with no principled
+interpretation, itself proof that no honest linear reweighting of these
+five axes can resolve both real cases at once. This is not a coefficient
+bug; it's evidence the two days' correct answers depend on something these
+five axes don't encode at all.
+
+**Second hypothesis (missing real starting-pitcher-quality signal) - also
+checked against real data, also didn't hold up.** MLB uniquely has a single
+daily starting pitcher whose quality is both a real skill signal AND a real
+"appointment viewing" draw a team-record-only formula can't see - unlike
+NBA/EPL, this seemed like a plausible genuinely-new, deterministic axis
+(not a hand-maintained list). Fetched real announced probable pitchers +
+their actual 2026 season ERAs via the MLB Stats API's own
+`hydrate=probablePitcher` schedule param and `/people?hydrate=stats(...)`
+batch endpoint. Result: Milwaukee's Logan Henderson (2.51 ERA) is
+excellent, matching the "Brewers should win" hypothesis - but Boston's own
+9/23 starter, Sonny Gray (2.82 ERA), is just as much an ace. Pitcher
+quality doesn't cleanly separate these two games either; it isn't the
+missing variable.
+
+**Conclusion, reported to the user rather than papered over with a forced
+fit.** This specific mismatch reflects real-world contextual judgment
+(team storylines, how big a draw a specific matchup is, things a human
+rater sees and a box-score formula structurally cannot) that isn't
+decomposable into any deterministic signal tried, including a genuinely
+new one. Continuing to hand-tune weights to fit this exact example would
+trade a real fix for a fragile one, per the user's own explicit standing
+instruction to find generic similarity rather than patch a specific case -
+exactly what the constraint search proved was NOT available here. This
+directly motivated Round 34's design question back to the user: since the
+formula provably cannot resolve this class of call without regressing
+something else, is a bounded, quota-conscious Gemini tie-break (not a
+return to the old per-fixture validation call) worth reintroducing for
+exactly this kind of close call? The user chose "bounded daily tie-breaker."
+
+No code changed in this round - it's a trace + a rejected-hypothesis
+record, kept here so a future close call isn't re-litigated from scratch.
+Full suite unchanged, 377/377 as of Round 34 below (8 new tests were added
+THERE, not here).
+
+## Round 34 (2026-09-21): reintroducing Gemini as a bounded, at-most-once-a-day tie-break (not the per-fixture validation Round 11 removed)
+
+Directly follows Round 33's finding: the deterministic engine cannot
+resolve the 9/23-25 class of close call without breaking an
+already-correct one, proven by constraint search, not assumed. The user's
+own framing (paraphrased): "if we fixed our recommendation system we might
+never need Gemini... you make the call" - given the formula genuinely
+can't reach this result, and given the user picked the bounded-tie-break
+option when asked, this round reintroduces exactly that: **one Gemini call
+per day, at most, only for the single headline slot's own close call, never
+a per-fixture validation pass.**
+
+**Why this doesn't repeat Round 11's failure mode.** Round 11 removed a
+call that ran on EVERY fixture, EVERY build - the exact shape that hit
+Google Search grounding's 429 RESOURCE_EXHAUSTED wall on 100% of live
+requests (Round 9). This call: (1) only fires when
+`selectGeminiTieBreakCandidates` finds 2-4 candidates within
+`GEMINI_TIE_BREAK_MARGIN` (0.5, a tight bar - a third of this file's own
+`ALTERNATIVE_MAX_SCORE_GAP`) of each other for the CURRENTLY-VIEWED day's
+own top pick - most days have no such call to make at all; (2) is cached
+client-side per `(dayKey, exact candidate-id-set)` for 24h on success (2h
+on failure/no-config, so an unset URL or a transient error doesn't retry
+every render) - a real live session asks at most once per day actually
+viewed, not once per fetched day in the whole 14-day window; (3) requests
+no Google Search grounding - it asks Gemini to use its own training-data
+knowledge of the specific teams/players, which is what the original
+un-grounded validation call (Round 9's own finding) always succeeded at
+anyway, the grounding tool was the part that failed.
+
+**Shared-Proxy (`jaypengx-collab/shared-proxy`) changes** - new
+`POST /match-recommend` route in `worker.js`, reusing the existing
+`GEMINI_API_KEY` secret/`gemini-3.5-flash-lite` model/`buildGenerationConfig`/
+`isRateLimited`/`json` helpers `/gemini` and `/vocab-ai` already established
+(no new secret, no new deploy-setup step beyond redeploying this file):
+- `readMatchRecommendCandidates` validates the body into a bounded shape
+  (2-4 candidates, each field length-capped) before it's ever embedded in a
+  prompt - same posture as `readGeminiFiles`/`cleanVocabAiText`.
+- `buildMatchRecommendPrompt` asks for a JUDGMENT CALL, not a re-derivation
+  of the score: every candidate already carries the deterministic engine's
+  own number and the real facts that produced it (the SAME `reason`/
+  `objectiveFactors` strings a viewer's own card already shows), so the
+  prompt's whole job is real-world context a formula can't see, explicitly
+  telling the model to default to the highest-scored candidate absent a
+  confident reason otherwise.
+- `handleMatchRecommendRequest` rate-limits at 60/hour/IP (`'match-
+  recommend'` feature key, isolated from every other route's own counter),
+  requires `GEMINI_API_KEY`, and re-validates the model's own `pickId`
+  against the exact candidate set THIS request offered before ever
+  returning it - the model can suggest, never invent a fact this Worker
+  can't check, same posture as every other Gemini-backed route in this
+  file.
+- Top-of-file comment and README updated - this repo's own prior framing
+  ("Match Find calls no AI service at all") was accurate as of Round 11 and
+  is now corrected without erasing that history: the deterministic engine
+  is still the primary source of truth for every fixture; this is a nudge
+  on top, not a replacement.
+
+**Match-Find (`public/lib/recommendation.mjs`) changes** - three new pure,
+independently-testable functions, deliberately with NO fetch of their own
+(this module never does network I/O - `app.js` owns that, same split as
+the rest of this codebase):
+- `selectGeminiTieBreakCandidates(dayMatches, {scoreField})` reads
+  `computeDayPlan`'s OWN output (`.recommended`/`.alternativeIds`) rather
+  than re-deriving overlap logic - whatever gets offered to Gemini is
+  GUARANTEED to be the exact conflict cluster already rendered as
+  swipeable alternatives. Returns `null` (nothing to ask) when there's no
+  recommended pick, no alternatives, or every alternative is already
+  clearly behind by more than `GEMINI_TIE_BREAK_MARGIN`.
+- `buildGeminiTieBreakPayload(dayKey, candidates)` builds the exact request
+  body Shared-Proxy's route expects.
+- `applyGeminiTieBreakBonus(dayMatches, pickId, {scoreField})` applies a
+  flat `GEMINI_TIE_BREAK_BONUS` (1, same scale as `PRIORITY_SCORE_DELTA`)
+  to the picked candidate's `planningScore` BEFORE `computeDayPlan` runs -
+  same layer/timing as `applyLiveExcitementBonus`, so `alternativeIds`/
+  `slotKey` bookkeeping stays entirely `computeDayPlan`'s own, never
+  patched after the fact. Re-validates `pickId` against `dayMatches`'s
+  current ids every time - a stale cache entry naming a fixture that
+  rolled out of the fetch window can never silently bump an unrelated
+  match reusing an old id shape.
+
+**`public/app.js` changes** - `MATCH_RECOMMEND_PROXY_URL` (empty by
+default; the ONE thing a self-hoster needs to set to enable this, exactly
+like `PROXY_URL`, pointing at shared-proxy's *main* `orbit-workers-proxy`
+Worker with `/match-recommend` appended, NOT the separate `sports-proxy`
+Worker `PROXY_URL` points at - this call is rare enough that the
+[placement]-region latency concern that justified splitting `/sports-proxy`
+out never applies here). `dayCandidatesForPlan` (the single function both
+the real render and `pinSlotChoice`'s "what would the algorithm pick"
+question already share) now also calls `applyCachedGeminiTieBreak` -
+purely synchronous, reads an in-memory-memoized localStorage cache, never
+blocks a render on network. `renderRecommendedSection` fires
+`maybeRequestGeminiTieBreak(dayKey, dayCandidates)` (fire-and-forget, never
+awaited) right after `computeDayPlan` runs each render; it's a cheap
+synchronous no-op on almost every call (URL unset, no close call, already
+cached) and only actually reaches the network the first time a given day's
+close call appears, re-rendering once if a genuinely new pick comes back.
+
+**Verified safe when disabled (the shipped default).**
+`MATCH_RECOMMEND_PROXY_URL` ships empty, so `maybeRequestGeminiTieBreak`
+returns on its very first line, before touching cache or network - a
+Playwright smoke load (local static server, real `app.js`) confirmed zero
+`pageerror`s and the expected single-button settings panel (Round 32's own
+fix) rendering correctly. Enabling it is a one-time, two-step opt-in
+(redeploy shared-proxy's `worker.js`; set the one constant) - see the
+README's own new section for exactly what to do.
+
+**Tests.** 8 new tests in `recommendation.test.mjs`
+(`selectGeminiTieBreakCandidates`: no-alternatives/out-of-margin/in-margin/
+capped-at-max cases; `buildGeminiTieBreakPayload`: field pass-through incl.
+safe defaults for a candidate with no reason/facts; `applyGeminiTieBreakBonus`:
+correct target only, stale-id no-op, and an end-to-end case proving the
+bonus - applied before `computeDayPlan` - can actually flip which candidate
+wins a slot). Full suite: **377/377**. Committed and pushed to both
+`Match-Find` and `Shared-Proxy`.

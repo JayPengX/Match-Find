@@ -1122,6 +1122,115 @@ export function applyLiveExcitementBonus(dayMatches) {
   });
 }
 
+// ---- Gemini bounded daily tie-break (Shared-Proxy's /match-recommend) -----
+//
+// Round 32: docs/recommendation-engine-audit.md traced a real mismatch
+// (2026-09-23/24/25 MLB's headline slot) that survived a systematic search
+// for a formula fix - any reweighting of the deterministic score's own axes
+// that corrected that day ALSO flipped an already-correct pick on a
+// different, statistically-identical-shaped day (2026-09-26). That's proof
+// the two days' correct answers depend on real-world context (team
+// storylines, star power, how big a draw a specific matchup is) no
+// deterministic box-score signal here captures - not a coefficient bug. See
+// that round's own writeup for the constraint search and the real data it
+// ran against.
+//
+// This is NOT a return to the original per-fixture Gemini validation call
+// removed in Round 11 (that one asked Gemini to score EVERY fixture, every
+// build, which is what burned through free-tier quota) - it's called for
+// AT MOST ONE slot per day (today's own headline slot), and only when the
+// deterministic engine's own top few candidates are close enough that the
+// formula genuinely can't distinguish them with confidence. app.js owns
+// the actual network call/caching (this module has no fetch of its own -
+// same "pure scoring, network is someone else's job" split as the rest of
+// this codebase); these three functions are the pure, testable pieces of
+// that flow: which candidates qualify for a tie-break, what to send, and
+// how to apply an answer once one comes back.
+
+// A tie-break is only worth asking for when the top candidates are
+// genuinely close - not just "technically not tied". 0.5 is deliberately
+// tight (a third of ALTERNATIVE_MAX_SCORE_GAP, this file's own "close
+// enough to be a real call" notion for the SWIPE stack) since this is a
+// higher bar: a candidate has to be close enough that the deterministic
+// score itself can't confidently separate it from the top pick, not merely
+// "an alternative worth showing".
+export const GEMINI_TIE_BREAK_MARGIN = 0.5;
+// A one-time nudge on top of planningScore, same scale as
+// PRIORITY_SCORE_DELTA - enough to reliably flip a close call within
+// GEMINI_TIE_BREAK_MARGIN of the top pick, never enough to manufacture a
+// win for a candidate the deterministic engine had genuinely ranked well
+// below the top of its own slot.
+export const GEMINI_TIE_BREAK_BONUS = 1;
+// Bounded to match Shared-Proxy's own MATCH_RECOMMEND_MAX_CANDIDATES - a
+// tie-break asks Gemini to pick among a SMALL handful of genuinely close
+// options, never to rank a whole day's slate.
+export const GEMINI_TIE_BREAK_MAX_CANDIDATES = 4;
+
+// `dayMatches` must already have been through computeDayPlan (so
+// `.recommended`/`.alternativeIds`/scoreField are set) - this reads that
+// output directly rather than re-deriving overlap/conflict logic itself,
+// so whatever gets offered to Gemini is GUARANTEED to be the exact same
+// conflict cluster already rendered as swipeable alternatives, never a
+// second, possibly-inconsistent computation of "what's in this slot".
+// Returns null when there's nothing to ask about: no recommended pick, no
+// alternatives at all, or every alternative is already clearly behind (a
+// day where the algorithm's own top pick has no real rival needs no
+// second opinion).
+export function selectGeminiTieBreakCandidates(dayMatches, { scoreField = 'planningScore' } = {}) {
+  const top = dayMatches.find(m => m.recommended);
+  if (!top || !Array.isArray(top.alternativeIds) || !top.alternativeIds.length) return null;
+  const topScore = Number.isFinite(top[scoreField]) ? top[scoreField] : top.effectiveScore;
+  if (!Number.isFinite(topScore)) return null;
+  const byId = new Map(dayMatches.map(m => [m.id, m]));
+  const close = [top, ...top.alternativeIds.map(id => byId.get(id)).filter(Boolean)]
+    .filter(m => {
+      const score = Number.isFinite(m[scoreField]) ? m[scoreField] : m.effectiveScore;
+      return Number.isFinite(score) && topScore - score <= GEMINI_TIE_BREAK_MARGIN;
+    })
+    .sort((a, b) => (b[scoreField] ?? b.effectiveScore) - (a[scoreField] ?? a.effectiveScore))
+    .slice(0, GEMINI_TIE_BREAK_MAX_CANDIDATES);
+  return close.length >= 2 ? close : null;
+}
+
+// The exact request body Shared-Proxy's handleMatchRecommendRequest expects
+// - `reason`/`facts` are the SAME human-readable strings already computed
+// for this fixture's own card (buildObjectiveReasonZh's output and
+// objective-score.mjs's own factor list respectively, threaded through
+// match-builder.mjs), never re-derived here, so Gemini sees exactly the
+// same real statistical grounding a viewer already sees, not a
+// second-guessed summary of it.
+export function buildGeminiTieBreakPayload(dayKey, candidates, { scoreField = 'planningScore' } = {}) {
+  return {
+    day: dayKey,
+    candidates: candidates.map(m => ({
+      id: m.id,
+      sport: m.sport,
+      name: m.name,
+      score: Math.round((Number.isFinite(m[scoreField]) ? m[scoreField] : m.effectiveScore) * 100) / 100,
+      reason: typeof m.reason === 'string' ? m.reason : '',
+      facts: Array.isArray(m.objectiveFactors) ? m.objectiveFactors : []
+    }))
+  };
+}
+
+// Applied BEFORE computeDayPlan runs, same layer as applyLiveExcitementBonus
+// above (see its own comment) - the bonus flows through the DP's own
+// scheduling math instead of patching its output after the fact, so
+// alternativeIds/slotKey bookkeeping stays entirely computeDayPlan's own,
+// undisturbed by this. `pickId` is untrusted (it round-trips through a
+// localStorage cache in app.js, and originates from Shared-Proxy even
+// though that route already validates it against the exact candidate set
+// it was offered) - re-validated here against `dayMatches`'s own current
+// ids, never assumed still valid, so a stale cache entry naming a fixture
+// that has since rolled out of the fetch window can never silently bump an
+// unrelated match that happens to reuse an old id.
+export function applyGeminiTieBreakBonus(dayMatches, pickId, { scoreField = 'planningScore' } = {}) {
+  if (!pickId) return;
+  const picked = dayMatches.find(m => m.id === pickId);
+  if (!picked || !Number.isFinite(picked[scoreField])) return;
+  picked[scoreField] = Math.round((picked[scoreField] + GEMINI_TIE_BREAK_BONUS) * 1e6) / 1e6;
+}
+
 // Runs computeDayPlan once per day across a whole fetched window.
 // `matchesByDayKey` is a Map<dayKey, matches> (app.js's own per-day
 // buckets); `pinnedChoices` is state.pinnedChoices as-is (a

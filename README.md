@@ -51,10 +51,11 @@ Scoring and picking are split across two different places, deliberately:
    compute **competitiveness**, **watchability**, **enduranceScore**, and
    **broadcastQuality** for every fixture DETERMINISTICALLY, from real,
    current sports-data APIs - this is the WHOLE score, not a baseline
-   something else refines (there is no AI anywhere in this pipeline - see
-   "API-data-driven scoring engine" below and
-   `docs/recommendation-engine-audit.md`'s Round 11 for why Gemini was
-   removed entirely). MLB pulls standings/recent-form/streak data from the
+   something else refines (no AI anywhere in THIS step - see "API-data-
+   driven scoring engine" below, `docs/recommendation-engine-audit.md`'s
+   Round 11 for why Gemini was removed from it entirely, and Round 32 for
+   the one small, optional, bounded exception layered on much later, at
+   the recommendation-plan level - not here). MLB pulls standings/recent-form/streak data from the
    official MLB Stats API, F1 pulls championship-standings gap from the
    Ergast-compatible Jolpica API, every sport folds in season record and
    real market odds (Polymarket - see "Live win% odds" below) already
@@ -623,10 +624,14 @@ LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
   it is a plain string check (`/apple\s*tv/i` against that field, MLB
   fixtures only), never a live search or a model guess.
 
-**Gemini has no role here at all, or anywhere else in this pipeline** (see
-`docs/recommendation-engine-audit.md`'s Round 11) - both duration and
-broadcast source are, and have long been, fully deterministic from data
-ESPN already provides.
+**Gemini has no role in either of these** (see `docs/recommendation-engine-
+audit.md`'s Round 11) - both duration and broadcast source are, and have
+long been, fully deterministic from data ESPN already provides. (Round 32
+did reintroduce ONE small, optional, bounded Gemini call elsewhere in this
+pipeline - see "`MATCH_RECOMMEND_PROXY_URL`" above - but it plays no part
+in either of these two, or in objective-score.mjs's own scoring itself;
+it's a once-a-day tie-break layered on top, at the recommendation-plan
+level, never a re-guess of duration/broadcast/competitiveness/watchability.)
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 
@@ -826,8 +831,11 @@ also runs for Orbit Class/Vocab's Gemini-backed features - that other
 Worker's `[placement]` region pin (needed to dodge Google's Gemini-in-Hong-
 Kong block) applies to its whole script, and used to force this route
 through the same pinned Virginia isolate too, adding a real, live-confirmed
-Taiwan↔Virginia round trip to every single one of this app's requests for a
-codebase that calls no AI service at all. That was a genuine, previously
+Taiwan↔Virginia round trip to every single one of this app's requests, for
+a route that itself calls no AI service at all (Round 32's own bounded
+Gemini tie-break, added later, deliberately stayed OFF this Worker for
+exactly this reason - see `MATCH_RECOMMEND_PROXY_URL`'s own comment above).
+That was a genuine, previously
 undiscovered contributor to reports of the first load going blank for 10+
 seconds and refreshes taking 10-20+ seconds - see `PROXY_URL`'s own comment
 in `public/app.js` for the live confirmation (`X-Worker-Colo: IAD` on a
@@ -1065,9 +1073,7 @@ pinned Virginia isolate too, adding real, live-confirmed latency for this
 site's own Taiwan-based audience with no benefit (nothing `/sports-proxy`
 calls has Gemini's region restriction). It was pulled out into its own
 separately deployed, unpinned Worker to fix that - `PROXY_URL` here points
-at THAT Worker, not `orbit-workers-proxy`. As of `docs/
-recommendation-engine-audit.md`'s Round 11, Match Find itself no longer
-calls either Worker for any AI/scoring purpose at all - `/sports-proxy` is a
+at THAT Worker, not `orbit-workers-proxy`. `/sports-proxy` itself is a
 plain, host-allowlisted CORS passthrough with no Gemini involvement - see
 "Live match data and manual refresh" above for why this page needs it at
 all (ESPN/the MLB Stats API/Jolpica/Polymarket send no CORS headers, so a
@@ -1080,6 +1086,30 @@ directly into `public/app.js`'s own source, pointing at the real deployed
 Worker. If you fork this repo and deploy your own shared-proxy Worker,
 update that constant to your own Worker's base URL (**no path suffix**);
 there's no environment variable to set instead.
+
+### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32)
+
+As of `docs/recommendation-engine-audit.md`'s Round 11, Match Find's
+deterministic engine was the sole source of truth for every fixture's score
+- no AI call anywhere. Round 32 reintroduced ONE small, bounded Gemini call
+(`/match-recommend`, on that repo's *other*, `orbit-workers-proxy` Worker -
+the same one Orbit/Orbit Vocab's AI features already live on, not
+`sports-proxy`), used as an at-most-once-per-day tie-break for whichever
+day's headline slot the deterministic engine's own top few candidates are
+genuinely too close to call with confidence - see `./lib/recommendation.mjs`'s
+"Gemini bounded daily tie-break" section for the concrete trace that led to
+this and why it's a fundamentally different, much narrower shape than the
+per-fixture validation call Round 11 removed.
+
+This is entirely optional: `MATCH_RECOMMEND_PROXY_URL` in `public/app.js`
+is empty by default, and every call site (`maybeRequestGeminiTieBreak`)
+no-ops immediately when it's unset - the deterministic pick renders exactly
+as it always has. To enable it: deploy shared-proxy's updated `worker.js`
+(or confirm an existing `orbit-workers-proxy` deployment already has the
+`/match-recommend` route and a configured `GEMINI_API_KEY` - see that
+repo's README), then set the constant to `<that Worker's base URL>/match-recommend`.
+A failed/timed-out/rate-limited call degrades the exact same way an unset
+URL does: the already-rendered deterministic pick simply stands.
 
 ## Local dev tooling
 
