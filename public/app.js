@@ -113,12 +113,52 @@ const PROXY_URL = 'https://orbit-workers-proxy.pengzjay.workers.dev';
 // SPORTS_PROXY_ALLOWED_HOSTS - it only forwards to hosts it already
 // trusts). Same shape as scripts/build-data.mjs's own Node-side fetchJson,
 // just reaching these hosts through the proxy instead of directly.
+//
+// Cached here, per exact upstream URL, for PROXY_FETCH_CACHE_TTL_MS - this
+// is what actually made the initial page load slow, especially on a poor
+// connection: refreshNearTerm() and refreshFullWindow() both call
+// buildMatches() (see "Live match data" below), and full-window's own date
+// range is a strict superset of near-term's - so on every single page load,
+// full-window re-requested today/tomorrow's own scoreboard URLs AGAIN,
+// seconds after near-term had just fetched the exact same ones, doubling
+// the real round-trip count the viewer had to wait through before seeing a
+// complete picture. A short TTL (comfortably inside NEAR_TERM_REFRESH_MS,
+// so the next scheduled near-term tick still gets a genuinely fresh fetch)
+// turns that immediate overlap into a single request, cached in-memory (not
+// persisted - there's nothing worth keeping once this tab closes). Also
+// coalesces truly CONCURRENT calls for the same URL into one in-flight
+// request/response, rather than merely a fast-follow cache read, so two
+// refresh tiers that happen to fire in the same tick never both hit the
+// network for the same thing. pollLiveMatches's own faster, deliberately
+// uncached direct fetches (see that function) are NOT routed through this -
+// live score/odds polling needs a guaranteed fresh request every tick, not
+// a cached one; the shared Worker's own short-TTL edge cache (see
+// jaypengx-collab/shared-proxy's worker.js) is what keeps THAT tier's real
+// upstream cost down instead, across every viewer, not just this tab.
+const PROXY_FETCH_CACHE_TTL_MS = 45_000;
+const proxyFetchCache = new Map(); // url -> { data, expiresAt }
+const proxyFetchInFlight = new Map(); // url -> Promise<data>
+
 async function proxyFetchJson(url) {
-  const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
-    cache: 'no-store'
-  });
-  if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
-  return response.json();
+  const cached = proxyFetchCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const pending = proxyFetchInFlight.get(url);
+  if (pending) return pending;
+  const request = (async () => {
+    const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
+    const data = await response.json();
+    proxyFetchCache.set(url, { data, expiresAt: Date.now() + PROXY_FETCH_CACHE_TTL_MS });
+    return data;
+  })();
+  proxyFetchInFlight.set(url, request);
+  try {
+    return await request;
+  } finally {
+    proxyFetchInFlight.delete(url);
+  }
 }
 
 const state = {
@@ -708,14 +748,23 @@ function finishedLabel(match) {
   return '已結束';
 }
 
-// A sport-specific live in-progress line (MLB's inning/outs/baserunners,
-// EPL's match clock, NBA's quarter/clock, F1's lap/flag) - populated from
-// match.live, which only ever exists once pollLiveMatches's own faster
-// tier (see that function's own top comment) has actually polled this
-// fixture at least once; a match that just went live seconds ago simply
-// shows no line yet, same as its odds/score already do, rather than a
-// guessed placeholder. Never called for a match that isn't genuinely
-// LIVE/ENDING_SOON right now - see buildMatchCard's own gate.
+// A sport-specific live in-progress WIDGET (MLB's base-occupancy diamond/
+// outs/count, EPL/NBA's pulsing live dot + clock, F1's flag-colored status +
+// lap) - populated from match.live, which only ever exists once
+// pollLiveMatches's own faster tier (see that function's own top comment)
+// has actually polled this fixture at least once; a match that just went
+// live seconds ago simply shows nothing yet, same as its odds/score
+// already do, rather than a guessed placeholder. Never called for a match
+// that isn't genuinely LIVE/ENDING_SOON right now - see buildMatchCard's
+// own gate. These build real DOM nodes (not text) - reported directly that
+// a flat text line read as easy to miss scanning a busy list of cards, so
+// this uses small inline glyphs (a lit-up base diamond, a colored flag, a
+// pulsing dot) a viewer can recognize at a glance, the same way a TV
+// broadcast graphic would, rather than a sentence to parse. Every SVG
+// below is a fixed, hardcoded shape (only numbers/booleans ever vary which
+// CSS class gets applied) - never user-supplied text - so building it via
+// innerHTML is the same safe, already-used pattern as SPORT_ICONS/
+// buildSportIcon above, not a fresh injection risk.
 const INNING_HALF_ZH = { Top: '上', Bot: '下', Mid: '中', End: '完' };
 
 function formatInningHalf(detail) {
@@ -726,70 +775,204 @@ function formatInningHalf(detail) {
   return `第 ${m[2]} 局${half}`;
 }
 
-function baseballLiveLine(match) {
+function svgFromMarkup(markup) {
+  const wrap = document.createElement('span');
+  wrap.innerHTML = markup.trim();
+  return wrap.firstElementChild;
+}
+
+// The classic broadcast-graphic diamond: a rotated square with a dot at
+// each of 1st/2nd/3rd (never home - a batter always implicitly "is" there)
+// that lights up exactly when `situation` reports a runner actually
+// standing on it. Reads instantly where the old "一、二壘有人" text clause
+// needed a full read to parse.
+function baseballDiamondIcon(situation) {
+  const on1 = !!situation?.onFirst;
+  const on2 = !!situation?.onSecond;
+  const on3 = !!situation?.onThird;
+  return svgFromMarkup(`
+    <svg class="live-diamond" viewBox="0 0 34 30" aria-hidden="true">
+      <path d="M17 3 L30 16 L17 27 L4 16 Z" />
+      <circle class="live-base${on2 ? ' is-on' : ''}" cx="17" cy="6.6" r="3.6" />
+      <circle class="live-base${on1 ? ' is-on' : ''}" cx="26.4" cy="16" r="3.6" />
+      <circle class="live-base${on3 ? ' is-on' : ''}" cx="7.6" cy="16" r="3.6" />
+    </svg>
+  `);
+}
+
+function outDotsNode(outs) {
+  const wrap = document.createElement('span');
+  wrap.className = 'live-out-dots';
+  wrap.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement('i');
+    dot.className = Number.isFinite(outs) && i < outs ? 'live-out-dot is-out' : 'live-out-dot';
+    wrap.appendChild(dot);
+  }
+  return wrap;
+}
+
+function liveDotIcon() {
+  const dot = document.createElement('span');
+  dot.className = 'live-pulse-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  return dot;
+}
+
+function baseballLiveNode(match) {
   const live = match.live;
-  if (!live) return '';
-  const parts = [formatInningHalf(live.detail)].filter(Boolean);
+  if (!live) return null;
   const situation = live.situation;
+  const inningLabel = formatInningHalf(live.detail);
+  if (!inningLabel && !situation) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'live-chip live-chip-baseball';
+  if (situation) wrap.appendChild(baseballDiamondIcon(situation));
+  const textWrap = document.createElement('span');
+  textWrap.className = 'live-chip-text';
+  if (inningLabel) {
+    const inningEl = document.createElement('span');
+    inningEl.className = 'live-chip-inning';
+    inningEl.textContent = inningLabel;
+    textWrap.appendChild(inningEl);
+  }
   if (situation) {
-    if (Number.isFinite(situation.outs)) parts.push(`${situation.outs} 出局`);
-    const bases = [];
-    if (situation.onFirst) bases.push('一');
-    if (situation.onSecond) bases.push('二');
-    if (situation.onThird) bases.push('三');
-    parts.push(bases.length ? `${bases.join('、')}壘有人` : '壘上無人');
+    if (Number.isFinite(situation.outs)) textWrap.appendChild(outDotsNode(situation.outs));
     if (Number.isFinite(situation.balls) && Number.isFinite(situation.strikes)) {
-      parts.push(`球數 ${situation.balls}–${situation.strikes}`);
+      const countEl = document.createElement('span');
+      countEl.className = 'live-chip-count';
+      countEl.textContent = `${situation.balls}–${situation.strikes}`;
+      textWrap.appendChild(countEl);
     }
   }
-  return parts.join('．');
+  wrap.appendChild(textWrap);
+  return wrap;
 }
 
-function basketballLiveLine(match) {
+function basketballLiveNode(match) {
   const live = match.live;
-  if (!live) return '';
+  if (!live) return null;
   const period = Number(live.period);
   const periodLabel = Number.isFinite(period) && period > 0 ? (period <= 4 ? `第 ${period} 節` : `延長賽 OT${period - 4}`) : '';
-  return [periodLabel, live.displayClock].filter(Boolean).join('．');
+  const text = [periodLabel, live.displayClock].filter(Boolean).join('．');
+  if (!text) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'live-chip';
+  wrap.appendChild(liveDotIcon());
+  const textEl = document.createElement('span');
+  textEl.className = 'live-chip-text';
+  textEl.textContent = text;
+  wrap.appendChild(textEl);
+  return wrap;
 }
 
-function soccerLiveLine(match) {
+function soccerLiveNode(match) {
   const live = match.live;
-  if (!live) return '';
+  if (!live) return null;
   const half = live.period === 2 ? '下半場' : live.period === 1 ? '上半場' : '';
   // A numeric match clock ("76'") gets the half label prefixed; anything
   // ESPN itself already reports as a plain state word (e.g. "Halftime")
   // is shown exactly as-is rather than force-fit into "上半場 Halftime".
-  if (live.displayClock) return [half, live.displayClock].filter(Boolean).join('．');
-  return live.detail || '';
+  const text = live.displayClock ? [half, live.displayClock].filter(Boolean).join('．') : live.detail || '';
+  if (!text) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'live-chip';
+  wrap.appendChild(liveDotIcon());
+  const textEl = document.createElement('span');
+  textEl.className = 'live-chip-text';
+  textEl.textContent = text;
+  wrap.appendChild(textEl);
+  return wrap;
 }
 
-function f1LiveLine(match) {
+// Which flag color actually applies right now, read straight from ESPN's
+// own status text (e.g. "Lap 23/53 - Safety Car") - never guessed from lap
+// number/timing, since a caution can start or end on any lap.
+const F1_FLAG_ICON_SVG = {
+  checkered:
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" fill="#fff"/><rect x="0" y="0" width="4" height="4" fill="#15181f"/><rect x="8" y="0" width="4" height="4" fill="#15181f"/><rect x="4" y="4" width="4" height="4" fill="#15181f"/><rect x="12" y="4" width="4" height="4" fill="#15181f"/><rect x="0" y="8" width="4" height="4" fill="#15181f"/><rect x="8" y="8" width="4" height="4" fill="#15181f"/><rect x="4" y="12" width="4" height="4" fill="#15181f"/><rect x="12" y="12" width="4" height="4" fill="#15181f"/></svg>',
+  red: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" fill="#e2453c"/></svg>',
+  safety:
+    '<svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" fill="#f4d13d"/><text x="8" y="11.5" font-size="7" font-weight="700" text-anchor="middle" fill="#15181f">SC</text></svg>',
+  yellow: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" fill="#f4d13d"/></svg>',
+  green: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" fill="#39c463"/></svg>'
+};
+
+function f1FlagKey(statusDetail) {
+  const s = (statusDetail || '').toLowerCase();
+  if (s.includes('checkered') || s.includes('final')) return 'checkered';
+  if (s.includes('red flag')) return 'red';
+  if (s.includes('safety car') || s.includes('vsc') || s.includes('virtual safety')) return 'safety';
+  if (s.includes('yellow') || s.includes('caution')) return 'yellow';
+  return 'green';
+}
+
+function f1FlagIcon(statusDetail) {
+  const key = f1FlagKey(statusDetail);
+  const wrap = document.createElement('span');
+  wrap.className = `live-flag live-flag-${key}`;
+  wrap.innerHTML = F1_FLAG_ICON_SVG[key];
+  return wrap;
+}
+
+function f1LiveNode(match) {
   const live = match.live;
-  if (!live) return '';
+  if (!live) return null;
   const lapLabel = Number.isFinite(live.lap) ? `第 ${live.lap} 圈` : '';
-  return [lapLabel, live.statusDetail].filter(Boolean).join('．');
+  const text = [lapLabel, live.statusDetail].filter(Boolean).join('．');
+  if (!text) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'live-chip';
+  wrap.appendChild(f1FlagIcon(live.statusDetail));
+  const textEl = document.createElement('span');
+  textEl.className = 'live-chip-text';
+  textEl.textContent = text;
+  wrap.appendChild(textEl);
+  return wrap;
 }
 
-function f1LeaderboardLine(match) {
-  const live = match.live;
-  if (!live || !Array.isArray(live.leaderboard) || !live.leaderboard.length) return '';
-  return `目前領先：${live.leaderboard.map((driver, i) => `${i + 1}. ${driver.name}`).join('　')}`;
-}
-
-function liveStatusLineFor(match) {
+function buildLiveStatusNode(match) {
   switch (match.sport) {
     case 'MLB':
-      return baseballLiveLine(match);
+      return baseballLiveNode(match);
     case 'NBA':
-      return basketballLiveLine(match);
+      return basketballLiveNode(match);
     case 'Premier League':
-      return soccerLiveLine(match);
+      return soccerLiveNode(match);
     case 'F1':
-      return f1LiveLine(match);
+      return f1LiveNode(match);
     default:
-      return '';
+      return null;
   }
+}
+
+// F1's own current running order, as small medal-colored rank chips (gold/
+// silver/bronze for the top 3) rather than a flat "1. Name 2. Name" text
+// line - the same reasoning as buildLiveStatusNode's own top comment.
+const LEADERBOARD_MEDAL_CLASS = ['is-gold', 'is-silver', 'is-bronze'];
+
+function f1LeaderboardNode(match) {
+  const live = match.live;
+  if (!live || !Array.isArray(live.leaderboard) || !live.leaderboard.length) return null;
+  const wrap = document.createElement('span');
+  wrap.className = 'live-leaderboard';
+  const label = document.createElement('span');
+  label.className = 'live-leaderboard-label';
+  label.textContent = '目前領先';
+  wrap.appendChild(label);
+  live.leaderboard.forEach((driver, i) => {
+    const chip = document.createElement('span');
+    chip.className = `live-leaderboard-chip ${LEADERBOARD_MEDAL_CLASS[i] || ''}`.trim();
+    const rank = document.createElement('i');
+    rank.className = 'live-leaderboard-rank';
+    rank.textContent = String(i + 1);
+    chip.appendChild(rank);
+    const name = document.createElement('span');
+    name.textContent = driver.name;
+    chip.appendChild(name);
+    wrap.appendChild(chip);
+  });
+  return wrap;
 }
 
 // Local calendar date key, e.g. "2026-09-19" - deliberately NOT toISOString
@@ -1076,20 +1259,19 @@ function buildMatchCard(match) {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
 
-  // Sport-specific live in-progress detail (see liveStatusLineFor above) -
+  // Sport-specific live in-progress widget (see buildLiveStatusNode above) -
   // gated on matchLifecycleState directly rather than match.isFinished
-  // alone, so this never shows for a not-yet-started fixture either (a
-  // match.live left over from BEFORE a near-term/full-window rebuild
-  // replaced this match object - see applyFreshBuild's mergeFreshMatches -
-  // can't happen since a fresh build never sets match.live at all, but
-  // this gate is what actually decides whether the line renders, not
-  // merely whether the field exists).
+  // alone, so this never shows for a not-yet-started fixture either, even
+  // though match.live can now genuinely survive a near-term/full-window
+  // rebuild (see mergeFreshMatches's own comment on why it's deliberately
+  // carried forward) - this lifecycle gate is what actually decides
+  // whether the widget renders, not merely whether the field exists.
   const lifecycle = matchLifecycleState(match);
   const isCurrentlyLive = lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
   const liveStatusEl = node.querySelector('.match-live-status');
-  const liveStatusLine = isCurrentlyLive ? liveStatusLineFor(match) : '';
-  liveStatusEl.hidden = !liveStatusLine;
-  liveStatusEl.textContent = liveStatusLine;
+  const liveStatusNode = isCurrentlyLive ? buildLiveStatusNode(match) : null;
+  liveStatusEl.replaceChildren(...(liveStatusNode ? [liveStatusNode] : []));
+  liveStatusEl.hidden = !liveStatusNode;
 
   // A real Polymarket prediction market's own devigged trade price (see
   // ./lib/polymarket.mjs) as a live win-probability bar - only rendered
@@ -1154,15 +1336,15 @@ function buildMatchCard(match) {
     );
   }
 
-  // The race's own current running order (see f1LeaderboardLine above) -
+  // The race's own current running order (see f1LeaderboardNode above) -
   // extra live context sitting right under the static outright odds above,
   // only while the race is actually LIVE (a pre-race outright market has
   // no "current leader" to show yet, and a finished one already has its
   // own final result reflected in match.oddsFavorites/winner elsewhere).
   const leaderboardEl = node.querySelector('.match-live-leaderboard');
-  const leaderboardLine = isCurrentlyLive ? f1LeaderboardLine(match) : '';
-  leaderboardEl.hidden = !leaderboardLine;
-  leaderboardEl.textContent = leaderboardLine;
+  const leaderboardNode = isCurrentlyLive ? f1LeaderboardNode(match) : null;
+  leaderboardEl.replaceChildren(...(leaderboardNode ? [leaderboardNode] : []));
+  leaderboardEl.hidden = !leaderboardNode;
 
   renderVenue(node.querySelector('.match-venue'), match);
 
@@ -1953,10 +2135,80 @@ function mergeFreshMatches(freshMatches) {
   const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
   const byTbdKey = new Map(state.tbdMatches.map(m => [m.id, m]));
   freshMatches.forEach(m => {
-    if (m.timeTbd) byTbdKey.set(m.id, m);
-    else byId.set(m.id, m);
+    if (m.timeTbd) {
+      byTbdKey.set(m.id, m);
+      return;
+    }
+    // Carry forward pollLiveMatches's own enrichment - `.live` (inning/
+    // quarter/lap detail) and its live-corrected durationMinutes - onto the
+    // fresh object replacing this id. buildMatches() itself never sets
+    // `.live` at all (only pollLiveMatches does, on its own 30s tier) and
+    // always recomputes durationMinutes from the sport's PRE-GAME estimate,
+    // not the live-corrected one - so an unconditional overwrite here wiped
+    // the live status line and snapped the duration back to its pre-game
+    // guess on EVERY near-term (60s) and full-window (5min) refresh, until
+    // the next live poll (up to 30s later, on its own independent timer)
+    // put it back. Live-reported as "live states sometimes show then
+    // disappear again" - this is that cycle.
+    const previous = byId.get(m.id);
+    if (previous?.live && !m.isFinished) {
+      m.live = previous.live;
+      m.durationMinutes = previous.durationMinutes;
+    }
+    byId.set(m.id, m);
   });
   return { rawMatches: [...byId.values()], tbdMatches: [...byTbdKey.values()] };
+}
+
+// ---- Instant-paint snapshot (perceived load time) --------------------------
+//
+// A viewer opening this page on a slow connection used to stare at a blank
+// shell until refreshNearTerm()'s own ~18 requests all came back (see "Live
+// match data" below) - every single visit re-paid that same network cost
+// from zero, even though this same browser had almost certainly already
+// built a match list minutes ago. Caching the last successful build to
+// localStorage and painting it immediately, before any network request for
+// THIS load has even started, turns that into "instant, then quietly
+// corrected" - init() below still kicks off the real refresh right away, so
+// this is purely a perceived-latency fix, never a substitute for it.
+const MATCH_SNAPSHOT_STORAGE_KEY = 'matchfind-match-snapshot';
+// Beyond this, a cached snapshot is more likely to actively mislead (a
+// finished-vs-still-scheduled fixture, a since-postponed one) than to help -
+// past this age it's better to just show the normal loading state and wait
+// for a real fetch, same as this app already did before this existed.
+const MATCH_SNAPSHOT_MAX_AGE_MS = 30 * 60_000;
+
+function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
+  try {
+    // `.live` is stripped - it's pollLiveMatches's own poll-tier detail
+    // (inning/quarter/lap), already stale or flat wrong by the time a LATER
+    // page load reads this snapshot back; that load's own live poll
+    // repopulates it fresh within LIVE_POLL_INTERVAL_MS regardless (see
+    // matchWorthPollingNow), so keeping a frozen copy here would only risk
+    // briefly showing a long-over inning as if it were still happening.
+    const snapshot = {
+      generatedAt,
+      rawMatches: rawMatches.map(({ live, ...rest }) => rest),
+      tbdMatches
+    };
+    localStorage.setItem(MATCH_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Private browsing / blocked storage / quota exceeded - this is purely
+    // a perceived-load-time optimization; losing it just means the next
+    // load falls back to today's normal (network-first) behavior, nothing
+    // worth surfacing a failure for.
+  }
+}
+
+function loadMatchSnapshot() {
+  try {
+    const snapshot = JSON.parse(localStorage.getItem(MATCH_SNAPSHOT_STORAGE_KEY));
+    if (!snapshot || !Array.isArray(snapshot.rawMatches) || !snapshot.generatedAt) return null;
+    if (Date.now() - Date.parse(snapshot.generatedAt) > MATCH_SNAPSHOT_MAX_AGE_MS) return null;
+    return snapshot;
+  } catch {
+    return null;
+  }
 }
 
 // Applies a freshly-built match list to the page - called by both refresh
@@ -2003,6 +2255,7 @@ function applyFreshBuild(matches, generatedAt) {
   state.daysAhead = DEFAULT_DAYS_AHEAD;
   state.allRawMatches = rawMatches;
   applyEnabledSportsAndRender();
+  saveMatchSnapshot(rawMatches, tbdMatches, generatedAt || new Date().toISOString());
 }
 
 // Filters state.allRawMatches down to the sports currently enabled in
@@ -2382,6 +2635,18 @@ function scheduleLivePoll() {
 
 async function init() {
   state.proxyUrl = PROXY_URL;
+  // Paint immediately from last visit's own cached build, if one exists and
+  // isn't too old (see "Instant-paint snapshot" above) - purely a perceived-
+  // latency fix, the real refresh right below still always runs and quietly
+  // corrects whatever this showed.
+  const snapshot = loadMatchSnapshot();
+  if (snapshot) {
+    try {
+      applyFreshBuild([...snapshot.rawMatches, ...snapshot.tbdMatches], snapshot.generatedAt);
+    } catch (error) {
+      console.error('failed to paint cached snapshot', error);
+    }
+  }
   // Near-term first, for a fast initial paint (a handful of requests -
   // today/tomorrow's own fixtures) - the full window follows right behind
   // it, unblocked, so the day-scroller's far-future pills fill in shortly

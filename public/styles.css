@@ -757,22 +757,144 @@ main#app {
    score line or a pre-game card. Uses the same --good green as
    .match-card.is-live's own "直播中" text so both read as one live signal. */
 .match-live-status {
+  display: flex;
   margin: 6px 0 0;
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--good);
 }
 .match-live-status[hidden] { display: none; }
+
+/* ---- Live status widgets (see app.js's buildLiveStatusNode) --------------
+   Small inline glyphs instead of a flat text line - a pulsing dot for NBA/
+   EPL, a lit-up base diamond + out dots for MLB, a colored flag for F1 -
+   each meant to be recognizable at a glance the way a TV broadcast graphic
+   already is, in a busy list of many cards. */
+.live-chip,
+.live-chip-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.live-chip-inning { font-weight: 700; }
+.live-chip-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.live-pulse-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--good);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+.live-diamond {
+  width: 24px;
+  height: 21px;
+  flex: none;
+}
+.live-diamond path {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1.6;
+}
+.live-base {
+  fill: var(--bg-elevated);
+  stroke: var(--text-faint);
+  stroke-width: 1.6;
+}
+.live-base.is-on {
+  fill: var(--good);
+  stroke: var(--good);
+}
+.live-out-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.live-out-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--bg-elevated);
+  border: 1.6px solid var(--text-faint);
+}
+.live-out-dot.is-out {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.live-flag {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  display: inline-block;
+  border-radius: 3px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.live-flag svg { width: 100%; height: 100%; display: block; }
+/* A caution is meant to catch the eye the same way it would on a real
+   broadcast overlay - the only two flags that ever mean "something
+   unusual is happening right now, pay attention". */
+.live-flag-safety,
+.live-flag-yellow {
+  animation: live-flag-flash 1s steps(2, jump-none) infinite;
+}
+@keyframes live-flag-flash { 50% { opacity: 0.5; } }
+
 /* F1's own live running order - extra context sitting right under its
    static outright win% odds (see .match-odds-outright above) so a viewer
    watching an in-progress race can see at a glance who those odds are
-   currently tracking, not just who was favored before lights-out. */
+   currently tracking, not just who was favored before lights-out. Medal-
+   colored rank chips (gold/silver/bronze) rather than a flat "1. Name 2.
+   Name" text line - see app.js's f1LeaderboardNode. */
 .match-live-leaderboard {
+  display: flex;
   margin: 6px 0 0;
   font-size: 0.78rem;
   color: var(--text-muted);
 }
 .match-live-leaderboard[hidden] { display: none; }
+.live-leaderboard {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.live-leaderboard-label { color: var(--text-faint); }
+.live-leaderboard-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 2px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-weight: 600;
+}
+.live-leaderboard-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-style: normal;
+  font-size: 0.65rem;
+  font-weight: 800;
+  background: var(--text-faint);
+  color: var(--bg);
+}
+.live-leaderboard-chip.is-gold .live-leaderboard-rank { background: #e8b923; color: #3a2a00; }
+.live-leaderboard-chip.is-silver .live-leaderboard-rank { background: #c7ccd6; color: #202430; }
+.live-leaderboard-chip.is-bronze .live-leaderboard-rank { background: #c9834a; color: #2a1300; }
 .match-watch {
   display: flex;
   align-items: center;

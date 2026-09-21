@@ -627,12 +627,52 @@ day the last full refresh already populated; and `buildMatches` itself
 degrades a single league's own fetch failure to an empty list for just that
 league rather than throwing, so replacing the whole match set with a result
 where one league came back empty would delete every match of that league
-from the page over a single transient network blip.
+from the page over a single transient network blip. `mergeFreshMatches` also
+carries forward each match's own `.live` detail and live-corrected
+`durationMinutes` (see "Live score/odds polling" below) rather than letting
+the fresh, pre-game-only `buildMatches()` result silently wipe them - an
+earlier version didn't, so the live status widget visibly disappeared and
+reappeared on every single near-term/full-window tick until the next live
+poll (up to 30s later) put it back.
 
 Settings' **立即重新整理** button just re-runs the full-window tier
 immediately, in your own browser - there's no server-side rebuild to
 dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly as
 fast as the automatic ones.
+
+### Efficiency: caching and instant paint
+
+Two layers of caching keep this from being as expensive as it sounds, since
+both refresh tiers plus live polling can otherwise add up to several times
+the shared proxy's own per-IP rate limit on a single open tab alone:
+
+- **In-tab request cache** (`proxyFetchJson` in `public/app.js`) - every
+  `buildMatches()` call's own fetches are cached in memory, per exact
+  upstream URL, for `PROXY_FETCH_CACHE_TTL_MS` (45s), with concurrent
+  identical requests coalesced into one in-flight call. Near-term and
+  full-window's own date ranges overlap heavily (today/tomorrow are fetched
+  by both), so without this, every single page load re-fetched the same
+  handful of URLs twice, back to back, for no reason - this doesn't apply
+  to `pollLiveMatches`'s own faster tier, which always makes a fresh request
+  every tick since live score/odds data can't tolerate a 45s-old cache.
+- **Shared edge cache** (`SPORTS_PROXY_CACHE_TTL_SECONDS` in
+  `jaypengx-collab/shared-proxy`'s `worker.js`) - `/sports-proxy` itself
+  caches every successful upstream response for 20 seconds, keyed by the
+  upstream URL alone, so concurrent viewers (and this tab's own live-poll
+  tier, which isn't covered by the in-tab cache above) share one real
+  upstream fetch instead of each paying for their own; a cache hit doesn't
+  count against that route's own rate limit either.
+
+Every successful build is also cached to `localStorage`
+(`matchfind-match-snapshot`) and painted immediately on the NEXT page load,
+before any network request for that load has even started - the real
+refresh tiers still always run right behind it and quietly correct whatever
+the snapshot showed, so this is purely a perceived-load-time fix (a viewer
+on a slow connection sees last visit's own list instantly instead of a blank
+shell), never a substitute for a real fetch. A snapshot older than
+`MATCH_SNAPSHOT_MAX_AGE_MS` (30 minutes) is ignored rather than painted,
+since a stale-enough copy is more likely to mislead (a finished-vs-still-
+scheduled fixture) than to help.
 
 ## Live score/odds polling
 
@@ -674,26 +714,34 @@ report, plus two further, real-time-only refinements built from them:
   pinned to a single pre-game guess for its whole broadcast.
 
 Each live poll also writes a `match.live` object with whatever in-progress
-detail ESPN reports for that sport, rendered as a green status line right
-under the team names (only while the card is genuinely LIVE/ENDING_SOON,
-never pre-game or finished):
+detail ESPN reports for that sport, rendered as a small icon-led widget
+right under the team names (`buildLiveStatusNode` in `public/app.js`, only
+while the card is genuinely LIVE/ENDING_SOON, never pre-game or finished) -
+built as real glyphs rather than a flat sentence, since a plain text line
+was reported as easy to miss scanning a busy list of cards:
 
-- **MLB**: inning + half ("第 6 局上/下/中/完"), outs, which bases have a
-  runner, and the current ball-strike count - from ESPN's own
-  `competition.situation` object (`public/lib/espn.mjs`'s
-  `extractLiveUpdates`).
-- **NBA**: quarter ("第 N 節", OT beyond the 4th) plus the game clock.
-- **Premier League**: half (上半場/下半場) plus the match clock, or ESPN's
-  own state word (e.g. a halftime label) shown as-is when there's no
-  numeric clock to attach it to.
-- **F1**: current lap and flag/status text (safety car, VSC, red flag,
-  whatever ESPN itself reports), from a second extractor
+- **MLB**: a small broadcast-style diamond (`.live-diamond`) with a dot at
+  each of 1st/2nd/3rd that lights up green exactly when a runner is
+  actually on it, next to the inning + half ("第 6 局上/下/中/完"), an
+  outs indicator (3 dots, filled as outs accrue), and the current
+  ball-strike count - from ESPN's own `competition.situation` object
+  (`public/lib/espn.mjs`'s `extractLiveUpdates`).
+- **NBA**: a pulsing live dot plus the quarter ("第 N 節", OT beyond the
+  4th) and game clock.
+- **Premier League**: a pulsing live dot plus the half (上半場/下半場) and
+  match clock, or ESPN's own state word (e.g. a halftime label) shown as-is
+  when there's no numeric clock to attach it to.
+- **F1**: a small colored flag icon (green/yellow/red/safety-car/checkered,
+  read from ESPN's own status text, e.g. "Safety Car" or "Checkered Flag" -
+  the caution flags flash to catch the eye the way a real broadcast overlay
+  would) plus the current lap - from a second extractor
   (`extractF1LiveUpdates`) reading the same racing/f1 scoreboard
   match-builder.mjs already uses for the schedule, this time for its
   per-session `competitors` array (drivers, ordered by ESPN's own live
-  classification). The race's current top 3 also renders as its own line
-  right under the static outright win% chips (see "Live win% odds" below)
-  - live running order as context for those odds, not a replacement.
+  classification). The race's current top 3 also renders as its own row of
+  medal-colored rank chips (gold/silver/bronze) right under the static
+  outright win% chips (see "Live win% odds" below) - live running order as
+  context for those odds, not a replacement.
 
 ## Live win% odds
 
