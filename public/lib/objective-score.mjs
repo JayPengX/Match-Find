@@ -174,6 +174,51 @@ export function skillFromWinPct(avgWinPct) {
 export const MLB_SPREAD_LOPSIDED_AT = 3;
 export const NBA_SPREAD_LOPSIDED_AT = 15;
 
+// ---- Guardrails against a famous name/decided race overriding a real blowout ----
+//
+// Live-verified failure this exists to fix (2026-09-26): the Dodgers
+// (96-60, already clinched the NL West) hosting the Giants (64-92, 32
+// games back) still scored a maxed-out watchability=10 and got recommended
+// over a genuinely live, 1-game-back AL West race elsewhere that night -
+// competitiveness alone correctly read this as a lopsided 5/10 game, but
+// two OTHER signals independently overrode that: (1) the historic-rivalry
+// bonus (isRivalry/isDerby/isBigClub below) applies from the two teams'
+// NAMES alone, with no check on whether tonight's specific pairing is
+// still actually close; (2) playoffProximityScore reads a division
+// LEADER's own gamesBack as 0 - a perfect 10 "stakes" - identically
+// whether that lead is a nail-biter or (as here) a 30+ game runaway, since
+// it only ever sees this one team's own distance to a spot it already
+// has, never the actual size of its cushion. Neither signal is wrong on
+// its own terms (Dodgers/Giants really is a historic rivalry; the Dodgers
+// really do have a 0-gamesBack division position) - the fix isn't to
+// remove either one, it's to stop letting them, alone or combined, turn a
+// pairing `competitiveness` has already identified as lopsided into a
+// "must watch" rating neither the current standings nor tonight's actual
+// game would earn on its own.
+//
+// MLB's own rivalry bonus only gets to fire when tonight's specific
+// pairing is at least this close. MLB-only (not NBA/EPL's rivalry/derby/
+// big-club/national-broadcast bonuses below) - MLB is the one sport this
+// build has real, standings-based signals for late in a 162-game season,
+// where a wide win% gap really does mean a decided mismatch, not sampling
+// noise. NBA/EPL have no standings API integration yet (see this repo's
+// README, "Known limitations") - an early-season win% gap there can still
+// be a small, noisy sample a genuinely elite club will grow out of, which
+// is exactly the real case (Liverpool @ AFC Bournemouth, an early-season
+// noisy 0.2/0.6 split) Round 17's own big-club bonus was written to survive
+// - gating those the same way MLB's is would silence a big-club/derby bonus
+// for precisely the early-season games it exists to correct for.
+export const MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS = 6;
+
+// However high stakes/a marquee bonus independently read, neither is
+// allowed to lift the final watchability more than this many points above
+// tonight's own competitiveness - the one signal that actually looks at
+// THIS pairing's real current form, not just a name or a division
+// standing that may already be a foregone conclusion. A blowout stays
+// capped near its own competitiveness whatever else about the two teams
+// reads well on paper.
+export const MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS = 3;
+
 // ---- MLB ----------------------------------------------------------------
 //
 // `away`/`home` are each either null (no MLB Stats API standings entry
@@ -243,23 +288,27 @@ export function computeMlbObjectiveScore({
   // significant franchises can be a genuinely bigger draw than their
   // current-season record alone suggests, which is exactly the kind of
   // real-world fact a deterministic win%/stakes formula has no way to
-  // capture on its own - see docs/recommendation-engine-audit.md and the
-  // reported "Dodgers vs Giants, universally covered by media, still lost
-  // its slot by a razor-thin scheduling margin" case this fixes.
+  // capture on its own - see docs/recommendation-engine-audit.md. Gated on
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS (see that constant's own comment
+  // for the real Dodgers/Giants blowout this guards against) - a historic
+  // name is a reason to lift an otherwise-decent game, not a reason to
+  // call a decided one a "must watch".
   let watchability = weightedAverage([
     [stakes, 0.45],
     [competitiveness, 0.35],
     [momentum, 0.2]
   ]) ?? 5;
-  // 2, not NBA's 1.5 - matches EPL's own derby bonus. Verified against the
-  // real 9/26 Dodgers/Giants case (see this function's own comment above):
-  // 1.5 only closed that specific gap to an exact tie (both sequences
-  // scoring 15.725) - still left to a coin-flip on DP traversal order, not
-  // a real decision either way.
-  if (isRivalry) {
+  // 2, not NBA's 1.5 - matches EPL's own derby bonus.
+  if (isRivalry && competitiveness >= MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS) {
     watchability += 2;
     factors.push('known historic rivalry matchup');
   }
+  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - stakes
+  // (from playoffProximityScore) can't tell a nail-biter division race
+  // apart from a leader's own already-decided runaway, so this is the
+  // backstop that keeps a stakes=10 reading on a lopsided pairing from
+  // reaching a high watchability on its own.
+  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(
@@ -319,6 +368,12 @@ export function computeNbaObjectiveScore({
   // national broadcast should only ever add watchability, never subtract
   // it, whatever the matchup's own competitiveness already is.
   let watchability = weightedAverage([[stakes, 0.5], [competitiveness, 0.5]]) ?? 5;
+  // Not gated on competitiveness the way MLB's rivalry bonus is (see
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - NBA has no
+  // standings-based signal yet, so a low competitiveness here can still be
+  // early-season noise a real rivalry/national broadcast should survive.
+  // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS right below is still the
+  // backstop against a genuinely decided blowout.
   if (isRivalry) {
     watchability += 1.5;
     factors.push('known rivalry matchup');
@@ -327,6 +382,8 @@ export function computeNbaObjectiveScore({
     watchability += 1;
     factors.push('national broadcast');
   }
+  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment.
+  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(Math.round(competitiveness), 1, 10);
@@ -374,6 +431,12 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBi
   // elite, globally-followed club's own real-world draw doesn't depend on
   // this particular season's (often early, noisy, small-sample) win% record
   // the way `competitiveness`/`skill` necessarily do.
+  // Not gated on competitiveness the way MLB's rivalry bonus is (see
+  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment) - EPL has no
+  // standings-based signal yet, so a low competitiveness here is exactly
+  // the early-season-noise case (Liverpool @ AFC Bournemouth) this bonus
+  // was written to survive. MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS
+  // right below is still the backstop against a genuinely decided blowout.
   let watchability = competitiveness;
   if (isDerby) {
     watchability += 2;
@@ -383,6 +446,12 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, isDerby, isBi
     watchability += 2;
     factors.push('known big-club fixture');
   }
+  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - mostly a
+  // no-op here (watchability starts AT competitiveness for EPL, unlike
+  // MLB/NBA's separate stakes blend), but keeps a stacked derby+big-club
+  // (up to +4) from lifting a genuinely lopsided fixture too far past its
+  // own competitiveness either.
+  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(Math.round(competitiveness), 1, 10);

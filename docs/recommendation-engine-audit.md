@@ -2520,3 +2520,58 @@ prior rounds used, plus screenshots, rather than left unverified because
    still 327/327 (2 existing F1 leaderboard-shape assertions updated for
    the new flagUrl/flagAlt/interval fields, 1 new test added covering that
    extraction).
+
+## Round 23 (2026-09-21): a historic-rivalry bonus and an already-decided division race both overriding a real blowout
+
+Direct follow-up to a live validation pass: rebuilt real `matches.json`
+(`node scripts/build-data.mjs`) and ran the actual engine
+(`scripts/dump-day-plan.mjs`, TZ=Asia/Taipei) against it for 2026-09-22
+through 2026-10-05, then cross-checked the picks against REAL, live 2026
+MLB standings (fetched directly from the MLB Stats API) and two web
+searches for F1's own calendar. Every pick held up except one, caught live:
+2026-09-26 recommended **Dodgers @ Giants** (watchability=10, the max) over
+a genuinely live AL West race elsewhere that night. Real standings at the
+time: Dodgers 96-60, already clinched the NL West; Giants 64-92, 32 games
+back - a decided, lopsided blowout by any real measure.
+
+Root cause was two SEPARATE signals compounding, not one:
+1. `isRivalry` (Dodgers-Giants sits on `MLB_RIVALRY_PAIRS`) added its flat
+   +2 watchability bonus purely from the two teams' NAMES, with no check
+   on whether tonight's specific pairing was still actually close.
+2. `playoffProximityScore` reads a division LEADER's own `gamesBack` as 0 -
+   a perfect 10 "stakes" reading - identically whether that lead is a
+   nail-biter or (as here) a 30+ game runaway, since it only ever sees this
+   ONE team's own distance to a spot it already has, never the size of its
+   actual cushion.
+
+Fixed in `public/lib/objective-score.mjs` with two guardrails, deliberately
+NOT identical across sports:
+- **`MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS` (= 3), applied in ALL
+  THREE of MLB/NBA/EPL**: whatever stakes/a marquee bonus independently
+  read, neither can lift final watchability more than 3 points above
+  tonight's own `competitiveness` - the one signal that actually looks at
+  the CURRENT pairing rather than a name or a standing that may already be
+  a foregone conclusion.
+- **`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS` (= 6), MLB'S RIVALRY BONUS
+  ONLY**: the rivalry bonus itself doesn't fire at all below this
+  competitiveness floor. Deliberately NOT applied to NBA's rivalry/
+  national-broadcast bonus or EPL's derby/big-club bonus - both of those
+  sports have no standings-API integration yet (see this doc's own "Known
+  limitations"), so a low competitiveness there can still be early-season
+  sampling noise a genuinely elite/big club should survive (the exact
+  Liverpool @ AFC Bournemouth case Round 17 added the big-club bonus for -
+  confirmed this doesn't regress via the existing test suite). MLB alone
+  has a long enough season and real standings signal to trust that a wide
+  win% gap this late really does mean decided, not noisy.
+
+Live-verified after the fix (same rebuild + dump-day-plan run):
+Dodgers/Giants' watchability dropped 10 → 8, its `match.score` dropped
+6.65 → 5.95, and it NO LONGER gets recommended for 2026-09-26 - Angels @
+Mariners (a team still mathematically alive in the AL West/wildcard race)
+takes the slot instead. Every other pick across the full 2026-09-22 to
+2026-10-05 window (Rays/Yankees, Padres/Dodgers, both Astros picks, both
+Phillies picks, both F1 sessions, both NBA preseason picks) is byte-for-
+byte unchanged - this narrowly targets the one real failure, nothing else.
+Full suite 327/327 (one existing EPL big-club test conflicted with an
+overly-broad first draft of this fix that gated ALL THREE sports the same
+way - narrowed to MLB-only per the reasoning above, test passes unchanged).

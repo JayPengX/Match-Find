@@ -188,7 +188,18 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
 - **watchability** - entertainment value/mainstream public attention - the
   deterministic objective score's own national-broadcast/rivalry/derby
   detectors and betting-market signal (see "API-data-driven scoring engine"
-  above)
+  above). Neither a rivalry/derby/big-club name nor a division leader's own
+  "stakes" reading can lift this more than `MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS`
+  (3) points above tonight's own competitiveness - added after a live case
+  (`docs/recommendation-engine-audit.md`'s Round 23) where a 96-60 Dodgers
+  team, already clinched, blowing out a 64-92 last-place Giants team still
+  scored a maxed-out watchability purely from "Dodgers-Giants" being a
+  historic rivalry name, outranking a genuinely live playoff race
+  elsewhere that night. MLB's own rivalry bonus additionally doesn't fire
+  at all below a competitiveness floor (`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS`,
+  MLB only - NBA/EPL have no standings-API integration yet, so a low
+  competitiveness there can still be early-season sampling noise a
+  genuinely elite club should survive, see "Known limitations" below).
 - **enduranceScore** - does the contest actually stay meaningful all the
   way through, not just at kickoff
 - **broadcastQuality** - production quality of watching it
