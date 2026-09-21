@@ -676,6 +676,13 @@ main#app {
   gap: 6px;
   margin: 10px 0 0;
 }
+/* Same cascade gap as .match-watch[hidden] below: an author `display: flex`
+   rule has the same specificity as the UA stylesheet's `[hidden] {
+   display: none }` and wins by cascade order, so buildMatchCard's own
+   `oddsEl.hidden = true` default (no real odds yet) rendered as an empty
+   flex row instead of actually hiding - live-reported as a blank gap where
+   the odds bar/奪冠機率 row would be. */
+.match-odds[hidden] { display: none; }
 .match-odds-pct {
   font-size: 0.78rem;
   font-weight: 700;
@@ -730,6 +737,11 @@ main#app {
   margin: 10px 0 0;
   font-size: 0.78rem;
 }
+/* Same cascade gap as .match-odds[hidden] above - this is the one that was
+   actually reported: a race with no Polymarket market open yet showed a
+   bare "奪冠機率" label with nothing after it instead of the whole row
+   being hidden. */
+.match-odds-outright[hidden] { display: none; }
 .match-odds-outright-label {
   color: var(--text-faint);
 }
@@ -738,6 +750,29 @@ main#app {
   font-variant-numeric: tabular-nums;
   color: var(--sport-f1);
 }
+/* Live score/status line (see app.js's liveStatusLineFor) - MLB's
+   inning/outs/baserunners, EPL's match clock, NBA's quarter/clock, F1's
+   lap/flag - only ever shown while matchLifecycleState is genuinely
+   LIVE/ENDING_SOON, so this never fights with the plain "已結束" final
+   score line or a pre-game card. Uses the same --good green as
+   .match-card.is-live's own "直播中" text so both read as one live signal. */
+.match-live-status {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--good);
+}
+.match-live-status[hidden] { display: none; }
+/* F1's own live running order - extra context sitting right under its
+   static outright win% odds (see .match-odds-outright above) so a viewer
+   watching an in-progress race can see at a glance who those odds are
+   currently tracking, not just who was favored before lights-out. */
+.match-live-leaderboard {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.match-live-leaderboard[hidden] { display: none; }
 .match-watch {
   display: flex;
   align-items: center;

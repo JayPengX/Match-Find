@@ -43,18 +43,30 @@ function yyyymmddUtc(date) {
   return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
-// The one ESPN scoreboard request needed to catch every currently-live
-// fixture of one league - `dates` covers both today and yesterday (UTC) by
-// the same reasoning as build-data.mjs's own lookback (a live fixture can
-// still be grouped under ESPN's own PREVIOUS calendar day depending on the
-// league's home timezone), which is all a LIVE-only poll ever needs (a
-// fixture that's actually live right now cannot be further than one ESPN
-// calendar day off from "now").
-export function liveScoreboardUrl(sport, now = new Date()) {
+// The ESPN scoreboard requests needed to catch every currently-live fixture
+// of one league - today AND yesterday (UTC), by the same reasoning as
+// match-builder.mjs's own lookback (a live fixture can still be grouped
+// under ESPN's own PREVIOUS calendar day depending on the league's home
+// timezone), which is all a LIVE-only poll ever needs (a fixture that's
+// actually live right now cannot be further than one ESPN calendar day off
+// from "now").
+//
+// TWO single-date requests, never one `dates=YYYYMMDD-YYYYMMDD` range
+// request - live-confirmed (2026-09-20, a real 400 from
+// baseball/mlb/scoreboard?dates=20260920-20260921, caught only because this
+// app's own live-poll silently swallows a failed fetch per league and
+// nothing had ever surfaced it) that ESPN's TEAM-SPORT scoreboard endpoint
+// rejects a multi-day range outright, unlike its racing/f1 endpoint (see
+// f1LiveScoreboardUrl below, and match-builder.mjs's own fetchTeamLeagueMatches
+// for the exact same fix applied to the full-window build fetch). Every
+// team-sport live poll had been silently failing outright before this fix -
+// not a partial/degraded result, a 400 on every single tick.
+export function liveScoreboardUrls(sport, now = new Date()) {
   const league = TEAM_LEAGUE_ESPN[sport];
-  if (!league) return null;
-  const dates = `${yyyymmddUtc(new Date(now.getTime() - 86_400_000))}-${yyyymmddUtc(now)}`;
-  return espnScoreboardUrl(league.sportKey, league.leagueKey, dates);
+  if (!league) return [];
+  return [new Date(now.getTime() - 86_400_000), now].map(date =>
+    espnScoreboardUrl(league.sportKey, league.leagueKey, yyyymmddUtc(date))
+  );
 }
 
 // Extracts {id -> {isLive, isFinished, scores: [awayScore, homeScore],
@@ -65,6 +77,15 @@ export function liveScoreboardUrl(sport, now = new Date()) {
 // plain numbers (or null when ESPN hasn't posted one yet, e.g. a scoreless
 // 'pre' fixture) - never guessed or defaulted to 0, since a real 0-0 score
 // is a genuine, different fact from "not started/not reported".
+//
+// `situation` (baseball only - MLB's own live at-bat context: balls,
+// strikes, outs, who's on base) is read straight off ESPN's own
+// `competition.situation` object, live-confirmed against real in-progress
+// games (2026-09-20's Tigers @ White Sox and Brewers @ Orioles) rather
+// than guessed from documentation - null whenever that object is absent
+// (a 'pre'/'post' fixture, or a sport ESPN doesn't report it for at all),
+// never a guessed/defaulted "no runners on" for a game that just hasn't
+// reported yet.
 export function extractLiveUpdates(sport, scoreboardJson) {
   const league = TEAM_LEAGUE_ESPN[sport];
   const updates = new Map();
@@ -83,6 +104,18 @@ export function extractLiveUpdates(sport, scoreboardJson) {
     const odds = competition.odds?.[0];
     const spread = Number(odds?.spread);
     const overUnder = Number(odds?.overUnder);
+    const rawSituation = competition.situation;
+    const situation =
+      rawSituation && (rawSituation.outs != null || rawSituation.balls != null)
+        ? {
+            balls: Number.isFinite(rawSituation.balls) ? rawSituation.balls : null,
+            strikes: Number.isFinite(rawSituation.strikes) ? rawSituation.strikes : null,
+            outs: Number.isFinite(rawSituation.outs) ? rawSituation.outs : null,
+            onFirst: !!rawSituation.onFirst,
+            onSecond: !!rawSituation.onSecond,
+            onThird: !!rawSituation.onThird
+          }
+        : null;
     updates.set(`${league.id}-${event.id}`, {
       isLive: statusType.state === 'in',
       isFinished: statusType.state === 'post',
@@ -90,9 +123,58 @@ export function extractLiveUpdates(sport, scoreboardJson) {
       period: competition.status?.period ?? null,
       displayClock: typeof competition.status?.displayClock === 'string' ? competition.status.displayClock : '',
       shortDetail: statusType.shortDetail || '',
+      situation,
       oddsSpread: Number.isFinite(spread) ? spread : null,
       oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null
     });
+  }
+  return updates;
+}
+
+// F1's own live in-race context - same shape of problem as extractLiveUpdates
+// above but a completely different ESPN response shape (see
+// match-builder.mjs's own comment on fetchF1Matches: one event is a whole
+// race weekend, its `competitions` are the individual sessions, and THOSE
+// carry a `competitors` array of drivers - ordered by current/final
+// classification via `order` - rather than two team sides). Only the
+// session types this app actually tracks as matches (Race/Qual/Sprint -
+// see match-builder.mjs's F1_SESSION_TYPES) are extracted; ids are built
+// with the exact same `f1-${event.id}-${abbreviation.toLowerCase()}`
+// convention that module uses so this merges straight into
+// state.allRawMatches by id.
+const F1_LIVE_SESSION_ABBREVIATIONS = ['Race', 'Qual', 'SR'];
+
+export function f1LiveScoreboardUrl(now = new Date()) {
+  const dates = `${yyyymmddUtc(new Date(now.getTime() - 86_400_000))}-${yyyymmddUtc(now)}`;
+  return espnScoreboardUrl('racing', 'f1', dates);
+}
+
+// Top three by `order` (ESPN's own current-classification field - live
+// running order during the race itself, final finishing order once it's
+// over) as {name, position} - just enough for a short "誰目前領先" line
+// alongside this sport's own Polymarket outright-winner odds (see
+// app.js's f1LeaderboardLine), not a full 20-driver standings table.
+export function extractF1LiveUpdates(scoreboardJson) {
+  const updates = new Map();
+  for (const event of scoreboardJson?.events || []) {
+    for (const abbreviation of F1_LIVE_SESSION_ABBREVIATIONS) {
+      const session = (event.competitions || []).find(c => c.type?.abbreviation === abbreviation);
+      const statusType = session?.status?.type;
+      if (!session || !statusType) continue;
+      const leaderboard = (session.competitors || [])
+        .slice()
+        .sort((a, b) => (Number(a.order) || 999) - (Number(b.order) || 999))
+        .slice(0, 3)
+        .map(c => ({ name: c.athlete?.shortName || c.athlete?.fullName || '', position: Number(c.order) || null }));
+      const lap = Number(session.status?.period);
+      updates.set(`f1-${event.id}-${abbreviation.toLowerCase()}`, {
+        isLive: statusType.state === 'in',
+        isFinished: statusType.state === 'post',
+        lap: Number.isFinite(lap) && lap > 0 ? lap : null,
+        statusDetail: statusType.shortDetail || statusType.detail || '',
+        leaderboard: leaderboard.length ? leaderboard : null
+      });
+    }
   }
   return updates;
 }

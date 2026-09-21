@@ -2208,3 +2208,83 @@ present) and after (bug confirmed gone) the fix, as documented above.
   No test count regression - the four relocated modules' own tests moved
   with them (import paths updated, logic untouched); 315/315 tests pass,
   same as Round 16's own final count.
+
+## Round 18 (2026-09-21): sport-specific live detail, plus two real bugs found live-testing it
+
+- **Live in-progress detail per sport**, requested directly ("baseball
+  showing the inning, bases, out and scores, football showing time
+  (stoppages), score, NBA you name it, F1 the lap and possible status and
+  current top three leader (safety cars...)"). A new `.match-live-status`
+  line renders under the team rows, only while `matchLifecycleState` is
+  genuinely LIVE/ENDING_SOON (never for a pre-game or finished card):
+  - MLB: `formatInningHalf` turns ESPN's own `status.type.detail` ("Top
+    6th"/"Bot 9th"/"Mid 3rd"/"End 7th") into "第 N 局上/下/中/完", plus
+    outs/baserunners/ball-strike count from ESPN's own `competition.
+    situation` object (balls/strikes/outs/onFirst/onSecond/onThird) -
+    genuinely NEW data this app never read before, live-verified against
+    two real simultaneous games (2026-09-20/21's Tigers @ White Sox and
+    Brewers @ Orioles).
+  - NBA: period ("第 N 節", OT beyond period 4) + displayClock - both
+    fields `extractLiveUpdates` already captured every poll, just never
+    stored on the match or rendered until now.
+  - EPL: half (上半場/下半場) + displayClock when it's a real numeric
+    clock, or ESPN's own state word (e.g. a halftime label) verbatim
+    otherwise, rather than force-fitting it after a half label.
+  - F1: a new `extractF1LiveUpdates` (public/lib/espn.mjs) reads the
+    racing/f1 scoreboard's own per-session `competitors` array (drivers,
+    sorted by ESPN's own live/final `order` field) for the current lap
+    (`status.period`) and flag/status text, plus a NEW `.match-
+    live-leaderboard` line under the existing static outright-odds chips
+    showing the current top 3 - live running order as CONTEXT for those
+    odds, not a replacement (a viewer watching an in-progress race can see
+    who those odds are currently tracking). Scoped to Race/Qual/Sprint
+    (F1_LIVE_SESSION_ABBREVIATIONS), matching match-builder.mjs's own
+    F1_SESSION_TYPES id convention exactly (`f1-<eventId>-<abbrev>`).
+
+  `match.live` is written by pollLiveMatches (the fast ~30s tier), not
+  match-builder.mjs's own build - same reasoning as odds/score already
+  follow: this is squarely "STATUS", the thing that tier exists for. A
+  `JSON.stringify` diff (`applyLiveDetail`) skips a re-render on a quiet
+  tick where nothing actually moved.
+
+- **Real, previously-unreported bug found and fixed along the way**: every
+  team-sport live poll (`liveScoreboardUrl`, the function this whole
+  feature depends on for MLB/NBA/EPL) had been silently failing outright
+  in production. It built a single `dates=YYYYMMDD-YYYYMMDD` RANGE
+  request for "yesterday through today" - live-confirmed via direct curl
+  that ESPN's TEAM-SPORT scoreboard endpoint returns a flat HTTP 400 for
+  any multi-day range (`{"code":400,"message":"Failed to get events
+  endpoint."}`), unlike its racing/f1 endpoint, which tolerates a wide
+  range fine (confirmed the same way). `pollLiveMatches`'s own
+  `Promise.allSettled(...).catch(() => {})` swallows a failed fetch with
+  zero visible symptom, so this had never surfaced - not a Round 18
+  regression, a bug that predates this round entirely and was only caught
+  because this round's own new feature depended on that fetch actually
+  succeeding. Fixed by splitting it into `liveScoreboardUrls` (plural) -
+  two single-date requests, merged - matching the exact same one-date-at-
+  a-time convention match-builder.mjs's own `fetchTeamLeagueMatches`
+  already uses for its full-window build fetch, for the identical reason.
+  This means MLB/NBA/EPL score/odds-spread refresh and the live-duration
+  correction (`estimateLiveDurationMinutes`) had likely never actually
+  updated mid-game in production before this fix either, on top of never
+  supplying `.live` detail - re-verified live post-fix: real score/inning
+  updates now land correctly for both real live games above.
+
+- **A second, smaller real bug, exactly the reported symptom**: "match
+  without odds yet should not leave the blank space with 「奪冠機率」".
+  `.match-odds-outright`'s own `display: flex` rule has the SAME cascade
+  specificity as the UA stylesheet's `[hidden] { display: none }` and wins
+  by cascade order (author beats user-agent at equal specificity), so
+  `outrightEl.hidden = true` (buildMatchCard's own default, no market open
+  yet) rendered as a visible empty flex row with just the "奪冠機率" label
+  and nothing after it - confirmed via `getComputedStyle(...).display`
+  before (`flex`) and after (`none`) the fix. `.match-odds` had the exact
+  same latent bug (not separately reported, but the identical shape) and
+  got the identical fix. This project had already hit and fixed this once
+  before, for `.match-watch` (see that rule's own comment) - both new
+  fixes cite it directly rather than re-deriving the explanation.
+
+  9 new tests (public/lib/espn.mjs's own `extractLiveUpdates`'s baseball
+  `situation` handling, `extractF1LiveUpdates`, and `liveScoreboardUrls`'s
+  own two-single-dates-not-a-range shape) - 324/324... then 326/326 once
+  `liveScoreboardUrls` itself got a direct test too.

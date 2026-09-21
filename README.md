@@ -673,6 +673,28 @@ report, plus two further, real-time-only refinements built from them:
   corrects its schedule-blocking length in real time instead of staying
   pinned to a single pre-game guess for its whole broadcast.
 
+Each live poll also writes a `match.live` object with whatever in-progress
+detail ESPN reports for that sport, rendered as a green status line right
+under the team names (only while the card is genuinely LIVE/ENDING_SOON,
+never pre-game or finished):
+
+- **MLB**: inning + half ("第 6 局上/下/中/完"), outs, which bases have a
+  runner, and the current ball-strike count - from ESPN's own
+  `competition.situation` object (`public/lib/espn.mjs`'s
+  `extractLiveUpdates`).
+- **NBA**: quarter ("第 N 節", OT beyond the 4th) plus the game clock.
+- **Premier League**: half (上半場/下半場) plus the match clock, or ESPN's
+  own state word (e.g. a halftime label) shown as-is when there's no
+  numeric clock to attach it to.
+- **F1**: current lap and flag/status text (safety car, VSC, red flag,
+  whatever ESPN itself reports), from a second extractor
+  (`extractF1LiveUpdates`) reading the same racing/f1 scoreboard
+  match-builder.mjs already uses for the schedule, this time for its
+  per-session `competitors` array (drivers, ordered by ESPN's own live
+  classification). The race's current top 3 also renders as its own line
+  right under the static outright win% chips (see "Live win% odds" below)
+  - live running order as context for those odds, not a replacement.
+
 ## Live win% odds
 
 Every card that has a real market open for it shows a devigged win%

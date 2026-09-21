@@ -76,7 +76,13 @@ import {
   estimateLiveDurationMinutes
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
-import { TEAM_LEAGUE_ESPN, liveScoreboardUrl, extractLiveUpdates } from './lib/espn.mjs';
+import {
+  TEAM_LEAGUE_ESPN,
+  liveScoreboardUrls,
+  extractLiveUpdates,
+  f1LiveScoreboardUrl,
+  extractF1LiveUpdates
+} from './lib/espn.mjs';
 import { pickReadableTeamColor } from './lib/color.mjs';
 import {
   POLYMARKET_TAG_ID,
@@ -702,6 +708,90 @@ function finishedLabel(match) {
   return '已結束';
 }
 
+// A sport-specific live in-progress line (MLB's inning/outs/baserunners,
+// EPL's match clock, NBA's quarter/clock, F1's lap/flag) - populated from
+// match.live, which only ever exists once pollLiveMatches's own faster
+// tier (see that function's own top comment) has actually polled this
+// fixture at least once; a match that just went live seconds ago simply
+// shows no line yet, same as its odds/score already do, rather than a
+// guessed placeholder. Never called for a match that isn't genuinely
+// LIVE/ENDING_SOON right now - see buildMatchCard's own gate.
+const INNING_HALF_ZH = { Top: '上', Bot: '下', Mid: '中', End: '完' };
+
+function formatInningHalf(detail) {
+  const m = /^(Top|Bot|Mid|End)\s+(\d+)/i.exec((detail || '').trim());
+  if (!m) return detail || '';
+  const key = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  const half = INNING_HALF_ZH[key] || '';
+  return `第 ${m[2]} 局${half}`;
+}
+
+function baseballLiveLine(match) {
+  const live = match.live;
+  if (!live) return '';
+  const parts = [formatInningHalf(live.detail)].filter(Boolean);
+  const situation = live.situation;
+  if (situation) {
+    if (Number.isFinite(situation.outs)) parts.push(`${situation.outs} 出局`);
+    const bases = [];
+    if (situation.onFirst) bases.push('一');
+    if (situation.onSecond) bases.push('二');
+    if (situation.onThird) bases.push('三');
+    parts.push(bases.length ? `${bases.join('、')}壘有人` : '壘上無人');
+    if (Number.isFinite(situation.balls) && Number.isFinite(situation.strikes)) {
+      parts.push(`球數 ${situation.balls}–${situation.strikes}`);
+    }
+  }
+  return parts.join('．');
+}
+
+function basketballLiveLine(match) {
+  const live = match.live;
+  if (!live) return '';
+  const period = Number(live.period);
+  const periodLabel = Number.isFinite(period) && period > 0 ? (period <= 4 ? `第 ${period} 節` : `延長賽 OT${period - 4}`) : '';
+  return [periodLabel, live.displayClock].filter(Boolean).join('．');
+}
+
+function soccerLiveLine(match) {
+  const live = match.live;
+  if (!live) return '';
+  const half = live.period === 2 ? '下半場' : live.period === 1 ? '上半場' : '';
+  // A numeric match clock ("76'") gets the half label prefixed; anything
+  // ESPN itself already reports as a plain state word (e.g. "Halftime")
+  // is shown exactly as-is rather than force-fit into "上半場 Halftime".
+  if (live.displayClock) return [half, live.displayClock].filter(Boolean).join('．');
+  return live.detail || '';
+}
+
+function f1LiveLine(match) {
+  const live = match.live;
+  if (!live) return '';
+  const lapLabel = Number.isFinite(live.lap) ? `第 ${live.lap} 圈` : '';
+  return [lapLabel, live.statusDetail].filter(Boolean).join('．');
+}
+
+function f1LeaderboardLine(match) {
+  const live = match.live;
+  if (!live || !Array.isArray(live.leaderboard) || !live.leaderboard.length) return '';
+  return `目前領先：${live.leaderboard.map((driver, i) => `${i + 1}. ${driver.name}`).join('　')}`;
+}
+
+function liveStatusLineFor(match) {
+  switch (match.sport) {
+    case 'MLB':
+      return baseballLiveLine(match);
+    case 'NBA':
+      return basketballLiveLine(match);
+    case 'Premier League':
+      return soccerLiveLine(match);
+    case 'F1':
+      return f1LiveLine(match);
+    default:
+      return '';
+  }
+}
+
 // Local calendar date key, e.g. "2026-09-19" - deliberately NOT toISOString
 // (which would give the UTC date, off by a day for plenty of viewers around
 // midnight). Every date/day grouping in this file goes through this so a
@@ -986,6 +1076,21 @@ function buildMatchCard(match) {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
 
+  // Sport-specific live in-progress detail (see liveStatusLineFor above) -
+  // gated on matchLifecycleState directly rather than match.isFinished
+  // alone, so this never shows for a not-yet-started fixture either (a
+  // match.live left over from BEFORE a near-term/full-window rebuild
+  // replaced this match object - see applyFreshBuild's mergeFreshMatches -
+  // can't happen since a fresh build never sets match.live at all, but
+  // this gate is what actually decides whether the line renders, not
+  // merely whether the field exists).
+  const lifecycle = matchLifecycleState(match);
+  const isCurrentlyLive = lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
+  const liveStatusEl = node.querySelector('.match-live-status');
+  const liveStatusLine = isCurrentlyLive ? liveStatusLineFor(match) : '';
+  liveStatusEl.hidden = !liveStatusLine;
+  liveStatusEl.textContent = liveStatusLine;
+
   // A real Polymarket prediction market's own devigged trade price (see
   // ./lib/polymarket.mjs) as a live win-probability bar - only rendered
   // when a real market has actually opened for this fixture. Never a
@@ -1048,6 +1153,16 @@ function buildMatchCard(match) {
       `奪冠機率：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
     );
   }
+
+  // The race's own current running order (see f1LeaderboardLine above) -
+  // extra live context sitting right under the static outright odds above,
+  // only while the race is actually LIVE (a pre-race outright market has
+  // no "current leader" to show yet, and a finished one already has its
+  // own final result reflected in match.oddsFavorites/winner elsewhere).
+  const leaderboardEl = node.querySelector('.match-live-leaderboard');
+  const leaderboardLine = isCurrentlyLive ? f1LeaderboardLine(match) : '';
+  leaderboardEl.hidden = !leaderboardLine;
+  leaderboardEl.textContent = leaderboardLine;
 
   renderVenue(node.querySelector('.match-venue'), match);
 
@@ -1187,15 +1302,15 @@ function buildMatchCard(match) {
     preferBtn.addEventListener('click', () => preferMatch(match));
   }
 
-  // Same single source of truth as relativeLabel above (matchLifecycleState)
-  // - isFinished (ESPN's own status) always wins, and LIVE/ENDING_SOON both
+  // Same single source of truth as relativeLabel/the live-status line above
+  // (matchLifecycleState, computed once as `lifecycle`/`isCurrentlyLive`) -
+  // isFinished (ESPN's own status) always wins, and LIVE/ENDING_SOON both
   // read as "still live" for styling purposes; a match already underway
   // that's simply run past its estimated end (see estimatedDurationMinutes)
   // stays styled live rather than falling back to plain/upcoming.
-  const lifecycle = matchLifecycleState(match);
   if (lifecycle === LIFECYCLE_STATES.ENDED) {
     node.classList.add('is-finished');
-  } else if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) {
+  } else if (isCurrentlyLive) {
     node.classList.add('is-live');
   }
 
@@ -2084,16 +2199,62 @@ async function pollLiveMatches() {
 
   const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
   let changed = false;
+  // A fresh `live` object is only ever written back when it actually
+  // differs from what's already on the match (a plain JSON compare - cheap
+  // for these small objects) - same reasoning as the F1 oddsFavorites
+  // compare further down: avoids forcing a render every quiet 30s tick
+  // where the inning/quarter/lap hasn't actually moved.
+  function applyLiveDetail(match, live) {
+    if (JSON.stringify(live) !== JSON.stringify(match.live)) {
+      match.live = live;
+      changed = true;
+    }
+  }
   await Promise.allSettled(
     [...sports].map(async sport => {
-      const target = liveScoreboardUrl(sport);
-      if (!target) return;
-      const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
-        cache: 'no-store'
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const scoreboard = await response.json();
-      extractLiveUpdates(sport, scoreboard).forEach((update, id) => {
+      // F1 has no ESPN "score" to poll (see liveScoreboardUrls's own
+      // comment) but DOES have a live lap count/flag status/running order
+      // from the exact same racing/f1 scoreboard match-builder.mjs already
+      // uses for its schedule (see extractF1LiveUpdates) - a completely
+      // different response shape (drivers, not two team sides), so this
+      // branches off into its own fetch/merge rather than forcing it
+      // through the team-sport extractor below.
+      if (sport === 'F1') {
+        const target = f1LiveScoreboardUrl();
+        const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
+          cache: 'no-store'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const scoreboard = await response.json();
+        extractF1LiveUpdates(scoreboard).forEach((update, id) => {
+          const match = byId.get(id);
+          if (!match || match.isFinished) return;
+          applyLiveDetail(match, { lap: update.lap, statusDetail: update.statusDetail, leaderboard: update.leaderboard });
+          if (update.isFinished && !match.isFinished) {
+            match.isFinished = true;
+            changed = true;
+          }
+        });
+        return;
+      }
+      // Two single-date requests, not one range request - see
+      // liveScoreboardUrls's own comment for why a range param gets a flat
+      // 400 from this endpoint. Later (today's) response wins on a
+      // same-id collision (a doubleheader's game near midnight UTC could
+      // legitimately appear in both) via plain Map overwrite - harmless,
+      // since it's the same event either way.
+      const targets = liveScoreboardUrls(sport);
+      if (!targets.length) return;
+      const updates = new Map();
+      for (const target of targets) {
+        const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(target)}`, {
+          cache: 'no-store'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const scoreboard = await response.json();
+        extractLiveUpdates(sport, scoreboard).forEach((update, id) => updates.set(id, update));
+      }
+      updates.forEach((update, id) => {
         const match = byId.get(id);
         if (!match || match.isFinished) return;
         const [awayScore, homeScore] = update.scores;
@@ -2107,6 +2268,12 @@ async function pollLiveMatches() {
             changed = true;
           }
         }
+        applyLiveDetail(match, {
+          period: update.period,
+          displayClock: update.displayClock,
+          detail: update.shortDetail,
+          situation: update.situation
+        });
         if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
         if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
         if (update.isFinished && !match.isFinished) {
