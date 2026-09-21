@@ -1149,7 +1149,7 @@ function preferMatch(match) {
 
 // ---- Rendering ------------------------------------------------------------
 
-function buildTeamRow({ logo, name, nameZh, homeAway }) {
+function buildTeamRow({ logo, name, nameZh, homeAway, score, showScore }) {
   const node = teamRowTemplate.content.firstElementChild.cloneNode(true);
   const img = node.querySelector('.team-logo');
   if (logo) {
@@ -1168,6 +1168,19 @@ function buildTeamRow({ logo, name, nameZh, homeAway }) {
   }
   node.querySelector('.team-name-en').textContent = name;
   node.querySelector('.team-name-zh').textContent = nameZh || '';
+  // ESPN's own `score` comes through as a numeric STRING (ints only ever
+  // arrive as text over that API); ` Number()` here also means a poll's own
+  // later NUMBER write (see pollLiveMatches) and a fresh rebuild's STRING
+  // both render identically regardless of which type currently holds the
+  // field, rather than a plain `${score}` risking a stray decimal or NaN.
+  const scoreEl = node.querySelector('.team-score');
+  const numericScore = Number(score);
+  if (showScore && Number.isFinite(numericScore)) {
+    scoreEl.hidden = false;
+    scoreEl.textContent = String(numericScore);
+  } else {
+    scoreEl.hidden = true;
+  }
   return node;
 }
 
@@ -1201,6 +1214,13 @@ function buildMatchCard(match) {
   // which relies on this to update just the recommended-tag/is-pinned state
   // on an already-correctly-scrolled stack instead of tearing it down.
   node.dataset.matchId = match.id;
+  // Computed once, up front, and reused everywhere below (team-row score
+  // visibility, the live-status widget, the .is-live/.is-finished class) -
+  // see matchLifecycleState's own comment for why this is the one place
+  // "what point in its lifecycle is this match at" gets answered, rather
+  // than each caller re-deriving it ad hoc against a plain nominal end time.
+  const lifecycle = matchLifecycleState(match);
+  const isCurrentlyLive = lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
   const start = Date.parse(match.startTimeUtc);
   // For a FINISHED match, match.durationMinutes is already the real
   // observed elapsed time (see match-builder.mjs's finishedDurationMinutes) -
@@ -1246,15 +1266,26 @@ function buildMatchCard(match) {
   node.querySelector('.sport-icon').replaceWith(buildSportIcon(match.sport));
   node.querySelector('.sport-badge-text').textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
 
+  // Only shown once there's an actual score worth showing - a pre-game
+  // fixture's own "0" from ESPN isn't a real score yet, it's just the
+  // absence of one, and showing it would read as the match already being
+  // 0-0 rather than not yet started. Reported directly: the live status
+  // widget (inning/quarter/lap - see buildLiveStatusNode below) showed
+  // "states" like the inning or game clock but never the actual score
+  // itself, so a viewer had no way to see who was actually ahead without
+  // leaving the page - team-score fixes that gap, the live widget still
+  // owns the in-progress DETAIL neither team's own score line could show.
+  const showScore = isCurrentlyLive || match.isFinished;
+
   const teamsEl = node.querySelector('[data-teams]');
   if (match.competitors && match.competitors.length === 2) {
     const [away, home] = match.competitors;
-    teamsEl.appendChild(buildTeamRow(away));
+    teamsEl.appendChild(buildTeamRow({ ...away, showScore }));
     const at = document.createElement('span');
     at.className = 'team-at';
     at.textContent = 'vs';
     teamsEl.appendChild(at);
-    teamsEl.appendChild(buildTeamRow(home));
+    teamsEl.appendChild(buildTeamRow({ ...home, showScore }));
   } else {
     teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
   }
@@ -1266,8 +1297,6 @@ function buildMatchCard(match) {
   // rebuild (see mergeFreshMatches's own comment on why it's deliberately
   // carried forward) - this lifecycle gate is what actually decides
   // whether the widget renders, not merely whether the field exists.
-  const lifecycle = matchLifecycleState(match);
-  const isCurrentlyLive = lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON;
   const liveStatusEl = node.querySelector('.match-live-status');
   const liveStatusNode = isCurrentlyLive ? buildLiveStatusNode(match) : null;
   liveStatusEl.replaceChildren(...(liveStatusNode ? [liveStatusNode] : []));
@@ -2666,6 +2695,20 @@ async function init() {
     errorState.hidden = false;
   }
   scheduleNearTermRefresh();
+  // Also run the very first live poll immediately, rather than only after
+  // scheduleLivePoll's own recurring setTimeout first elapses -
+  // that timer waits a full LIVE_POLL_INTERVAL_MS (30s) BEFORE ever
+  // calling pollLiveMatches for the first time. match.live (what
+  // buildLiveStatusNode actually renders) is only ever set by
+  // pollLiveMatches, so nothing else on this page could make a live
+  // match's diamond/flag/pulsing-dot widget appear sooner than that -
+  // reported directly as "quite a few seconds after loading" before the
+  // live states show up, live-measured at up to ~30s. Unblocked (not
+  // awaited), same reasoning as refreshFullWindow's own call right below -
+  // this shouldn't delay that kickoff either.
+  if (document.visibilityState !== 'hidden') {
+    pollLiveMatches().catch(error => console.error('initial live poll failed', error));
+  }
   scheduleLivePoll();
   refreshFullWindow({ silent: true });
   scheduleFullRefresh();
