@@ -2288,3 +2288,96 @@ present) and after (bug confirmed gone) the fix, as documented above.
   `situation` handling, `extractF1LiveUpdates`, and `liveScoreboardUrls`'s
   own two-single-dates-not-a-range shape) - 324/324... then 326/326 once
   `liveScoreboardUrls` itself got a direct test too.
+
+## Round 19 (2026-09-21): fetch efficiency, perceived load time, a real live-status flicker bug, and icon-based live widgets
+
+Direct follow-up feedback on Round 18's own live-detail feature: "improve
+efficiency... fetch only necessary data and other stay in cache... the live
+states is slow, sometimes showing then disappear again, also show live
+states using images instead of flat line of text". Four real, separate
+findings, not one:
+
+- **A genuine flicker bug, exactly the reported symptom**: `mergeFreshMatches`
+  (`public/app.js`) unconditionally overwrote an existing match object with
+  the fresh one `buildMatches()` just returned, on every single near-term
+  (60s) AND full-window (5min) tick. `buildMatches()` itself never sets
+  `.live` at all (only `pollLiveMatches`'s own independent 30s tier does) and
+  always recomputes `durationMinutes` from the sport's PRE-GAME estimate, not
+  the live-corrected one - so every 60 seconds, the live status widget was
+  wiped back to nothing and the schedule-blocking duration snapped back to
+  its pre-game guess, until the next live poll (on its own unrelated 30s
+  timer, so up to 30s of visible gap) put both back. Confirmed live via
+  Playwright, watching a real live MLB game (Brewers @ Orioles) across a
+  near-term refresh boundary before the fix: the widget genuinely blinked
+  off and back on every ~60s. Fixed by having `mergeFreshMatches` carry
+  `previous.live` and `previous.durationMinutes` forward onto the fresh
+  object whenever the fresh one isn't already reporting the match finished -
+  re-verified live post-fix: the same widget stayed continuously visible
+  across the same refresh boundary with no gap.
+
+- **Real, measured over-fetching, not just a hunch**: instrumenting a
+  counting `fetchJson` showed the near-term tier (`daysAhead=2`) making 18
+  real upstream requests per 60s tick and the full-window tier
+  (`daysAhead=14`) making 57 per 5min tick - roughly 1,080 + 684 = ~1,764
+  requests/hour from these two tiers ALONE on a single open tab, before
+  live-poll's own load is even added - about 3x `jaypengx-collab/shared-
+  proxy`'s own `SPORTS_PROXY_RATE_LIMIT` (600/hr per IP), with zero caching
+  anywhere to absorb any of it. The single biggest source of waste: on
+  every page load, `refreshNearTerm()` runs, then `refreshFullWindow()`
+  runs immediately after - and full-window's own date range is a strict
+  superset of near-term's, so it re-requested the exact same today/tomorrow
+  scoreboard URLs near-term had just fetched seconds earlier. Fixed with two
+  independent caching layers rather than one, since they solve different
+  halves of the problem:
+  - An in-tab cache (`proxyFetchJson` in `public/app.js`) - same-URL
+    responses cached in memory for `PROXY_FETCH_CACHE_TTL_MS` (45s), with
+    concurrent identical calls coalesced into one in-flight request. This
+    alone eliminates the near-term/full-window overlap on every load.
+    Deliberately NOT applied to `pollLiveMatches`'s own direct fetches -
+    that tier needs a genuinely fresh request every 30s.
+  - A shared edge cache (`SPORTS_PROXY_CACHE_TTL_SECONDS`, 20s, in
+    `jaypengx-collab/shared-proxy`'s `worker.js`) - caches every successful
+    upstream response keyed by the upstream URL alone (never by viewer/IP),
+    so concurrent viewers - and this tab's own live-poll tier, which the
+    in-tab cache above doesn't touch - share one real upstream fetch. A
+    cache hit skips the rate-limit check entirely, since it costs the
+    upstream API nothing.
+
+- **Perceived load time on a slow connection**: nothing painted at all
+  until `refreshNearTerm()`'s own ~18 requests all resolved, every single
+  visit, even though this same browser had almost certainly already built a
+  match list minutes ago. Added an instant-paint snapshot: the last
+  successful build is cached to `localStorage`
+  (`matchfind-match-snapshot`, `.live` stripped since it would already be
+  stale/wrong by the next load) and painted immediately in `init()`, before
+  the real refresh even starts, discarded if older than
+  `MATCH_SNAPSHOT_MAX_AGE_MS` (30 minutes). Measured live via Playwright on
+  the same machine: 1,911ms to first `.match-card` cold vs. 297ms warm
+  (snapshot) on a page reload - real APIs, real network, not a synthetic
+  benchmark.
+
+- **Live status as icons, not a flat text line**: `buildLiveStatusNode`
+  (`public/app.js`) replaces the old plain-text
+  `baseballLiveLine`/`basketballLiveLine`/`soccerLiveLine`/`f1LiveLine`
+  functions with real DOM widgets - a small SVG diamond for MLB (a dot at
+  each of 1st/2nd/3rd that lights up green exactly when `situation` reports
+  a runner there, same shape a TV broadcast graphic already uses) plus an
+  outs indicator and ball-strike count; a pulsing live dot for NBA/EPL; a
+  colored flag icon for F1 (green/yellow/red/safety-car/checkered, read
+  from ESPN's own status text, with the two caution flags animated to flash)
+  next to the lap count. F1's own top-3 running order
+  (`f1LeaderboardNode`) became a row of medal-colored rank chips
+  (gold/silver/bronze) instead of a flat "1. Name 2. Name" sentence. Every
+  SVG is a fixed, hardcoded shape (only booleans/which-CSS-class ever vary)
+  built via the same `innerHTML`-from-template-literal pattern
+  `SPORT_ICONS`/`buildSportIcon` already used elsewhere in this file - never
+  user-supplied text, so this isn't a fresh injection surface.
+
+Verified live via the same Playwright network-relay harness Round 18
+established (`page.route('**/sports-proxy*', ...)` relayed through Node's
+own real `fetch()`): the diamond/outs/count widget rendered correctly
+against a real live MLB game (confirmed visually - runner on 2nd lit green,
+1st/3rd unlit, "第 6 局上", 0 outs, "3–2" count), the flicker was gone
+across a real near-term refresh boundary, and the instant-paint snapshot's
+297ms-vs-1,911ms improvement was measured directly, not estimated. No
+regressions - full suite still 326/326.
