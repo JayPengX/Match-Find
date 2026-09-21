@@ -190,22 +190,26 @@ export function estimateBroadcastQualityBaseline(broadcast) {
   return FLAGSHIP_BROADCAST_NETWORKS.includes(normalized) ? 7 : 5;
 }
 
-// How GOOD the two teams actually are, independent of how CLOSE tonight's
-// particular pairing is - a genuinely distinct axis from `competitiveness`
-// above, which only measures the GAP between two records and scores two
-// elite 95-win teams identically to two last-place 95-loss teams as long as
-// they're equally matched against each other. A viewer asking "is this
-// worth watching" cares about both: a close game between two great teams
-// (a real playoff-caliber matchup) and a close game between two also-rans
-// are not the same recommendation, even though this repo's own
-// `competitiveness` alone can't tell them apart. .500 (a perfectly average
-// team) is the neutral midpoint (5); the scale is deliberately wide enough
-// that a realistic elite team (~.600, a 97-win MLB pace) already lands
-// near the top and a realistic also-ran (~.400) near the bottom, without
-// needing a mathematically-rare .700+/.300- record to reach either end.
-export function skillFromWinPct(avgWinPct) {
-  if (!Number.isFinite(avgWinPct)) return null;
-  return clamp(Math.round(5 + (avgWinPct - 0.5) * 20), 1, 10);
+// How GOOD a team (or a pairing of teams) actually is, independent of how
+// CLOSE tonight's particular pairing is - a genuinely distinct axis from
+// `competitiveness` above, which only measures the GAP between two records
+// and scores two elite 95-win teams identically to two last-place 95-loss
+// teams as long as they're equally matched against each other. A viewer
+// asking "is this worth watching" cares about both: a close game between
+// two great teams (a real playoff-caliber matchup) and a close game between
+// two also-rans are not the same recommendation, even though this repo's
+// own `competitiveness` alone can't tell them apart. .500 (a perfectly
+// average team) is the neutral midpoint (5); the scale is deliberately wide
+// enough that a realistic elite team (~.600, a 97-win MLB pace) already
+// lands near the top and a realistic also-ran (~.400) near the bottom,
+// without needing a mathematically-rare .700+/.300- record to reach either
+// end. Takes a single win%, deliberately agnostic about whose - NBA/EPL
+// pass the two teams' average (see their own `skill` calls below);
+// computeMlbObjectiveScore instead passes the BETTER team's own win% (see
+// its own `skill` comment for why an average is the wrong choice there).
+export function skillFromWinPct(winPct) {
+  if (!Number.isFinite(winPct)) return null;
+  return clamp(Math.round(5 + (winPct - 0.5) * 20), 1, 10);
 }
 
 // A run line beyond ~3 runs, or a point spread beyond ~15 points, is
@@ -257,8 +261,34 @@ export const MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS = 6;
 // THIS pairing's real current form, not just a name or a division
 // standing that may already be a foregone conclusion. A blowout stays
 // capped near its own competitiveness whatever else about the two teams
-// reads well on paper.
+// reads well on paper. Still used as-is by NBA/EPL below; MLB uses its own
+// softer version instead (see MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE) now
+// that `skill` is a real weighted component of MLB watchability rather
+// than an unused side value - see that constant's own comment for why.
 export const MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS = 3;
+
+// MLB-only replacement for the hard ceiling above. A flat `competitiveness
+// + 3` wall means no combination of real stakes/skill/momentum/rivalry can
+// ever lift a game past a fixed distance from tonight's own closeness -
+// which is exactly backwards for a case like Dodgers vs Giants: a close
+// game between two mediocre teams and a lopsided game between an elite,
+// historic-rivalry team and a bad one are not equally "capped at the same
+// distance above their own competitiveness", because the elite/rivalry
+// game has real additional entertainment value the wall can't express.
+// Below `MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE` of excess (watchability
+// pre-cap minus competitiveness), the blend passes through completely
+// unchanged - identical to the old hard cap's own behavior for any excess
+// under 3 (same numeric allowance, reused on purpose: this is meant to be
+// a strict loosening of the old rule, not a wholesale re-tuning of the
+// normal case). Only past that allowance does this diverge from the old
+// wall: additional excess is damped by `MLB_WATCHABILITY_EXCESS_DAMPING`
+// instead of being thrown away outright - diminishing returns rather than
+// a hard stop, so a genuinely exceptional combination of skill/stakes/
+// rivalry can still nudge watchability higher, just increasingly slowly,
+// instead of a blowout-on-paper being flatly unable to ever beat
+// competitiveness+3 no matter how good the two teams actually are.
+export const MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE = MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS;
+export const MLB_WATCHABILITY_EXCESS_DAMPING = 0.4;
 
 // ---- MLB ----------------------------------------------------------------
 //
@@ -320,36 +350,67 @@ export function computeMlbObjectiveScore({
   const momentum = momentumInputs.length ? Math.max(...momentumInputs) : null;
   if (Number.isFinite(momentum)) factors.push(`streak ${away?.streakCode || ''}/${home?.streakCode || ''}`.trim());
 
-  // Additive, same reasoning as computeNbaObjectiveScore/computeEplObjectiveScore's
-  // own rivalry/derby bonuses - a storied historic rivalry (Dodgers-Giants,
-  // Yankees-Red Sox) should only ever ADD watchability over the same two
-  // teams' non-rivalry competitiveness/stakes, never blend toward a fixed
-  // anchor and pull an already-good number down. This is a real, concrete
-  // gap the record-based formula alone can't see: two historically
-  // significant franchises can be a genuinely bigger draw than their
-  // current-season record alone suggests, which is exactly the kind of
-  // real-world fact a deterministic win%/stakes formula has no way to
-  // capture on its own - see docs/recommendation-engine-audit.md. Gated on
-  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS (see that constant's own comment
-  // for the real Dodgers/Giants blowout this guards against) - a historic
-  // name is a reason to lift an otherwise-decent game, not a reason to
-  // call a decided one a "must watch".
+  // How good the two teams actually are, independent of tonight's own
+  // closeness - moved up from after watchability (where it used to sit as
+  // a dead-end, separately-returned value nothing else here consumed) since
+  // it's now a genuine INPUT to watchability below.
+  //
+  // MLB-only divergence from NBA/EPL's own skill below: this uses the
+  // BETTER of the two teams' win%, not their average. Live-verified reason
+  // (2026-09-21): an elite 96-60 Dodgers team (.615) against a rebuilding
+  // 64-92 Giants team (.410) averages to .5125 - a `skill` of ~5, textbook
+  // neutral, indistinguishable from two genuinely mediocre .500ish teams.
+  // Averaging cancels out exactly the signal this exists to capture,
+  // because a bad opponent always drags the average back toward neutral
+  // regardless of how good the OTHER team is. A viewer's interest in
+  // watching a great team play doesn't depend on the opponent also being
+  // great - that's what `competitiveness` (the gap between them) already
+  // measures separately - so skill here answers "is there a genuinely good
+  // team in this matchup at all", which the max, not the average, answers.
+  const bestTeamWinPct =
+    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? Math.max(awayWinPct, homeWinPct) : null;
+  const skill = skillFromWinPct(bestTeamWinPct);
+  if (Number.isFinite(skill)) factors.push(`best team win% ${(bestTeamWinPct * 100).toFixed(1)}%`);
+
+  // Game Quality = Stakes + Competitiveness + Team Skill + Momentum, blended
+  // together rather than letting competitiveness alone gate everything else
+  // via a hard post-hoc cap (see the excess-damping replacement below for
+  // the other half of that same fix). `skill` now carries real weight
+  // (0.25) instead of being computed and discarded - two elite teams
+  // playing a currently-lopsided game (a 96-win Dodgers team against a
+  // rebuilding Giants) get real credit for being genuinely good teams, the
+  // same way two mediocre teams in an equally lopsided game don't, without
+  // this having to become a special-cased "is this team famous" bonus the
+  // way isRivalry already is. Weights sum to 1 when every signal is present
+  // (stakes/competitiveness always are - see their own fallbacks above -
+  // skill/momentum can be null and cleanly drop out of weightedAverage's
+  // own renormalization).
   let watchability = weightedAverage([
-    [stakes, 0.45],
-    [competitiveness, 0.35],
-    [momentum, 0.2]
+    [stakes, 0.3],
+    [competitiveness, 0.3],
+    [skill, 0.25],
+    [momentum, 0.15]
   ]) ?? 5;
   // 2, not NBA's 1.5 - matches EPL's own derby bonus.
   if (isRivalry && competitiveness >= MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS) {
     watchability += 2;
     factors.push('known historic rivalry matchup');
   }
-  // See MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS's own comment - stakes
-  // (from playoffProximityScore) can't tell a nail-biter division race
-  // apart from a leader's own already-decided runaway, so this is the
-  // backstop that keeps a stakes=10 reading on a lopsided pairing from
-  // reaching a high watchability on its own.
-  watchability = Math.min(watchability, competitiveness + MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS);
+  // Softer replacement for the old `Math.min(watchability, competitiveness +
+  // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS)` hard ceiling - see
+  // MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE's own comment for why. A real
+  // blowout (low stakes, low skill, no rivalry) never builds up much excess
+  // here in the first place - stakes/skill/competitiveness all correlate
+  // when a game really is one-sided - so this mainly changes the case the
+  // old flat wall got wrong: a large excess driven by genuine stakes/skill/
+  // rivalry signal on a matchup that still looks lopsided on paper.
+  const excess = watchability - competitiveness;
+  if (excess > MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE) {
+    watchability =
+      competitiveness +
+      MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE +
+      (excess - MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE) * MLB_WATCHABILITY_EXCESS_DAMPING;
+  }
   watchability = clamp(Math.round(watchability), 1, 10);
 
   const enduranceScore = clamp(
@@ -357,11 +418,6 @@ export function computeMlbObjectiveScore({
     1,
     10
   );
-
-  const skill = skillFromWinPct(
-    Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? (awayWinPct + homeWinPct) / 2 : null
-  );
-  if (Number.isFinite(skill)) factors.push(`avg win% ${(((awayWinPct + homeWinPct) / 2) * 100).toFixed(1)}%`);
 
   return { competitiveness, watchability, enduranceScore, skill, factors };
 }

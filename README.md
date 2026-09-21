@@ -197,21 +197,39 @@ itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
   separate axis from competitiveness below: two elite teams playing a close
   game and two also-ran teams playing an equally close game score
   identically on closeness alone, but they're not the same recommendation.
-  Null for F1 (no per-competitor quality signal exists for a single-driver
-  race), renormalized away like any other missing signal.
+  NBA/EPL feed it the two teams' AVERAGE win%/points-rate. MLB instead feeds
+  it the BETTER team's own win% (`Math.max(awayWinPct, homeWinPct)`) - an
+  average cancels out exactly the case this axis exists for: a 96-60 elite
+  Dodgers team against a 64-92 Giants team averages to ~.51 (a neutral
+  skill≈5, indistinguishable from two genuinely mediocre .500ish teams,
+  live-verified during Round 29's review), while the better-team's-own-win%
+  version correctly reads that pairing as containing a genuinely elite
+  team. Null for F1 (no per-competitor quality signal exists for a
+  single-driver race), renormalized away like any other missing signal.
 - **competitiveness** - how CLOSE tonight's specific pairing is (season
   record gap, recent form, betting-market spread)
 - **watchability** - entertainment value/mainstream public attention - the
   deterministic objective score's own national-broadcast/rivalry/derby
   detectors and betting-market signal (see "API-data-driven scoring engine"
-  above). Neither a rivalry/derby/big-club name nor a division leader's own
-  "stakes" reading can lift this more than `MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS`
-  (3) points above tonight's own competitiveness - added after a live case
+  above), now also blending in `skill` directly for MLB (weights
+  `stakes 0.3 / competitiveness 0.3 / skill 0.25 / momentum 0.15`, added in
+  Round 29 after `skill` sat computed-but-unused in the return value for
+  several rounds). For NBA/EPL, neither a rivalry/derby/big-club name nor a
+  division leader's own "stakes" reading can lift this more than
+  `MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS` (3) points above tonight's
+  own competitiveness - added after a live case
   (`docs/recommendation-engine-audit.md`'s Round 23) where a 96-60 Dodgers
   team, already clinched, blowing out a 64-92 last-place Giants team still
   scored a maxed-out watchability purely from "Dodgers-Giants" being a
   historic rivalry name, outranking a genuinely live playoff race
-  elsewhere that night. MLB's own rivalry bonus additionally doesn't fire
+  elsewhere that night. MLB uses a SOFTER version of that same guardrail
+  instead (`MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE` / `_EXCESS_DAMPING`,
+  Round 29): the same allowance (3 points) still passes through completely
+  untouched, but excess beyond it is damped rather than hard-walled, so a
+  genuinely elite team in an otherwise-lopsided game can still earn real
+  (if diminishing) extra credit instead of being flatly unable to ever
+  cross competitiveness+3 - see Round 29 for the worked Dodgers/Giants
+  before/after numbers. MLB's own rivalry bonus additionally doesn't fire
   at all below a competitiveness floor (`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS`,
   MLB only - NBA/EPL have no standings-API integration yet, so a low
   competitiveness there can still be early-season sampling noise a

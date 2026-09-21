@@ -3241,3 +3241,89 @@ rescaling would, and agrees with `devigNWay` on an already-near-exact
 two-way input) - a pure helper function, same test-coverage bar as
 `devigNWay` itself. Full suite 355/355. Committed and pushed to both
 branches of Match-Find.
+
+## Round 29 (2026-09-21): MLB watchability review - competitiveness was acting as a hard ceiling, skill was computed and thrown away
+
+Direct review request, not a live bug report: reconsider
+`computeMlbObjectiveScore`'s own watchability formula (`objective-score.
+mjs`), because it "treats competitiveness/closeness as too dominant a
+definition of a good game" - a close matchup between two mediocre teams
+could outrank a more genuinely interesting one between elite teams, using
+Dodgers vs Giants as the illustrative case (Dodgers elite, Giants bad, but
+real rivalry/marquee value). Two concrete complaints about the old code:
+`watchability = Math.min(watchability, competitiveness + 3)` put a hard
+ceiling on a lopsided game's score no matter how good anything else about
+it read, and `skill` was computed at the very end of the function and
+returned to the caller but never actually fed into `watchability` at all.
+
+**The hard cap.** Replaced with a soft, diminishing-returns penalty,
+MLB-only (NBA/EPL keep the original flat `+3` wall - their own tests
+hard-code that exact bound, and this review was scoped to MLB). Below
+`MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE` (3, deliberately reused from the
+old constant's own value, so anything that used to pass through the old
+cap unchanged still does) excess above competitiveness passes through
+completely untouched. Only excess beyond that allowance is damped, by
+`MLB_WATCHABILITY_EXCESS_DAMPING` (0.4) - not discarded outright the way
+the hard `Math.min` did - so a genuinely exceptional combination of
+stakes/skill/momentum/rivalry can still lift watchability further, just
+with steadily diminishing returns, rather than hitting a wall it can never
+cross regardless of magnitude.
+
+**Wiring `skill` into watchability.** Moved `skill`'s computation earlier
+in the function (it's now a real INPUT, not a dead-end return value) and
+gave it a genuine weight in the blend: `weightedAverage([[stakes,0.3],
+[competitiveness,0.3],[skill,0.25],[momentum,0.15]])` - down from
+`[[stakes,0.45],[competitiveness,0.35],[momentum,0.2]]`. Stakes and
+competitiveness both dropped from their old weights to make room, rather
+than skill diluting only one of them.
+
+**A real bug found while wiring skill in, before it shipped:** the
+existing `skill` (average of both teams' win%) cancels out exactly the
+signal this whole review exists to capture. A 96-60 Dodgers team (.615)
+against a 64-92 Giants team (.410) averages to .5125 - a neutral ~5 skill,
+indistinguishable from two genuinely mediocre .500ish teams. Verified this
+concretely before committing to the average: a hand-built "two genuinely
+bad teams, closely matched" scenario (.35 vs .30) and the Dodgers/Giants
+scenario both landed at `skill: 5` under the average formula - the
+opposite of the intended behavior. Fixed by having MLB's own `skill` use
+the BETTER team's own win% instead of the average (`skillFromWinPct(Math.
+max(awayWinPct, homeWinPct))`) - `skillFromWinPct` itself is unchanged and
+still generic (its param was renamed from `avgWinPct` to `winPct` since
+it's no longer always an average); NBA/EPL's own `skill` calls are
+untouched and still pass the two-team average, since this specific
+average-cancels-the-signal failure mode is MLB-review-scoped, not
+verified as a problem for those two sports.
+
+**Verified against hand-built examples** (not simulated fixtures - see
+this doc's own standing rule against trusting those) spanning the cases
+the review asked for:
+- Elite (.615) vs bad (.410), big division lead, real rivalry flag:
+  watchability 4 -> 5 (modest lift; rivalry bonus itself still gated out
+  at this competitiveness, same as before - the fix is skill's own
+  contribution, not the rivalry gate).
+- Two genuinely mediocre teams in a live, close division race, no
+  rivalry: watchability 8 (was 9 under the old formula) - a small,
+  expected trade-off from skill now diluting a maxed-out
+  stakes/competitiveness read when skill itself is neutral, not a
+  regression.
+- Two genuinely bad teams, lopsided against each other, no rivalry:
+  stays low (`watchability: 3`, `skill: 2`) - skill does not falsely
+  rescue a matchup with no real team quality on either side.
+- A live 1-game-back division race between two good-but-not-elite teams
+  still outranks the elite-vs-bad blowout above (9 vs 5) - confirms the
+  explicit ask that this NOT simply force Dodgers/Giants to win, only
+  make the formula capable of it when the numbers genuinely support it.
+- An intentionally extreme probe (maxed stakes/skill/momentum against a
+  rock-bottom competitiveness) confirmed the new penalty is genuinely
+  soft: watchability rises well above competitiveness alone but still
+  stays below the maximum, rather than either hard-capping or blowing
+  straight through to 10.
+
+Added 3 new tests to `tests/objective-score.test.mjs` covering the
+elite-vs-bad-averaging-hides-it case, the elite-blowout-vs-mediocre-
+blowout-vs-close-race ranking, and the soft-cap's own damped-not-discarded
+behavior; updated one existing test's own stale "AVERAGE" wording to match
+the new best-team-win% semantics (the test's assertions themselves already
+happened to hold either way). Full suite 358/358. Scoped to MLB only -
+NBA/EPL's own `computeNbaObjectiveScore`/`computeEplObjectiveScore` and
+their hard `+3` cap were not touched.

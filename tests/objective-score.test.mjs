@@ -237,7 +237,7 @@ describe('skillFromWinPct', () => {
 });
 
 describe('computeMlbObjectiveScore', () => {
-  test('skill reflects the AVERAGE quality of both teams, not how close the game is - two elite teams score higher skill than two also-rans, even at the identical win% gap', () => {
+  test('skill reflects the BETTER team\'s own quality, not the average of both - two elite teams score higher skill than two also-rans, even at the identical win% gap', () => {
     const eliteMatchup = computeMlbObjectiveScore({ awayWinPct: 0.62, homeWinPct: 0.58, away: null, home: null, isPostseason: false });
     const alsoRanMatchup = computeMlbObjectiveScore({ awayWinPct: 0.42, homeWinPct: 0.38, away: null, home: null, isPostseason: false });
     // Both pairings have the same 0.04 win% gap, so competitiveness should
@@ -245,6 +245,20 @@ describe('computeMlbObjectiveScore', () => {
     // these two matchups apart.
     assert.equal(eliteMatchup.competitiveness, alsoRanMatchup.competitiveness);
     assert.ok(eliteMatchup.skill > alsoRanMatchup.skill);
+  });
+
+  // Live case this exists for (2026-09-21): an elite 96-60 Dodgers team
+  // (.615) against a rebuilding 64-92 Giants team (.410) AVERAGES to
+  // .5125 - a neutral ~5 skill, indistinguishable from two genuinely
+  // mediocre .500ish teams, which would defeat the entire point of wiring
+  // skill into watchability. The better team's own win% doesn't have this
+  // blind spot: a lopsided pairing that includes one genuinely elite team
+  // scores meaningfully higher skill than an equally lopsided pairing
+  // between two teams that are merely mediocre-vs-bad.
+  test('an elite team dragged down by a bad opponent still scores high skill - averaging would hide this', () => {
+    const eliteVsBad = computeMlbObjectiveScore({ awayWinPct: 0.615, homeWinPct: 0.41, away: null, home: null, isPostseason: false });
+    const mediocreVsBad = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.41, away: null, home: null, isPostseason: false });
+    assert.ok(eliteVsBad.skill > mediocreVsBad.skill);
   });
 
   test('skill is null, not a guessed default, when no win% is available', () => {
@@ -256,6 +270,58 @@ describe('computeMlbObjectiveScore', () => {
     const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: false });
     const rivalry = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: true });
     assert.ok(rivalry.watchability > plain.watchability);
+  });
+
+  test('an elite-vs-bad blowout scores higher watchability than an equally lopsided also-ran-vs-bad blowout, thanks to skill - without skill ever winning outright over a genuinely competitive game', () => {
+    const eliteBlowout = computeMlbObjectiveScore({
+      awayWinPct: 0.615,
+      homeWinPct: 0.41,
+      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 6, losses: 4 }, streakCode: 'W2' },
+      home: { gamesBack: 32, wildCardGamesBack: 30, lastTen: { wins: 4, losses: 6 }, streakCode: 'L1' },
+      isPostseason: false,
+      isRivalry: false
+    });
+    const mediocreBlowout = computeMlbObjectiveScore({
+      awayWinPct: 0.35,
+      homeWinPct: 0.4,
+      away: { gamesBack: 25, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
+      home: { gamesBack: 28, wildCardGamesBack: 25, lastTen: { wins: 4, losses: 6 }, streakCode: null },
+      isPostseason: false,
+      isRivalry: false
+    });
+    // A real, live division race between two good (not necessarily elite)
+    // teams still beats a blowout, elite team or not - skill is one
+    // component among several, never enough on its own to outrank a
+    // genuinely live, close race.
+    const closeRace = computeMlbObjectiveScore({
+      awayWinPct: 0.56,
+      homeWinPct: 0.54,
+      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 0, lastTen: { wins: 6, losses: 4 }, streakCode: 'W1' },
+      home: { gamesBack: 1, wildCardGamesBack: 0, lastTen: { wins: 7, losses: 3 }, streakCode: 'W2' },
+      isPostseason: false,
+      isRivalry: false
+    });
+    assert.ok(eliteBlowout.watchability > mediocreBlowout.watchability);
+    assert.ok(closeRace.watchability > eliteBlowout.watchability);
+  });
+
+  test('a soft excess penalty, not a hard wall: a large excess over competitiveness is damped, never fully discarded, and never fully unbounded either', () => {
+    // Deliberately extreme: maxed-out stakes, skill and momentum against a
+    // rock-bottom competitiveness, to probe the damping path specifically.
+    const extreme = computeMlbObjectiveScore({
+      awayWinPct: 0.75,
+      homeWinPct: 0.25,
+      away: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' },
+      home: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' },
+      isPostseason: true,
+      isRivalry: false
+    });
+    // Damped, so it rises well above competitiveness alone...
+    assert.ok(extreme.watchability > extreme.competitiveness);
+    // ...but a soft penalty still means real, ongoing suppression relative
+    // to the raw blended value - it never reaches the maximum just because
+    // every other signal happened to max out.
+    assert.ok(extreme.watchability < 10);
   });
 
 
