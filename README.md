@@ -700,14 +700,23 @@ fast as the automatic ones.
 It also checks whether a NEW VERSION of the page itself has been deployed
 since this tab loaded, not just whether the match data changed. This site
 has no service worker (`manifest.webmanifest` only makes it installable,
-it doesn't add an offline cache or an update lifecycle) - instead,
-`app.js`'s own real ETag/Last-Modified header (GitHub Pages' CDN gives
-every file a reliable one, confirmed live) is snapshotted once at load and
-compared against a fresh, `cache: 'no-store'` check every time this button
-is pressed. A genuine change reveals a second "發現新版本，點此重新載入"
-button that does a real `location.reload()` - the only way to actually
-replace a page's own running JavaScript, which re-fetching match data
-alone can never do.
+it doesn't add an offline cache or an update lifecycle) - instead, every
+time this button is pressed, a fresh `cache: 'no-store'` fetch of `app.js`
+reads back the `APP_BUILD_ID` (the commit sha `deploy.yml`'s own sed step
+stamps into it on every deploy - see that constant's own comment) embedded
+in the live file's own source, and compares it directly against this tab's
+own `APP_BUILD_ID`. An earlier version compared `app.js`'s own ETag/
+Last-Modified response header instead, snapshotted once at load - live-
+reported as never actually hiding the reload button even on the newest
+version, since GitHub Pages' CDN can hand back a different ETag for
+byte-identical content across separate requests (different edge node/
+compression variant), which reads as "changed" when nothing really did.
+Comparing the build id embedded in the file's own content instead of a CDN
+header has no such false positive - two copies of the same deploy are
+byte-identical. A genuine difference reveals a second "發現新版本，點此重
+新載入" button that does a real `location.reload()` - the only way to
+actually replace a page's own running JavaScript, which re-fetching match
+data alone can never do.
 
 ### Efficiency: caching and instant paint
 

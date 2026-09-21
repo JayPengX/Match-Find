@@ -3061,3 +3061,49 @@ long-standing design - see its own top comment: pure-helper tests only,
 never a live/mocked full build). Verified live: `sports-proxy-worker.js`
 still parses and responds correctly after the restructuring. Committed and
 pushed to both branches of Match-Find and both branches of Shared-Proxy.
+
+Two direct follow-up reports on this same round's own new features, both
+fixed the same day:
+
+**Loading spinner never actually hid.** `.loading-state` set `display:
+flex` unconditionally in `styles.css`. That selector has the exact same
+specificity as the browser's own built-in `[hidden] { display: none }`
+rule - but an author stylesheet's normal-weight rules always beat the
+user-agent stylesheet's, tie or not, regardless of source order. So
+`loadingStateEl.hidden = true` in `applyFreshBuild` was setting the
+attribute correctly the whole time; it just had no visual effect, and the
+spinner stayed flexed on screen forever even once real content had loaded
+underneath it. Fixed by scoping the rule to `.loading-state:not([hidden])`
+so the `hidden` attribute's own `display: none` wins once it's actually
+set.
+
+**"發現新版本，點此重新載入" never hid either, even already on the newest
+version.** Root cause was the version-check mechanism itself, not a
+display bug this time: comparing `app.js`'s own ETag/Last-Modified
+response header (snapshotted once at load, re-checked on every manual
+refresh) assumed GitHub Pages' CDN hands back a STABLE etag for the exact
+same file content across separate requests. The live curl check that
+originally called this "confirmed... reliable" only ever compared two
+requests made seconds apart from the same sandboxed environment - almost
+certainly hitting the same warm Fastly edge-cache entry both times, not
+proving real stability across genuinely different requests/edge nodes/
+compression-negotiation outcomes a real viewer's browser would actually
+hit over time. Once that assumption was wrong even occasionally, the
+button would show, and then never clear, since every SUBSEQUENT check
+also compared against the same now-permanently-"stale" original baseline.
+Replaced the whole mechanism with something that has no such external
+dependency: `fetchLiveAppBuildId` fetches the live `app.js`'s own source
+text and reads `APP_BUILD_ID` (see Round 27's own comment on that
+constant - the exact commit sha `deploy.yml`'s sed step stamps in on every
+deploy) straight back out via a regex, then compares it directly against
+this tab's own already-known `APP_BUILD_ID` constant - no snapshot-at-load
+step needed at all anymore, since a tab always already knows its own
+value. Two copies of app.js from the same deploy are byte-identical by
+construction, so this comparison structurally cannot produce the false
+positive the ETag approach could. Verified the regex against both a real
+commit-sha string and the literal `'__BUILD_ID__'` dev placeholder (self
+vs. self, correctly reporting no difference in the local/dev case too).
+
+Full suite still 350/350 (both fixes are markup/version-check plumbing,
+no scoring logic touched). Committed and pushed to both branches of
+Match-Find.

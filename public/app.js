@@ -2512,46 +2512,54 @@ async function refreshNearTerm() {
 // a tab open for days could sit on stale logic indefinitely with no signal
 // anything had changed.
 //
-// The fix doesn't need a real service-worker install/activate lifecycle to
-// answer that question - GitHub Pages' own CDN already hands back a real,
-// reliable ETag/Last-Modified per file (confirmed live), which changes the
-// moment that file's own content is redeployed. Snapshotting app.js's own
-// ETag once at load, then comparing it against a fresh, `cache: 'no-store'`
-// HEAD request every time "立即重新整理" runs, is enough to answer "is a
-// newer version of THIS PAGE now live" - the same question a service
-// worker's own update event exists to answer, just asked directly instead
-// of through that whole extra lifecycle.
+// An earlier version of this compared app.js's own ETag/Last-Modified
+// response header, snapshotted once at load - live-reported as "發現新
+// 版本，點此重新載入 never hide despite already in the newest version",
+// i.e. the comparison kept saying "different" when it genuinely wasn't.
+// The live curl check that called GitHub Pages' ETag "stable" only ever
+// compared two requests made seconds apart, which likely hit the same warm
+// CDN edge-cache entry rather than proving real cross-request stability -
+// Fastly (GitHub Pages' own CDN) can hand back a different ETag for
+// byte-identical content depending on which edge node/compression variant
+// actually answered a given request, which is exactly a false "new
+// version" waiting to happen on every single check.
+//
+// Fixed by comparing something with an actually deterministic ground truth
+// instead of a CDN header: APP_BUILD_ID (see its own comment above - the
+// exact commit sha `deploy.yml`'s own sed step stamps into app.js on every
+// real deploy). This tab already knows its OWN build id trivially (it's a
+// plain constant in this very file) - no "snapshot a baseline at load"
+// step is even needed anymore, just fetch the live app.js's own source and
+// read the id it contains back out with a regex, then compare it directly.
+// Two copies of app.js from the same deploy are byte-identical (same sha
+// embedded either way), so this can never produce the false positive the
+// ETag approach could.
 const APP_VERSION_CHECK_PATH = './app.js';
-let appVersionEtag = null; // captured once at load - see captureAppVersionBaseline
+const APP_BUILD_ID_PATTERN = /const APP_BUILD_ID = '([^']*)'/;
 
-async function fetchAppVersionMarker() {
+async function fetchLiveAppBuildId() {
   try {
-    const response = await fetch(APP_VERSION_CHECK_PATH, { method: 'HEAD', cache: 'no-store' });
+    const response = await fetch(APP_VERSION_CHECK_PATH, { cache: 'no-store' });
     if (!response.ok) return null;
-    return response.headers.get('etag') || response.headers.get('last-modified') || null;
+    const text = await response.text();
+    return text.match(APP_BUILD_ID_PATTERN)?.[1] || null;
   } catch {
-    // Offline, or a local dev server that doesn't send either header -
-    // there's simply nothing to compare against yet, not a real failure.
+    // Offline, or a local dev server serving something unexpected - there's
+    // simply nothing to compare against yet, not a real failure.
     return null;
   }
 }
 
-// Called once, early in init() - fire-and-forget (never awaited/blocking
-// the real startup path), since this only matters much later, whenever the
-// viewer eventually taps "立即重新整理".
-async function captureAppVersionBaseline() {
-  appVersionEtag = await fetchAppVersionMarker();
-}
-
-// Returns true only when a baseline was actually captured AND the current
-// live marker genuinely differs from it - never true just because a marker
-// couldn't be read this time (a transient network hiccup on THIS check
-// isn't "a new version exists", and reloading on that basis would just
-// interrupt the viewer for nothing).
+// True only when the live app.js's own build id could actually be read AND
+// it genuinely differs from this tab's own - never true just because this
+// ONE check happened to fail (a transient network hiccup isn't "a new
+// version exists", and reloading on that basis would just interrupt the
+// viewer for nothing). Locally/in a dev checkout, both sides are still the
+// literal '__BUILD_ID__' placeholder (see APP_BUILD_ID's own comment), so
+// this correctly never fires there either.
 async function checkForNewAppVersion() {
-  if (!appVersionEtag) return false;
-  const current = await fetchAppVersionMarker();
-  return !!current && current !== appVersionEtag;
+  const liveBuildId = await fetchLiveAppBuildId();
+  return !!liveBuildId && liveBuildId !== APP_BUILD_ID;
 }
 
 // `silent` keeps the background timer from fighting with a viewer who just
@@ -2949,9 +2957,6 @@ setInterval(renderNextUpdateCountdown, 1000);
 
 async function init() {
   state.proxyUrl = PROXY_URL;
-  // Fire-and-forget - see this section's own top comment. Only matters
-  // once, much later, whenever this viewer eventually taps "立即重新整理".
-  captureAppVersionBaseline();
   // Paint immediately from last visit's own cached build, if one exists and
   // isn't too old (see "Instant-paint snapshot" above) - purely a perceived-
   // latency fix, the real refresh right below still always runs and quietly
