@@ -3145,3 +3145,33 @@ Pages' CDN which (per the above) is already serving the correct content.
 
 Full suite still 350/350 (reload-button plumbing only, no scoring/build
 logic touched). Committed and pushed to both branches of Match-Find.
+
+**Direct follow-up report, same day, confirmed even in a fresh incognito
+window: "Still showing it."** Both prior fixes were real and both were
+already confirmed live (curl-verified: correct `APP_BUILD_ID`, correct
+click handler) - and neither one had ever had any actual influence on
+whether the button was visible. The real bug was the THIRD instance of
+this file's own recurring CSS cascade gap (see `.loading-state`/
+`.match-odds`/`.match-watch`'s own comments earlier in this file for the
+first two): `#reload-app-btn` carries `class="settings-action-btn"`, and
+`.settings-action-btn { display: block; }` is an ordinary AUTHOR
+stylesheet rule. An author-stylesheet rule beats the browser's own
+built-in `[hidden] { display: none }` User-Agent-stylesheet rule
+unconditionally - origin/importance is compared before specificity ever
+enters the picture, so this isn't even a tie to break, `.settings-action-
+btn` simply always wins. That means this button had been rendering
+`display: block` from the very first page load, completely independent
+of the `hidden` attribute and everything app.js ever did with it -
+`checkForNewAppVersion` could have been perfectly correct from the very
+first version of this feature and it would have made zero visible
+difference, since CSS alone was already showing the button unconditionally
+on every page load, "newest version" or not. Fixed by adding
+`#reload-app-btn[hidden] { display: none; }`, the exact same shape as the
+two earlier fixes for this identical cascade gap. This is also the
+likely reason this bug read as present from the very first report rather
+than something that started working and then regressed: it may never
+have correctly hidden even once, on any deploy, since this feature was
+first added.
+
+Full suite still 350/350 (styles.css only, no logic touched). Committed
+and pushed to both branches of Match-Find.
