@@ -244,17 +244,21 @@ export const NBA_SPREAD_LOPSIDED_AT = 15;
 // MLB's own rivalry bonus only gets FULL credit once tonight's specific
 // pairing is at least this close (see marqueeCreditFraction below for how
 // anything below this point is now handled). MLB-only (not NBA/EPL's
-// rivalry/derby/big-club/national-broadcast bonuses below) - MLB is the
-// one sport this build has real, standings-based signals for late in a
-// 162-game season, where a wide win% gap really does mean a decided
-// mismatch, not sampling noise. NBA/EPL have no standings API integration
-// yet (see this repo's README, "Known limitations") - an early-season
-// win% gap there can still be a small, noisy sample a genuinely elite
-// club will grow out of, which is exactly the real case (Liverpool @ AFC
+// rivalry/derby/big-club/national-broadcast bonuses below) - not because
+// NBA/EPL lack standings depth (NBA's own standings integration below now
+// matches MLB's - seed-cutoff gaps, last-10 record, streak - and EPL's
+// gives it a real table-position stakes signal too, see
+// computeEplObjectiveScore), but a deliberate choice to keep protecting
+// their name-based bonuses from early-season sampling noise a full-season
+// MLB-style gate would wrongly silence. A win% gap this early in an
+// NBA/EPL season can still be a small, noisy sample a genuinely elite
+// club will grow out of - exactly the real case (Liverpool @ AFC
 // Bournemouth, an early-season noisy 0.2/0.6 split) Round 17's own
-// big-club bonus was written to survive - gating those the same way
-// MLB's is would silence a big-club/derby bonus for precisely the
-// early-season games it exists to correct for.
+// big-club bonus was written to survive. Gating NBA/EPL the same way
+// MLB's rivalry bonus is would silence a big-club/derby/rivalry/national-
+// broadcast bonus for precisely the early-season games it exists to
+// correct for - unrelated to how much standings data either sport's own
+// integration now has.
 export const MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS = 6;
 
 // Round 31 (2026-09-26 TW time): this used to be a hard yes/no gate - a
