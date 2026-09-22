@@ -1078,6 +1078,12 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
       m =>
         m.id !== choice.id &&
         !m.recommended &&
+        // A finished game is never a real alternative to one that isn't -
+        // there's nothing left to switch to. Offering it let a swipe pin a
+        // game that was already over, which (rendered as a plain,
+        // unswipeable 已結束 card) blocked every live game it overlapped
+        // out of the plan with no way to swipe back.
+        (choice.isFinished || !m.isFinished) &&
         isNearTotalOverlap(m, choice) &&
         pickedScore - getScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );

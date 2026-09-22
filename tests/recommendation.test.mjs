@@ -444,6 +444,15 @@ describe('computeDayPlan', () => {
     assert.deepEqual(a.alternativeIds, ['b']);
   });
 
+  test('a finished fixture is never offered as a swipe alternative to an unfinished pick', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 7 });
+    const done = makeMatch({ id: 'done', startTimeUtc: '2026-09-19T19:55:00.000Z', durationMinutes: 60, effectiveScore: 8, isFinished: true });
+    computeDayPlan('2026-09-19', [a, b, done]);
+    assert.equal(a.recommended, true);
+    assert.deepEqual(a.alternativeIds, ['b']);
+  });
+
   test('a pinned choice overrides the highest-scoring member of its slot', () => {
     const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 7 });

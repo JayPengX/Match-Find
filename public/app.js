@@ -332,7 +332,7 @@ const state = {
   // sitting untouched in localStorage the whole time (savePinnedChoices
   // still worked fine mid-session), just never read back on the load path.
   pinnedChoices: new Map(),
-  // Map<dayKey, Map<slotKey, Set<matchId>>> - which members a swipeable
+  // Map<dayKey, Map<slotKey, Array<Set<matchId>>>> - which members a swipeable
   // card stack actually shows, frozen the first time each day+slot renders
   // - see renderRecommendedSection's own comment for why this exists:
   // computeDayPlan's alternativeIds is recomputed per CHOICE, and a big
@@ -744,10 +744,37 @@ state.pinnedChoices = loadPinnedChoices();
 // sport toggle) - state.days moves forward with the fetched window, and a
 // pin for a day that's fallen off the back of it, or simply passed, can
 // never be looked up by computeDayPlan again either way.
+// One-time cleanup (per browser) of pins left on an already-finished game by
+// the old swipe stack, which offered finished games as swipe targets. Such a
+// pin rendered as a plain, unswipeable 已結束 card and blocked every live
+// game it overlapped out of the plan until the day rolled over, with no way
+// to undo it from the UI. New pins can't land on a finished game anymore
+// (see computeDayPlan's alternatives filter), so this only needs to run once.
+const FINISHED_PIN_CLEANUP_STORAGE_KEY = 'matchfind-finished-pin-cleanup-v1';
+function dropPinsOnFinishedMatchesOnce() {
+  try {
+    if (localStorage.getItem(FINISHED_PIN_CLEANUP_STORAGE_KEY) || !state.allRawMatches.length) return false;
+    localStorage.setItem(FINISHED_PIN_CLEANUP_STORAGE_KEY, '1');
+  } catch {
+    return false;
+  }
+  const finishedIds = new Set(state.allRawMatches.filter(m => m.isFinished).map(m => m.id));
+  let changed = false;
+  const next = new Map();
+  state.pinnedChoices.forEach((daySet, dayKey) => {
+    const kept = new Set([...daySet].filter(id => !finishedIds.has(id)));
+    if (kept.size !== daySet.size) changed = true;
+    if (kept.size) next.set(dayKey, kept);
+  });
+  if (changed) state.pinnedChoices = next;
+  return changed;
+}
+
 function prunePinnedChoices() {
   const { pinnedChoices, changed } = pruneStalePinnedChoices(state.pinnedChoices, localDateKey(new Date()));
   state.pinnedChoices = pinnedChoices;
-  if (changed) savePinnedChoices();
+  const droppedFinished = dropPinsOnFinishedMatchesOnce();
+  if (changed || droppedFinished) savePinnedChoices();
 }
 
 function recomputeAndRender() {
@@ -2687,25 +2714,15 @@ function renderRecommendedSection() {
     dayMembership = new Map();
     state.stackMembershipByDay.set(dayKey, dayMembership);
   }
-  // How many recommended picks sharing this render's `slotKey` we've
-  // already turned into a stack, so two separate stacks from the SAME
-  // transitive cluster (see computeDayPlan's own comment on `slotKey`: "a
-  // cluster of 3+ near-total-overlapping matches where the scheduler
-  // independently recommends more than one of them... renders as TWO
-  // separate swipeable stacks... both part of the same underlying conflict
-  // cluster") get their OWN frozen membership entry below instead of
-  // colliding on one shared `dayMembership` key. Live-verified 9/23 case:
-  // a single 15-match MLB cluster (every game between 06:35-10:10 chained
-  // together by transitive near-overlap) produced two independent picks,
-  // 06:35 Blue Jays/Orioles and 09:40 Angels/Athletics - both carry the
-  // exact same `slotKey` (the whole cluster). Without this counter, the
-  // second stack's `dayMembership.get(slotKey)` found the FIRST stack's
-  // already-frozen members (Brewers/Phillies, Cardinals/Pirates, etc. -
-  // none of which overlap the 09:40 game at all) and showed those as its
-  // own "alternatives", exactly the "bunch of nonexistent cards" reported:
-  // swiping the second stack flipped between games with zero real time
-  // conflict with what was actually in that slot.
-  const stackOccurrenceBySlotKey = new Map();
+  // Each slotKey maps to a LIST of frozen member sets, not one, so two
+  // separate stacks from the SAME transitive cluster (see computeDayPlan's
+  // own comment on `slotKey`: a 3+-member cluster can produce two
+  // independent picks, each its own stack) never share one frozen list.
+  // Live-verified 9/23 case: one 15-match MLB cluster produced two picks,
+  // 06:35 Blue Jays/Orioles and 09:40 Angels/Athletics, both carrying the
+  // same `slotKey`; with a single shared entry the second stack showed the
+  // first stack's members - games with no real time conflict with it.
+  const claimedFreezeSets = new Set();
   // Existing plain cards from this SAME container's previous render, up for
   // reuse below (see getOrBuildMatchCard's own comment) - captured once,
   // up front, before this render starts moving any of them into `fragment`.
@@ -2732,16 +2749,20 @@ function renderRecommendedSection() {
     if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = match.slotKey || slotKeyFromMembers(members);
-      // Composite key: which OCCURRENCE of this shared cluster slotKey this
-      // is within THIS render's chronological pass, not the bare slotKey -
-      // see the comment on stackOccurrenceBySlotKey above for why a bare
-      // slotKey collides across a cluster's separate stacks.
-      const occurrence = stackOccurrenceBySlotKey.get(slotKey) || 0;
-      stackOccurrenceBySlotKey.set(slotKey, occurrence + 1);
-      const freezeKey = `${slotKey}::${occurrence}`;
-      const knownIds = dayMembership.get(freezeKey);
+      // Which of this slotKey's frozen sets belongs to THIS stack - matched
+      // by CONTENT (the frozen set that already contains this
+      // stack's primary), not by render position: pinCurrentOrNext and a
+      // pin can both reorder the plan, and a position-based key then handed
+      // one stack's frozen members to a different stack - live-reported as
+      // "all live cards disappear, leaving me swiping not-started matches"
+      // (a not-started stack inheriting the live stack's frozen list).
+      // `claimedFreezeSets` keeps two stacks in one render from sharing a set.
+      const freezeSets = dayMembership.get(slotKey) || [];
+      const knownIds = freezeSets.find(set => set.has(match.id) && !claimedFreezeSets.has(set));
       if (knownIds) {
-        // Never `.recommended` (besides `match` itself) - a frozen member
+        claimedFreezeSets.add(knownIds);
+        // Never finished (see computeDayPlan's own alternatives filter), and
+        // never `.recommended` (besides `match` itself) - a frozen member
         // that ended up independently recommended elsewhere this render
         // has to stay excluded here too, same invariant computeDayPlan's
         // own alternativeIds already enforces (docs/
@@ -2749,12 +2770,14 @@ function renderRecommendedSection() {
         // recommended and someone else's alternative).
         const stable = [...knownIds]
           .map(id => byId.get(id))
-          .filter(m => m && (m.id === match.id || !m.recommended));
-        if (!knownIds.has(match.id)) stable.push(match);
+          .filter(m => m && (m.id === match.id || (!m.recommended && !m.isFinished)));
         members = stable;
         alternatives = members.filter(m => m.id !== match.id);
       } else {
-        dayMembership.set(freezeKey, new Set(members.map(m => m.id)));
+        const created = new Set(members.map(m => m.id));
+        freezeSets.push(created);
+        dayMembership.set(slotKey, freezeSets);
+        claimedFreezeSets.add(created);
       }
       if (!alternatives.length) {
         const card = getOrBuildMatchCard(match, existingCardsById);
