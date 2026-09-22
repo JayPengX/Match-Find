@@ -1418,11 +1418,7 @@ function rotationMatchesByDayKey() {
   const matchesByDayKey = new Map();
   state.days.forEach(day => {
     const copies = applySportFilter(matchesForDay(day.key)).map(m => ({ ...m }));
-    copies.forEach(m => {
-      m.liveExcitementBonus = 0;
-      m.liveStickyBonus = 0;
-      m.planningScore = Number.isFinite(m.effectiveScore) ? m.effectiveScore : 0;
-    });
+    applyLiveExcitementBonus(copies, null, { live: false });
     matchesByDayKey.set(day.key, copies);
   });
   return matchesByDayKey;

@@ -1427,15 +1427,35 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
       // Which SPECIFIC day keeps the incumbent isn't fixed (both are
       // equally valid solutions to this symmetric case - see the
       // incumbent-tie-break comment in recommendation.mjs) - what matters
-      // is that exactly one of the two days is untouched (the incumbent's
-      // own turn) and the other forces the rival in, never both touched or
-      // neither.
-      const day1Forced = rotation.get('2026-09-23');
-      const day2Forced = rotation.get('2026-09-24');
-      assert.equal(!day1Forced !== !day2Forced, true); // exactly one of the two days has a forced entry
-      const forcedDay = day1Forced || day2Forced;
-      assert.equal(forcedDay.size, 1);
-      assert.ok([...forcedDay][0].startsWith('rival-'));
+      // is that both days are held (so the render can't drift back to a
+      // repeat) and they hold different matchups: one incumbent, one rival.
+      const forced = ['2026-09-23', '2026-09-24'].map(dayKey => rotation.get(dayKey));
+      forced.forEach(set => assert.equal(set?.size, 1));
+      const kinds = forced.map(set => [...set][0].split('-')[0]).sort();
+      assert.deepEqual(kinds, ['inc', 'rival']);
+    });
+
+    test('an exact tie broken differently at render time still never repeats a matchup on consecutive days', () => {
+      // The live 9/26-9/27 case: the incumbent led by ~1e-15 when the
+      // rotation planned, but a render that sees an exact tie can break it
+      // the other way - an unforced incumbent day then went to the rival
+      // that was already forced in the day before.
+      const days = new Map();
+      for (const dayKey of ['2026-09-26', '2026-09-27']) {
+        const incumbent = makeMatch({ id: `rays-${dayKey}`, planningScore: 6.85, competitors: teams('Tampa Bay Rays', 'Philadelphia Phillies') });
+        const rival = makeMatch({ id: `orioles-${dayKey}`, planningScore: 6.849999999999999, competitors: teams('Baltimore Orioles', 'New York Yankees') });
+        days.set(dayKey, day([incumbent, rival]));
+      }
+      const rotation = computeVarietyRotation(days);
+      const winners = [...days.keys()].map(dayKey => {
+        // Render-time scores: the same two fixtures, now exactly tied - the
+        // scheduler resolves an exact tie toward the rival here, so an
+        // unforced incumbent day would go to the rival.
+        const rendered = days.get(dayKey).map(m => ({ ...m, planningScore: 6.85 }));
+        computeDayPlan(dayKey, rendered, mergeVarietyForcedIds(null, rotation.get(dayKey)), { scoreField: 'planningScore' });
+        return rendered.find(m => m.recommended).id.split('-')[0];
+      });
+      assert.equal(new Set(winners).size, 2);
     });
 
     test('end-to-end: a 3-day run with 3 real close contenders gives each of them exactly one win, all correctly labeled 推薦', () => {

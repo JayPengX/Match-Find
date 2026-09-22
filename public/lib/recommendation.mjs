@@ -1184,13 +1184,21 @@ export function computeSportConcentration(picks) {
 // state.liveStickyIds). Each still-live one gets LIVE_PICK_STICKY_BONUS on
 // top, so a close game elsewhere can bump what's COMING UP next, but can't
 // pull the game a viewer is already watching out of its slot mid-game.
-export function applyLiveExcitementBonus(dayMatches, stickyIds = null) {
+//
+// `{ live: false }` sets planningScore from the pre-game score alone (no
+// live bonus, no stickiness) through this SAME rounding path - what
+// app.js's variety rotation plans from. It must be this exact path, not a
+// raw effectiveScore: two fixtures can tie after rounding while differing
+// by ~1e-15 before it (6.85 vs 6.8499999...), and a rotation that saw the
+// unrounded winner while the render saw a tie broke the other way let the
+// same matchup be recommended two days running.
+export function applyLiveExcitementBonus(dayMatches, stickyIds = null, { live = true } = {}) {
   dayMatches.forEach(match => {
     // Recomputed fresh every call (never accumulated) from match's own
     // CURRENT competitor scores - see liveExcitementBonus's own comment.
-    const liveBonus = liveExcitementBonus(match);
+    const liveBonus = live ? liveExcitementBonus(match) : 0;
     match.liveExcitementBonus = liveBonus;
-    match.liveStickyBonus = stickyIds && stickyIds.has(match.id) && isUnderway(match) ? LIVE_PICK_STICKY_BONUS : 0;
+    match.liveStickyBonus = live && stickyIds && stickyIds.has(match.id) && isUnderway(match) ? LIVE_PICK_STICKY_BONUS : 0;
     match.planningScore =
       Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) + liveBonus + match.liveStickyBonus) * 1e6) / 1e6;
   });
@@ -1437,12 +1445,26 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     // SCARCER alternative (fewer eligible days) outrank it, and still
     // spreads the OTHER two days out normally - it just stops a same-tier
     // three-way tie from being able to zero the incumbent out entirely.
+    // Best pre-game score each member reaches on any of its eligible days -
+    // the tie-break among equally-scarce contenders before the alphabet, so
+    // when there are more contenders than days, the one left out is the
+    // weakest, not whichever name sorts last (live-observed: Rays @
+    // Phillies, tied for the day's TOP score, lost its only day to Cubs @
+    // Red Sox, 0.1 lower, on "Chicago" < "Tampa Bay" alone).
+    const bestScoreByMember = new Map();
+    closeMatchByDay.forEach(map =>
+      map.forEach((m, key) => {
+        const score = Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore;
+        if (!(bestScoreByMember.get(key) >= score)) bestScoreByMember.set(key, score);
+      })
+    );
+    const byScoreThenName = (a, b) => (bestScoreByMember.get(b) ?? 0) - (bestScoreByMember.get(a) ?? 0) || a.localeCompare(b);
     const membersByScarcity = [...poolKeys].sort((a, b) => {
       const scarcityDiff = eligibleDaysByMember.get(a).size - eligibleDaysByMember.get(b).size;
       if (scarcityDiff !== 0) return scarcityDiff;
       if (a === run.matchupKey) return -1;
       if (b === run.matchupKey) return 1;
-      return a.localeCompare(b);
+      return byScoreThenName(a, b);
     });
     const dayAssignedTo = new Map(); // dayKey -> matchupKey (the maximum-matching result so far)
     function tryAssign(member, visitedDays) {
@@ -1478,15 +1500,23 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     run.entries.forEach(({ dayKey }) => {
       if (dayAssignedTo.has(dayKey)) return;
       const eligible = [...closeMatchByDay.get(dayKey).keys()];
-      eligible.sort((a, b) => winCount.get(a) - winCount.get(b) || a.localeCompare(b));
+      eligible.sort((a, b) => winCount.get(a) - winCount.get(b) || byScoreThenName(a, b));
       const chosen = eligible[0];
       dayAssignedTo.set(dayKey, chosen);
       winCount.set(chosen, winCount.get(chosen) + 1);
     });
 
+    // Every day of a rotated run is forced - INCLUDING the days the
+    // incumbent keeps. Leaving those "to happen naturally" assumed the
+    // render would land on the same natural winner this pass saw, but any
+    // difference between the two (an exact tie broken the other way, a
+    // live bonus on today's render only) silently handed the incumbent's
+    // day to the alternative that was ALREADY forced in on another day -
+    // the same matchup recommended two days running, exactly what this
+    // exists to prevent (live-reported: Orioles @ Yankees on both 9/26 and
+    // 9/27). Forcing the whole assignment makes the render follow it.
     run.entries.forEach(({ dayKey }) => {
       const assignedKey = dayAssignedTo.get(dayKey);
-      if (assignedKey === run.matchupKey) return; // today's natural winner IS today's assigned turn
       addForced(dayKey, closeMatchByDay.get(dayKey).get(assignedKey).id);
     });
   });
