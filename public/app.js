@@ -3409,46 +3409,46 @@ async function init() {
       console.error('failed to paint cached snapshot', error);
     }
   }
-  // Near-term only (today/tomorrow, a handful of requests) awaited here,
-  // for a genuinely fast first paint of whatever the viewer is actually
-  // looking at (pickInitialDay - called with REAL data via
-  // applyEnabledSportsAndRender's own "no valid selection yet" branch,
-  // since state.selectedDayKey starts out genuinely null now - correctly
-  // jumps to tomorrow if today's own fixtures are all already finished,
-  // exactly as it used to before an earlier version of this pre-seeded
-  // selectedDayKey to today with no real data behind it yet, live-reported
-  // as "it's not loading tomorrow when all today's match is finish which
-  // used to act that way") - the full window follows right behind it,
-  // unblocked, same as before. An earlier version of this awaited the
-  // WHOLE window here instead, to stop the day-scroller's pill count from
-  // visibly growing after first paint (live-reported: "it only load the
-  // surrounding few days then after showing the UI a few seconds it
-  // finish building everything, building should be all finished by
-  // loading") - but that meant first paint waited on 50+ concurrent
-  // requests (3 leagues x 17 dates, see fetchTeamLeagueMatches) instead of
-  // near-term's own ~15-18, trading a fast, reliable paint for a slow and
-  // sometimes-failing one (live-reported next: "sometimes it failed to
-  // load also the load time is significantly longer" - exactly the
-  // stampede PROXY_FETCH_MAX_CONCURRENCY's own comment documents).
-  // isDayPending/.day-pill--pending (still in place) is what keeps the
-  // ORIGINAL jump fixed without that tradeoff: once this near-term fetch
-  // lands, every far-future day's pill already exists too, just dimmed,
-  // so later refreshFullWindow filling in real data only ever flips an
-  // EXISTING pill from pending to real, never adds or removes one.
+  // The WHOLE window awaited here, not just near-term - variety rotation
+  // (computeVarietyRotation, via getVarietyRotation) decides which match
+  // wins a slot by looking for repeat matchups across MULTIPLE consecutive
+  // days, and an empty/not-yet-fetched day reads to it as a hard gap that
+  // closes any run early (see that function's own comment) - so a
+  // recommendation computed from only near-term's 2 days is a genuinely
+  // DIFFERENT, incomplete answer, not just a preview of the same one.
+  // Awaiting only near-term here (an earlier version of this) meant
+  // today's recommended pick could visibly change the moment the full
+  // window landed moments later and rotation recomputed with the real,
+  // complete picture - live-reported directly: "it flick and change
+  // recommendation afterward, it should show content after it finish
+  // calculating all the logic" - the viewer's own diagnosis (needs the
+  // full schedule to decide) was exactly right. Awaiting the full window
+  // here means the very FIRST recommendation ever shown is already the
+  // stable, fully-informed one - nothing left to silently correct later.
+  // This is safe to do now specifically because of
+  // PROXY_FETCH_MAX_CONCURRENCY - the same 50+-request full window that
+  // once made first paint slow/unreliable (live-reported as "sometimes it
+  // failed to load also the load time is significantly longer") no longer
+  // stampedes the connection pool once capped to 6 in flight at a time.
+  // refreshNearTerm still exists exactly as before, just no longer
+  // called from here - it's still what scheduleNearTermRefresh below uses
+  // for the PERIODIC 60s freshness tier once the page is already up (by
+  // then state.allRawMatches already holds the full window regardless, so
+  // a routine near-term-only refresh from here on can never recreate this
+  // same incomplete-rotation flicker).
   try {
-    await refreshNearTerm();
+    await refreshFullWindow({ silent: true });
   } catch (error) {
     console.error(error);
   }
   if (!state.allRawMatches.length && !state.tbdMatches.length) {
-    // Nothing loaded at all yet (the near-term fetch itself failed
-    // outright, e.g. the proxy is unreachable, and there was no usable
-    // snapshot either) - say so rather than leaving #loading-state up
-    // forever; applyFreshBuild (which would otherwise hide it) never ran
-    // in this branch, so it's still up - swap it for the explicit error
-    // message instead of leaving both up at once. refreshFullWindow below
-    // and the scheduled retries can still recover this once network/the
-    // proxy comes back.
+    // Nothing loaded at all yet (the fetch itself failed outright, e.g.
+    // the proxy is unreachable, and there was no usable snapshot either)
+    // - say so rather than leaving #loading-state up forever;
+    // applyFreshBuild (which would otherwise hide it) never ran in this
+    // branch, so it's still up - swap it for the explicit error message
+    // instead of leaving both up at once. The scheduled retries below can
+    // still recover this once network/the proxy comes back.
     if (loadingStateEl) loadingStateEl.hidden = true;
     errorState.hidden = false;
   }
@@ -3467,7 +3467,9 @@ async function init() {
     pollLiveMatches().catch(error => console.error('initial live poll failed', error));
   }
   scheduleLivePoll();
-  refreshFullWindow({ silent: true });
+  // refreshFullWindow already ran once, awaited, above - just arm its
+  // own periodic timer for ongoing freshness from here, not a second
+  // redundant call.
   scheduleFullRefresh();
 }
 
