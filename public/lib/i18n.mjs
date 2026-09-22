@@ -112,7 +112,7 @@ export const STRINGS = {
     conflictNote: '與「{name}」{clause}',
 
     // ---- Swipeable match stack ----
-    matchStackHint: '⟷ 這個時段只能擇一收看，點選切換要看哪一場',
+    matchStackHint: '⟷ 同時段只能擇一，點選切換',
     prevMatchAria: '上一場',
     nextMatchAria: '下一場',
     switchToAria: '切換到{name}',
@@ -207,7 +207,7 @@ export const STRINGS = {
     overlapHoursMinutes: '{hours}h {mins}m overlap',
     conflictNote: 'Overlaps with "{name}" — {clause}',
 
-    matchStackHint: '⟷ Only one match in this time slot can be watched — tap to switch',
+    matchStackHint: '⟷ Same time slot — tap to switch',
     prevMatchAria: 'Previous match',
     nextMatchAria: 'Next match',
     switchToAria: 'Switch to {name}',

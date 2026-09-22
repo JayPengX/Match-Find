@@ -475,6 +475,23 @@ describe('computeMlbObjectiveScore', () => {
     assert.ok(result.competitiveness >= 8);
   });
 
+  test('the standard ±1.5 run line is not a signal - posting it never moves the score', () => {
+    const base = {
+      awayWinPct: 0.6,
+      homeWinPct: 0.57,
+      away: { gamesBack: 0, wildCardGamesBack: null, lastTen: { wins: 8, losses: 2 }, streakCode: 'L1' },
+      home: { gamesBack: 2, wildCardGamesBack: null, lastTen: { wins: 6, losses: 4 }, streakCode: 'W1' },
+      isPostseason: false
+    };
+    const unposted = computeMlbObjectiveScore({ ...base, oddsSpread: null });
+    for (const oddsSpread of [-1.5, 1.5]) {
+      const posted = computeMlbObjectiveScore({ ...base, oddsSpread });
+      assert.equal(posted.competitiveness, unposted.competitiveness);
+      assert.equal(posted.watchability, unposted.watchability);
+      assert.ok(!posted.factors.some(f => f.startsWith('odds spread')));
+    }
+  });
+
   test('every score is always within [1, 10] and factors is always an array', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
     for (const key of ['competitiveness', 'watchability', 'enduranceScore']) {

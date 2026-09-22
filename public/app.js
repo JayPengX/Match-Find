@@ -68,6 +68,7 @@ import {
   groupIntoSlots,
   isQuietHours,
   isUnderway,
+  schedulingInterval,
   computeOverlapRange,
   isNearTotalOverlap,
   applyLiveExcitementBonus,
@@ -1394,15 +1395,37 @@ function invalidateVarietyRotation() {
 }
 function getVarietyRotation() {
   if (varietyRotationCache) return varietyRotationCache;
-  const matchesByDayKey = new Map();
-  // Every day in state.days, even one with zero candidates for the
-  // current sport filter - computeVarietyRotation's own comment explains
-  // why an empty day still has to be PRESENT (as an empty array) rather
-  // than simply missing, so a real gap day correctly breaks a run instead
-  // of silently stitching two separate repeats together across it.
-  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
-  varietyRotationCache = computeVarietyRotation(matchesByDayKey, state.pinnedChoices);
+  varietyRotationCache = computeVarietyRotation(rotationMatchesByDayKey(), state.pinnedChoices);
   return varietyRotationCache;
+}
+
+// Variety rotation is a cross-day plan made from PRE-GAME scores alone -
+// no live-excitement bonus and no live-pick stickiness. Feeding it
+// planningScore (as an earlier version did) let a sticky live pick's
+// bonus make it look like a runaway winner with no close alternatives,
+// which silently switched the rotation off for that day, and let a live
+// scoreline flip a close call mid-game. Runs on shallow COPIES, since both
+// this and computeVarietyRotation's own computeDayPlan calls write fields
+// (planningScore, recommended, ...) that the render's own real candidates
+// must keep.
+//
+// Every day in state.days, even one with zero candidates for the current
+// sport filter - computeVarietyRotation's own comment explains why an empty
+// day still has to be PRESENT (as an empty array) rather than simply
+// missing, so a real gap day correctly breaks a run instead of silently
+// stitching two separate repeats together across it.
+function rotationMatchesByDayKey() {
+  const matchesByDayKey = new Map();
+  state.days.forEach(day => {
+    const copies = applySportFilter(matchesForDay(day.key)).map(m => ({ ...m }));
+    copies.forEach(m => {
+      m.liveExcitementBonus = 0;
+      m.liveStickyBonus = 0;
+      m.planningScore = Number.isFinite(m.effectiveScore) ? m.effectiveScore : 0;
+    });
+    matchesByDayKey.set(day.key, copies);
+  });
+  return matchesByDayKey;
 }
 
 // The exact same day-candidate preparation renderRecommendedSection needs
@@ -1427,7 +1450,32 @@ function dayCandidatesForPlan(dayKey) {
 // state.pinnedChoices directly, so rotation and a genuine swipe-to-pin are
 // always resolved together, consistently.
 function pinnedForDayWithRotation(dayKey) {
-  return mergeVarietyForcedIds(state.pinnedChoices.get(dayKey), getVarietyRotation().get(dayKey));
+  return mergeVarietyForcedIds(state.pinnedChoices.get(dayKey), rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)));
+}
+
+// A rotation force is a hard pin, so without this it would still beat a
+// live pick the viewer is already watching (see state.liveStickyIds) if the
+// rotation's own assignment for today ever changed mid-game - e.g. a later
+// day's fixtures shifting how a multi-day run gets shared out. Drops any
+// rotation force whose scheduled time clashes with an underway sticky pick
+// that day; the live game keeps its slot and the rotation simply skips it.
+function rotationRespectingLivePicks(dayKey, forcedIds) {
+  if (!forcedIds || !forcedIds.size || !state.liveStickyIds.size) return forcedIds;
+  const dayMatches = matchesForDay(dayKey);
+  const locked = dayMatches.filter(m => state.liveStickyIds.has(m.id) && isUnderway(m));
+  if (!locked.length) return forcedIds;
+  const byId = new Map(dayMatches.map(m => [m.id, m]));
+  const clashes = (a, b) => {
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    return ai.start < bi.end && bi.start < ai.end;
+  };
+  return new Set(
+    [...forcedIds].filter(id => {
+      const forced = byId.get(id);
+      return !forced || !locked.some(live => live.id !== id && clashes(forced, live));
+    })
+  );
 }
 
 // The actual "I will watch this" commitment (see buildMatchStack) - records
@@ -1496,9 +1544,10 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
     if (nextDaySet.size) pinnedChoicesWithoutThisSlot.set(dayKey, nextDaySet);
     else pinnedChoicesWithoutThisSlot.delete(dayKey);
   }
-  const matchesByDayKey = new Map();
-  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
-  const rotationWithoutThisSlot = computeVarietyRotation(matchesByDayKey, pinnedChoicesWithoutThisSlot).get(dayKey);
+  const rotationWithoutThisSlot = rotationRespectingLivePicks(
+    dayKey,
+    computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot).get(dayKey)
+  );
   const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
     scoreField: 'planningScore'
@@ -2703,9 +2752,7 @@ function stickLivePicks(dayPlan) {
     state.liveStickyIds.add(match.id);
     changed = true;
   });
-  if (!changed) return;
-  saveLiveStickyIds();
-  invalidateVarietyRotation();
+  if (changed) saveLiveStickyIds();
 }
 
 function renderRecommendedSection() {
@@ -2736,7 +2783,7 @@ function renderRecommendedSection() {
   // bug that got Gemini's forced override removed). Put the correct 推薦
   // label back on anything ONLY rotation forced in, never touching an id
   // that's ALSO a real pin.
-  clearRotationIsPreferred(dayCandidates, getVarietyRotation().get(dayKey), state.pinnedChoices.get(dayKey));
+  clearRotationIsPreferred(dayCandidates, rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)), state.pinnedChoices.get(dayKey));
   stickLivePicks(dayPlan);
   const ordered = pinCurrentOrNext(dayPlan);
 
