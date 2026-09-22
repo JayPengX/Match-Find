@@ -17,7 +17,8 @@ import {
   FINISHED_DURATION_CAP_MINUTES_BY_SPORT,
   computeMatchObjectiveScore,
   describeFactorsZh,
-  buildObjectiveReasonZh
+  buildObjectiveReasonZh,
+  freezeStartedMatchScoring
 } from '../public/lib/match-builder.mjs';
 
 describe('isTimeTbd', () => {
@@ -342,3 +343,68 @@ describe('finishedDurationMinutes', () => {
   });
 });
 
+
+describe('freezeStartedMatchScoring', () => {
+  const start = '2026-09-22T10:00:00Z';
+  const now = Date.parse('2026-09-22T11:00:00Z');
+  const pregame = () => ({
+    id: 'mlb-1',
+    startTimeUtc: start,
+    isFinished: false,
+    competitiveness: 8,
+    watchability: 7,
+    score: 7.5,
+    reason: 'pre-game reason',
+    objectiveFactors: ['odds spread -1.5'],
+    oddsSpread: -1.5,
+    oddsOverUnder: 8.5,
+    durationMinutes: 185
+  });
+  // What ESPN's in-progress scoreboard rebuild produces: no pre-game line,
+  // so a different score and pre-game duration estimate.
+  const liveRebuild = () => ({
+    id: 'mlb-1',
+    startTimeUtc: start,
+    isFinished: false,
+    competitiveness: 5,
+    watchability: 6,
+    score: 5.5,
+    reason: 'no-odds reason',
+    objectiveFactors: [],
+    oddsSpread: null,
+    oddsOverUnder: null,
+    durationMinutes: 190
+  });
+
+  test('a started fixture keeps its pre-game score, odds and duration', () => {
+    const result = freezeStartedMatchScoring(liveRebuild(), pregame(), now);
+    assert.equal(result.score, 7.5);
+    assert.equal(result.competitiveness, 8);
+    assert.equal(result.reason, 'pre-game reason');
+    assert.equal(result.oddsSpread, -1.5);
+    assert.equal(result.oddsOverUnder, 8.5);
+    assert.equal(result.durationMinutes, 185);
+  });
+
+  test('a not-yet-started fixture is re-scored normally', () => {
+    const result = freezeStartedMatchScoring(liveRebuild(), pregame(), Date.parse(start) - 60_000);
+    assert.equal(result.score, 5.5);
+    assert.equal(result.oddsSpread, null);
+  });
+
+  test('a rescheduled fixture (new start time) is re-scored normally', () => {
+    const fresh = { ...liveRebuild(), startTimeUtc: '2026-09-22T09:00:00Z' };
+    assert.equal(freezeStartedMatchScoring(fresh, pregame(), now).score, 5.5);
+  });
+
+  test('no previous data leaves the fresh build untouched', () => {
+    assert.equal(freezeStartedMatchScoring(liveRebuild(), undefined, now).score, 5.5);
+  });
+
+  test('a finished fixture keeps its score but not the pre-game duration', () => {
+    const fresh = { ...liveRebuild(), isFinished: true, durationMinutes: 201 };
+    const result = freezeStartedMatchScoring(fresh, pregame(), now);
+    assert.equal(result.score, 7.5);
+    assert.equal(result.durationMinutes, 201);
+  });
+});

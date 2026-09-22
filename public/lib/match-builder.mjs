@@ -789,6 +789,49 @@ export function buildObjectiveReasonZh(factors) {
 // Exported so app.js can also call this directly, standalone, as its own
 // fast-follow pass after a build already returned - see buildMatches' own
 // `enrichOdds` option below for why.
+// Every field buildMatches' own scoring loop (below) derives from a
+// fixture's PRE-GAME data - its own objective score, the reason built from
+// it, and the ESPN spread/over-under that feeds both that score and the
+// pre-game duration estimate (computeDurationMinutes' own `oddsOverUnder`).
+export const PREGAME_SCORING_FIELDS = [
+  'competitiveness',
+  'watchability',
+  'enduranceScore',
+  'broadcastQuality',
+  'skill',
+  'reason',
+  'objectiveFactors',
+  'marqueeCredit',
+  'score',
+  'confidence',
+  'oddsSpread',
+  'oddsOverUnder'
+];
+
+// Once a fixture has actually started, a fresh rebuild must NOT re-score it
+// from scratch - ESPN's own scoreboard stops reporting a pre-game line the
+// moment a game goes in-progress (or swaps in a live, in-game one), so
+// every 60s/5min refresh after kickoff recomputed that fixture's score and
+// pre-game duration WITHOUT the odds signal it was scored with all
+// morning. That silently moved its score (and its scheduling interval)
+// right as it went live, which in turn reshuffled the day's plan -
+// live-reported as "recommended match changes when it all goes live".
+// Keeps `previous`'s own pre-game scoring fields (and its duration, unless
+// the fixture has since finished - see mergeFreshMatches' own finished-
+// duration handling) on `fresh` instead. A genuinely rescheduled fixture
+// (different start time) is left alone: that's new pre-game data, not a
+// live-feed artifact. Mutates and returns `fresh`.
+export function freezeStartedMatchScoring(fresh, previous, now = Date.now()) {
+  if (!previous || !Number.isFinite(previous.score)) return fresh;
+  if (fresh.startTimeUtc !== previous.startTimeUtc) return fresh;
+  if (Date.parse(fresh.startTimeUtc) > now) return fresh;
+  PREGAME_SCORING_FIELDS.forEach(field => {
+    if (field in previous) fresh[field] = previous[field];
+  });
+  if (!fresh.isFinished && Number.isFinite(previous.durationMinutes)) fresh.durationMinutes = previous.durationMinutes;
+  return fresh;
+}
+
 export async function enrichWithPolymarketOdds(matches, fetchJson) {
   const sportsNeeded = new Set();
   matches.forEach(m => {

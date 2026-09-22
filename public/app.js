@@ -99,7 +99,7 @@ import {
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
-import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // UI copy/locale layer - see that module's own top comment. Every piece of
 // genuine UI chrome (labels, hints, status text, aria-labels) goes through
 // t() rather than a hardcoded literal, so this file itself never has to
@@ -753,6 +753,15 @@ function prunePinnedChoices() {
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
   state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds);
+  // Every caller (a live poll's new scores/durations, a priority or owned-
+  // service change) just changed the scores/intervals the cached rotation
+  // plan was computed from. Leaving it cached meant the RENDER kept forcing
+  // a stale rotation pick while pinSlotChoice (which always recomputes
+  // rotation fresh) disagreed about what the slot's natural pick was - so
+  // swiping to that card was treated as "back to default", cleared nothing,
+  // and the stale force put the old card right back: live-reported as
+  // cards becoming unable to swipe once games go live.
+  invalidateVarietyRotation();
   renderSections();
 }
 
@@ -2522,7 +2531,17 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // page scroll, not a swipe - let go of it entirely (touch-action:
       // pan-y already told Safari the same thing) rather than fighting it.
       if (Math.abs(dy) > Math.abs(dx)) {
-        activePointerId = null;
+        // resetDragState, not just `activePointerId = null` - the latter
+        // left isTrackingSwipe set, so unless the browser happened to also
+        // fire pointercancel (it doesn't for a mouse drag, or a short
+        // vertical jitter below its own pan threshold), the shared
+        // activeSwipeCount never came back down and renderSections deferred
+        // itself forever: every later swipe/tap pinned nothing visible and
+        // live scores stopped updating. No transform has been applied yet
+        // (isHorizontalDrag is still false), so there's no style to reset.
+        const pointerId = activePointerId;
+        resetDragState();
+        try { card.releasePointerCapture(pointerId); } catch { /* already released */ }
         return;
       }
       isHorizontalDrag = true;
@@ -2567,7 +2586,10 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     resetDrag();
   });
   card.addEventListener('lostpointercapture', () => {
-    if (activePointerId != null) resetDrag();
+    // isTrackingSwipe too, not just activePointerId - a gesture whose
+    // pointer id was already cleared must still release its hold on
+    // activeSwipeCount (see pointermove's vertical-drag branch).
+    if (activePointerId != null || isTrackingSwipe) resetDrag();
     activePointerId = null;
   });
 
@@ -2916,6 +2938,11 @@ function mergeFreshMatches(freshMatches) {
     // put it back. Live-reported as "live states sometimes show then
     // disappear again" - this is that cycle.
     const previous = byId.get(m.id);
+    // A fixture that's already underway keeps the pre-game score/odds/
+    // duration it was planned with all day, instead of being re-scored from
+    // ESPN's in-progress feed (which no longer carries the pre-game line) -
+    // see freezeStartedMatchScoring's own comment.
+    freezeStartedMatchScoring(m, previous);
     if (previous?.live && !m.isFinished) {
       m.live = previous.live;
       m.durationMinutes = previous.durationMinutes;
@@ -3608,8 +3635,13 @@ async function pollLiveMatches() {
           detail: update.shortDetail,
           situation: update.situation
         });
-        if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
-        if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        // Pre-game lines only - once underway, ESPN's spread/over-under is an
+        // in-game line, not the pre-game signal this fixture was scored and
+        // planned with (see freezeStartedMatchScoring).
+        if (Date.parse(match.startTimeUtc) > Date.now()) {
+          if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
+          if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        }
         if (update.isFinished && !match.isFinished) {
           match.isFinished = true;
           changed = true;
