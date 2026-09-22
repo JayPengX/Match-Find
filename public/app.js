@@ -1219,12 +1219,30 @@ function pinnedForDayWithRotation(dayKey) {
 // Prefer": without it, EVERY swipe recorded a pin, so a card the viewer
 // swiped straight back to the algorithm's own default stayed mislabeled
 // 偏好 forever instead of reverting to 推薦.
+//
+// naturalMatchId alone isn't always what actually reappears once a pin is
+// cleared, though: variety rotation (computeVarietyRotation/
+// mergeVarietyForcedIds) can independently force a DIFFERENT member of
+// this exact cluster to win the slot, with no real pin involved at all. If
+// the viewer swipes/taps back to naturalMatchId while rotation is forcing
+// something else here, there is no pin to clear (rotation was never a real
+// pin), applySlotSwipe correctly no-ops, and rotation just re-forces the
+// same slot right back on the very next render - live-reported as "can't
+// swipe to the first dot, it just reruns to a random place or refuses".
+// `unpinnedResultId` is what would ACTUALLY show with no real pin present
+// - the rotation-forced id when rotation is forcing this cluster, else the
+// plain algorithmic natural pick - so swiping to anything else (including
+// naturalMatchId, when rotation is overriding it) correctly becomes a real
+// pin instead of a no-op.
 function pinSlotChoice(dayKey, slotKey, matchId) {
   const dayCandidates = dayCandidatesForPlan(dayKey);
   const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDayWithRotation(dayKey), {
     scoreField: 'planningScore'
   });
-  state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, naturalMatchId);
+  const clusterMemberIds = new Set(slotKey.split('|'));
+  const rotationForcedId = [...(getVarietyRotation().get(dayKey) || [])].find(id => clusterMemberIds.has(id));
+  const unpinnedResultId = rotationForcedId || naturalMatchId;
+  state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
   // A pin can change which matchup naturally wins a day, which can change
   // a rotation run's own shape (see computeVarietyRotation) - the cached
