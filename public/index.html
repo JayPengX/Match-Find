@@ -71,9 +71,9 @@
 
   </div>
 
-  <div id="loading-state" class="loading-state" role="status" aria-live="polite">
+  <div id="loading-state" class="loading-state" role="status" aria-live="polite" aria-label="載入中">
     <img class="loading-logo" src="./favicon.svg" alt="" width="64" height="64" aria-hidden="true" />
-    <span>載入中…</span>
+    <span class="loading-spinner" aria-hidden="true"></span>
   </div>
 
   <main id="app" hidden>
@@ -100,14 +100,14 @@
       <h2 class="section-label"><span data-day-label></span>推薦賽事</h2>
       <div id="recommended-list"></div>
       <p id="recommended-empty" class="empty-state" hidden>今天沒有特別推薦的賽事。</p>
-      <p id="recommended-loading" class="section-loading" hidden><span class="loading-spinner" aria-hidden="true"></span>載入中…</p>
+      <p id="recommended-loading" class="section-loading" hidden aria-label="載入中"><span class="loading-spinner" aria-hidden="true"></span></p>
     </section>
 
     <section id="all-matches-section">
       <h2 class="section-label"><span data-day-label></span>所有賽事</h2>
       <div id="all-match-list"></div>
       <p id="all-empty" class="empty-state" hidden>這一天沒有賽事。</p>
-      <p id="all-loading" class="section-loading" hidden><span class="loading-spinner" aria-hidden="true"></span>載入中…</p>
+      <p id="all-loading" class="section-loading" hidden aria-label="載入中"><span class="loading-spinner" aria-hidden="true"></span></p>
     </section>
 
     <section id="tbd-section" hidden>
