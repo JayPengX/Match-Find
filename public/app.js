@@ -2633,6 +2633,25 @@ function mergeFreshMatches(freshMatches) {
       // the very first refresh that caught it already finished.
       m.durationMinutes = previous.durationMinutes;
     }
+    // Carry forward already-resolved odds the same way - buildMatches()
+    // always hands back a fresh object with every odds field reset to
+    // null/undefined (both refresh tiers call it with `enrichOdds: false`;
+    // see enrichOddsInBackground's own comment on why odds is fetched
+    // separately), so an unconditional overwrite here blanked the odds bar
+    // on EVERY near-term (60s) and full-window (5min) refresh tick, only
+    // for enrichOddsInBackground to refill it a moment later once its own
+    // fetch resolved - a visible hide-then-reappear flicker on a timer,
+    // not an actual odds change. Keeping the previous, still-valid value
+    // in place until a real replacement is ready means the bar only ever
+    // updates once new numbers have actually arrived, never blanks first.
+    if (previous) {
+      if (m.oddsWinPctAway == null && previous.oddsWinPctAway != null) m.oddsWinPctAway = previous.oddsWinPctAway;
+      if (m.oddsWinPctHome == null && previous.oddsWinPctHome != null) m.oddsWinPctHome = previous.oddsWinPctHome;
+      if (m.oddsWinPctDraw == null && previous.oddsWinPctDraw != null) m.oddsWinPctDraw = previous.oddsWinPctDraw;
+      if (!m.oddsFavorites && previous.oddsFavorites) m.oddsFavorites = previous.oddsFavorites;
+      if (m.oddsSpread == null && previous.oddsSpread != null) m.oddsSpread = previous.oddsSpread;
+      if (m.oddsOverUnder == null && previous.oddsOverUnder != null) m.oddsOverUnder = previous.oddsOverUnder;
+    }
     byId.set(m.id, m);
   });
   // Without this, an id that ages out of every fetch's own window (near-term
