@@ -1060,6 +1060,42 @@ main#app {
   font-size: 0.86rem;
 }
 
+/* A day past the near-term tier's own guaranteed coverage, shown before
+   the full window has confirmed whether it actually has anything on it -
+   see app.js's isDayPending. Deliberately styled like a quieter sibling of
+   #recommended-empty/#all-empty (same padding/font-size/left alignment),
+   not the big centered full-page .loading-state - this is one section on
+   an otherwise-already-usable page, not the whole app still starting up. */
+.section-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 4px;
+  text-align: left;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+}
+.section-loading .loading-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  flex: none;
+}
+
+/* A day-pill for a day that hasn't been fetched yet at all - see
+   isDayPending. Dimmed rather than hidden (see visibleDays' own comment
+   on why it shows at all): still a real, clickable tap target - clicking
+   it is exactly what renderRecommendedSection/renderAllMatchesSection's
+   own isDayPending check exists to handle gracefully - just visually
+   distinct from a day that's confirmed to have (or not have) fixtures,
+   so the day-scroller's own pill COUNT never visibly changes once real
+   data lands (no more "loads a few days, then jumps" - see this repo's
+   own history) while still being honest that this pill's own label is
+   still provisional until then. */
+.day-pill--pending {
+  opacity: 0.55;
+}
+
 .page-footer {
   max-width: 760px;
   margin: 0 auto;

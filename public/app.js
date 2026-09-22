@@ -270,6 +270,23 @@ const state = {
   matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
   selectedDayKey: null,
+  // False from the moment the page opens until the full DEFAULT_DAYS_AHEAD
+  // window has landed at least once (see refreshFullWindow) - lets
+  // visibleDays()/renderRecommendedSection tell "this far-future day
+  // genuinely has nothing on" apart from "this far-future day simply
+  // hasn't been fetched yet", which look IDENTICAL from state.matches'
+  // own point of view (zero matches either way) without this flag. See
+  // this flag's own call sites for why that distinction is the whole
+  // point.
+  fullWindowLoaded: false,
+  // Same idea as fullWindowLoaded, one tier down - set once refreshNearTerm
+  // (today/tomorrow) has resolved at least once. Needed because
+  // paintLoadingShell paints the whole shell, TODAY included, before even
+  // the near-term fetch has started - without this, isDayPending would
+  // treat today as already "confirmed" the instant the shell exists
+  // (it's within the near-term window) rather than genuinely still
+  // pending its own first fetch.
+  nearTermLoaded: false,
   activeSport: 'all',
   priorityOrder: [], // sports ranked best-to-least - see "Sport priority settings" below
   enabledSports: [], // sports to show at all - see "Enabled sports settings" below
@@ -483,8 +500,10 @@ const dayScrollerEl = document.getElementById('day-scroller');
 const filtersRow = document.getElementById('sport-filters');
 const recommendedListEl = document.getElementById('recommended-list');
 const recommendedEmptyEl = document.getElementById('recommended-empty');
+const recommendedLoadingEl = document.getElementById('recommended-loading');
 const allMatchListEl = document.getElementById('all-match-list');
 const allEmptyEl = document.getElementById('all-empty');
+const allLoadingEl = document.getElementById('all-loading');
 const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
@@ -1827,6 +1846,52 @@ function renderDayLabels() {
   dayLabelEls.forEach(el => { el.textContent = label; });
 }
 
+// The near-term refresh tier's own guaranteed coverage boundary (see
+// NEAR_TERM_DAYS_AHEAD, declared later in this file but already fully
+// initialized by the time this actually runs - module evaluation finishes
+// before init() ever calls anything) - a day past this one is only
+// "pending" (see isDayPending below), never "confirmed empty", until the
+// full window has had its own chance to say otherwise. Computed fresh
+// every call, not cached, since "today" itself advances as the tab stays
+// open.
+function nearTermBoundaryKey() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return localDateKey(new Date(today.getTime() + (NEAR_TERM_DAYS_AHEAD - 1) * 86_400_000));
+}
+
+// True for a day this tab genuinely has no data for yet - past what the
+// near-term tier already guarantees, AND with zero matches of ANY sport
+// already sitting in state.allRawMatches for it (a prior full-window
+// refresh this session, or a painted snapshot from last visit, already
+// answered for this specific day even if state.fullWindowLoaded itself
+// hasn't gone true again yet this load) - false once state.fullWindowLoaded
+// confirms the whole window is current. The whole point: state.matches
+// alone can't tell "this far-future day genuinely has nothing on" apart
+// from "this far-future day simply hasn't been fetched yet" - both are
+// zero matches either way - and conflating them is exactly what produced
+// the reported day-count "jump" (a day's own pill popping in/out of
+// existence the instant real data happened to land) as well as a
+// genuinely wrong "這一天沒有賽事" for a day that in fact just hadn't
+// loaded - live-reported as wanting the currently-viewed day painted
+// immediately, the rest loaded in the background, AND a not-yet-loaded
+// day handled gracefully rather than shown as if it were confirmed empty.
+function isDayPending(dayKey) {
+  if (state.fullWindowLoaded) return false;
+  // This day specifically falls within near-term's own coverage AND
+  // near-term has actually resolved at least once - confirmed, even if it
+  // turned out genuinely empty. Before near-term's own first resolve,
+  // TODAY is just as pending as any far-future day (see paintLoadingShell,
+  // which paints the whole shell, today included, before any fetch has
+  // even started) - state.nearTermLoaded is what tells the two apart.
+  if (state.nearTermLoaded && dayKey <= nearTermBoundaryKey()) return false;
+  // Not yet authoritatively checked either way by a tier flag above - but
+  // real data for this EXACT day (a painted snapshot, an earlier
+  // successful fetch this session) is still a real answer even before
+  // the relevant tier flag catches up.
+  return !state.allRawMatches.some(m => localDateKey(new Date(m.startTimeUtc)) === dayKey);
+}
+
 // A day genuinely worth showing as a clickable pill at all - state.days
 // itself stays the FULL fetched window (every other piece of logic that
 // walks it, e.g. ensureSelectedDayHasActiveSport's "jump to the nearest day
@@ -1835,8 +1900,14 @@ function renderDayLabels() {
 // isn't worth a tap target, and that's just as true when a sport filter is
 // active (a day empty of MLB specifically shouldn't get a pill while "MLB"
 // is the active filter, even though it might have other sports going on).
+// A PENDING day (see isDayPending) is the one exception - always shown,
+// regardless of the active sport filter, since there's no way yet to know
+// whether it'll turn out to have anything worth a tap target at all; it
+// just renders dimmed (see .day-pill--pending) until it resolves one way
+// or the other.
 function visibleDays() {
   return state.days.filter(day => {
+    if (isDayPending(day.key)) return true;
     const dayMatches = matchesForDay(day.key);
     return state.activeSport === 'all'
       ? dayMatches.length > 0
@@ -1852,9 +1923,11 @@ function renderDayScroller() {
   // step here would only ever hide days that were already sitting in
   // memory.
   const nodes = visibleDays().map(day => {
+    const pending = isDayPending(day.key);
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'day-pill';
+    btn.className = pending ? 'day-pill day-pill--pending' : 'day-pill';
+    if (pending) btn.setAttribute('aria-busy', 'true');
     btn.setAttribute('role', 'tab');
     btn.setAttribute('aria-selected', String(day.key === state.selectedDayKey));
     btn.innerHTML = `<span class="day-pill-label">${dayLabelFor(day.date, { short: day.key !== localDateKey(new Date()) })}</span>`;
@@ -2192,6 +2265,19 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
 function renderRecommendedSection() {
   const dayKey = state.selectedDayKey;
+  // A day with no data yet at all (see isDayPending) gets an honest
+  // "still loading" instead of computing (and confidently displaying) a
+  // plan built from zero candidates, which would otherwise look exactly
+  // like a real "nothing recommended today" - directly what was asked
+  // for: handle a click onto a day that hasn't loaded yet gracefully
+  // rather than showing it as if it had already been checked.
+  if (isDayPending(dayKey)) {
+    recommendedListEl.replaceChildren();
+    recommendedEmptyEl.hidden = true;
+    if (recommendedLoadingEl) recommendedLoadingEl.hidden = false;
+    return;
+  }
+  if (recommendedLoadingEl) recommendedLoadingEl.hidden = true;
   // Computed fresh every render, scoped to whatever's currently active
   // (day, sport filter, pins) - see computeDayPlan's own comment. Picking
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
@@ -2323,6 +2409,15 @@ function renderRecommendedSection() {
 }
 
 function renderAllMatchesSection() {
+  // Same "still loading, not actually empty" distinction as
+  // renderRecommendedSection's own isDayPending check - see its comment.
+  if (isDayPending(state.selectedDayKey)) {
+    allMatchListEl.replaceChildren();
+    allEmptyEl.hidden = true;
+    if (allLoadingEl) allLoadingEl.hidden = false;
+    return;
+  }
+  if (allLoadingEl) allLoadingEl.hidden = true;
   const dayMatches = applySportFilter(matchesForSelectedDay());
   dayMatches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
 
@@ -2703,6 +2798,36 @@ function applyEnabledSportsAndRender() {
   renderSections();
 }
 
+// Paints the full day-pill row, and a per-section "still loading" state
+// for whichever day ends up selected, using nothing but today's own
+// calendar date - called once, at the very top of init(), before any
+// fetch has even started. This is what actually lets first paint go back
+// to being fast (near-term only, not the whole 50+-request window - see
+// init()'s own comment) WITHOUT reintroducing the "loads a few days, then
+// jumps" this repo's own history already fixed once: every far-future
+// day's pill already exists here, in its dimmed/pending form (see
+// isDayPending/.day-pill--pending), so applyFreshBuild filling in real
+// data later only ever flips an EXISTING pill from pending to real,
+// never adds/removes one from the row itself. Can't reuse
+// applyEnabledSportsAndRender directly for this - that function reads
+// state.allRawMatches, which is still genuinely empty at this point, and
+// state.matches ending up empty would make buildDayList's own "always
+// include every fetched match's own day too" branch moot anyway (there's
+// nothing fetched yet to include).
+function paintLoadingShell() {
+  state.daysAhead = DEFAULT_DAYS_AHEAD;
+  state.days = buildDayList([]);
+  state.selectedDayKey = pickInitialDay(state.days, []);
+  if (loadingStateEl) loadingStateEl.hidden = true;
+  appEl.hidden = false;
+  emptyState.hidden = true;
+  errorState.hidden = true;
+  renderDayScroller();
+  renderDayLabels();
+  renderFilters();
+  renderSections();
+}
+
 // ---- Live match data: two refresh tiers, both calling buildMatches -------
 //
 // This replaces a scheduled GitHub Action that rebuilt a static
@@ -2769,6 +2894,10 @@ async function refreshNearTerm() {
       enrichOdds: false
     });
     applyFreshBuild(matches, generatedAt);
+    // See fullWindowLoaded's own comment on refreshFullWindow for why this
+    // only ever goes true on a real resolve - same reasoning, one tier
+    // down.
+    state.nearTermLoaded = true;
     enrichOddsInBackground();
   } catch (error) {
     console.error('near-term refresh failed', error);
@@ -2864,6 +2993,14 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
       enrichOdds: false
     });
     applyFreshBuild(matches, generatedAt);
+    // A successful resolve here - even one that happens to carry zero
+    // matches for some far-future day, a genuinely quiet sports day - is
+    // still an AUTHORITATIVE answer for the whole window (buildMatches'
+    // own per-league try/catch already degrades a single league's failure
+    // to an empty array rather than throwing - see its own comment), so
+    // this only ever goes true on a real resolve, never optimistically
+    // before one. See isDayPending's own comment for what this unlocks.
+    state.fullWindowLoaded = true;
     enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = '資料已更新。';
   } catch (error) {
@@ -3262,10 +3399,19 @@ setInterval(renderNextUpdateCountdown, 1000);
 
 async function init() {
   state.proxyUrl = PROXY_URL;
-  // Paint immediately from last visit's own cached build, if one exists and
-  // isn't too old (see "Instant-paint snapshot" above) - purely a perceived-
-  // latency fix, the real refresh right below still always runs and quietly
-  // corrects whatever this showed.
+  // Paint the full day-pill row (every day dimmed/pending - see
+  // isDayPending) immediately, from nothing but today's own calendar date
+  // - no fetch has even started yet. See this function's own call site
+  // comment for why this is what actually makes it safe to go back to a
+  // fast, near-term-only first paint below without reintroducing a
+  // visible "jump" later.
+  paintLoadingShell();
+  // Paint from last visit's own cached build too, if one exists and isn't
+  // too old (see "Instant-paint snapshot" above) - a further perceived-
+  // latency win on top of the shell above, since a snapshot usually
+  // already has real content for days the shell alone can only mark
+  // pending. Purely additive - the real refresh right below always still
+  // runs and quietly corrects whatever either of these showed.
   const snapshot = loadMatchSnapshot();
   if (snapshot) {
     try {
@@ -3274,36 +3420,38 @@ async function init() {
       console.error('failed to paint cached snapshot', error);
     }
   }
-  // The WHOLE window, awaited, before anything else about the fetch cycle
-  // starts. An earlier version awaited only the near-term (2-day) tier
-  // here and fired the full 14-day window unblocked right after, on
-  // purpose, for a faster first paint - but that traded a genuinely
-  // FINISHED first paint for a visible mid-load jump: the day-scroller
-  // would settle on just today/tomorrow, then a few seconds later visibly
-  // expand as the far-future pills filled in. Live-reported directly: "it
-  // only load the surrounding few days then after showing the UI a few
-  // seconds it finish building everything, building should be all
-  // finished by loading". Going straight to the full window also drops
-  // one whole serial network round trip from cold load - the near-term
-  // tier's own fetch used to have to finish before the full one even
-  // started; now there's only ever one await here. refreshNearTerm still
-  // exists exactly as before, just no longer called from here - it's still
-  // what scheduleNearTermRefresh below uses for the PERIODIC 60s freshness
-  // tier once the page is already up.
+  // Near-term only (today/tomorrow, a handful of requests) awaited here,
+  // for a genuinely fast first paint of whatever the viewer is actually
+  // looking at (pickInitialDay almost always lands on today) - the full
+  // window follows right behind it, unblocked. An earlier version of this
+  // awaited the WHOLE window here instead, specifically to stop the
+  // day-scroller's pill count from visibly growing after first paint
+  // (live-reported: "it only load the surrounding few days then after
+  // showing the UI a few seconds it finish building everything, building
+  // should be all finished by loading") - but that meant first paint now
+  // waited on 50+ concurrent requests (3 leagues x 17 dates, see
+  // fetchTeamLeagueMatches) instead of near-term's own ~15-18, which
+  // traded a fast, reliable paint for a slow and sometimes-failing one
+  // (live-reported next: "sometimes it failed to load also the load time
+  // is significantly longer" - exactly the stampede
+  // PROXY_FETCH_MAX_CONCURRENCY's own comment documents). paintLoadingShell
+  // above is what actually fixes the ORIGINAL jump complaint now: every
+  // far-future day's pill already exists, in its dimmed/pending form,
+  // before this near-term fetch even starts - applyFreshBuild filling in
+  // real data later (here, and again once refreshFullWindow resolves in
+  // the background below) only ever flips an EXISTING pill from pending
+  // to real, never adds or removes one from the row itself.
   try {
-    await refreshFullWindow({ silent: true });
+    await refreshNearTerm();
   } catch (error) {
     console.error(error);
   }
   if (!state.allRawMatches.length && !state.tbdMatches.length) {
-    // Nothing loaded at all yet (the fetch itself failed outright, e.g.
-    // the proxy is unreachable) - say so rather than leaving a silently
-    // empty page; the scheduled retries below can still recover this once
-    // network/the proxy comes back. applyFreshBuild (which would otherwise
-    // hide the loading spinner) never ran in this branch, so it's still up
-    // - swap it for the explicit error message instead of leaving both up
-    // at once.
-    if (loadingStateEl) loadingStateEl.hidden = true;
+    // Nothing loaded at all yet (the near-term fetch itself failed
+    // outright, e.g. the proxy is unreachable) - say so rather than
+    // leaving paintLoadingShell's own pending states up forever;
+    // refreshFullWindow below and the scheduled retries can still recover
+    // this once network/the proxy comes back.
     errorState.hidden = false;
   }
   scheduleNearTermRefresh();
@@ -3321,6 +3469,7 @@ async function init() {
     pollLiveMatches().catch(error => console.error('initial live poll failed', error));
   }
   scheduleLivePoll();
+  refreshFullWindow({ silent: true });
   scheduleFullRefresh();
 }
 
