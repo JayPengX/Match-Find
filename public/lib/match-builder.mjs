@@ -786,7 +786,10 @@ export function buildObjectiveReasonZh(factors) {
 // a transient 5xx) never blocks the rest of the build - those matches just
 // keep their default null odds, same as a fixture no market has posted a
 // line for yet.
-async function enrichWithPolymarketOdds(matches, fetchJson) {
+// Exported so app.js can also call this directly, standalone, as its own
+// fast-follow pass after a build already returned - see buildMatches' own
+// `enrichOdds` option below for why.
+export async function enrichWithPolymarketOdds(matches, fetchJson) {
   const sportsNeeded = new Set();
   matches.forEach(m => {
     if (!m.isFinished && POLYMARKET_TAG_ID[m.sport] != null) sportsNeeded.add(m.sport);
@@ -855,7 +858,27 @@ async function enrichWithPolymarketOdds(matches, fetchJson) {
 // small-`daysAhead` call for near-term freshness, a slower full-
 // `DEFAULT_DAYS_AHEAD` call for the rest of the day-scroller's window) can
 // both call this same function instead of two different code paths.
-export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_AHEAD, fetchJson, enabledSports = null }) {
+//
+// `enrichOdds` (default true, so scripts/build-data.mjs and
+// dump-day-plan.mjs - both one-shot batch builds with no later chance to
+// backfill anything - are completely unaffected) lets app.js opt OUT of
+// odds specifically: Polymarket's own pagination is real, live-measured
+// wall-clock time this function used to make every caller sit through
+// before returning ANYTHING, even though odds affects nothing about
+// WHICH matches get recommended (recommendation.mjs's own scoring never
+// reads it at all - it's a pure display badge). app.js instead calls the
+// now-exported enrichWithPolymarketOdds itself as an unblocked fast-follow
+// once the real (score-affecting) build has already painted - see its own
+// call sites for why that's safe to do straight on the live match
+// objects, same pattern pollLiveMatches already uses for its own
+// odds/score refresh.
+export async function buildMatches({
+  now = new Date(),
+  daysAhead = DEFAULT_DAYS_AHEAD,
+  fetchJson,
+  enabledSports = null,
+  enrichOdds = true
+}) {
   if (typeof fetchJson !== 'function') {
     throw new TypeError('buildMatches requires a fetchJson(url) function - see this file\'s own top comment');
   }
@@ -918,9 +941,12 @@ export async function buildMatches({ now = new Date(), daysAhead = DEFAULT_DAYS_
   // are ALSO independent of each other (both only need `matches` to exist,
   // neither reads the other's result) - run together rather than one
   // fully finishing before the other starts, same reasoning as the
-  // team-league/F1 merge above.
+  // team-league/F1 merge above. Odds is skipped here entirely when the
+  // caller opted out via `enrichOdds: false` (see this function's own top
+  // comment) - standings/title-race still always runs, since THOSE feed
+  // real scoring (recommendation.mjs), unlike odds.
   const [, [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity]] = await Promise.all([
-    enrichWithPolymarketOdds(matches, fetchJson),
+    enrichOdds ? enrichWithPolymarketOdds(matches, fetchJson) : Promise.resolve(),
     Promise.all([
       hasActiveMlb ? fetchMlbStandings(now.getUTCFullYear(), fetchJson) : Promise.resolve(new Map()),
       hasActiveNba ? fetchNbaStandings(fetchJson) : Promise.resolve(new Map()),

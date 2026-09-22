@@ -96,7 +96,7 @@ import {
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
-import { buildMatches, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
@@ -2689,14 +2689,37 @@ let fullRefreshTimer = null;
 let nextNearTermRefreshAt = null;
 let nextFullRefreshAt = null;
 
+// Polymarket odds is a pure display badge - recommendation.mjs's own
+// scoring never reads it (confirmed against every factor it does score:
+// live excitement, objective record, standings/title-race context, none
+// of it odds) - so it's the one piece of a build that's safe to let arrive
+// AFTER the match itself has already painted, rather than making every
+// refresh sit through Polymarket's own pagination first. Both refresh
+// tiers below pass `enrichOdds: false` to buildMatches and call this
+// straight on state.allRawMatches instead - the SAME objects buildMatches'
+// own `matches` return value already put there (mergeFreshMatches upserts
+// by reference, never clones - see its own comment), so mutating them
+// here is exactly as safe as pollLiveMatches already mutating those same
+// objects in place. Unblocked/fire-and-forget from both call sites; a
+// refresh that lands mid-flight just leaves this one targeting orphaned
+// objects nobody renders from anymore, same harmless race pollLiveMatches
+// already tolerates.
+function enrichOddsInBackground() {
+  enrichWithPolymarketOdds(state.allRawMatches, proxyFetchJson)
+    .then(() => recomputeAndRender())
+    .catch(error => console.error('background odds enrichment failed', error));
+}
+
 async function refreshNearTerm() {
   try {
     const { matches, generatedAt } = await buildMatches({
       daysAhead: NEAR_TERM_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
-      enabledSports: state.enabledSports
+      enabledSports: state.enabledSports,
+      enrichOdds: false
     });
     applyFreshBuild(matches, generatedAt);
+    enrichOddsInBackground();
   } catch (error) {
     console.error('near-term refresh failed', error);
   }
@@ -2787,9 +2810,11 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
     const { matches, generatedAt } = await buildMatches({
       daysAhead: DEFAULT_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
-      enabledSports: state.enabledSports
+      enabledSports: state.enabledSports,
+      enrichOdds: false
     });
     applyFreshBuild(matches, generatedAt);
+    enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = '資料已更新。';
   } catch (error) {
     console.error('full refresh failed', error);
