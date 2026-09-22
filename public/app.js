@@ -1234,13 +1234,46 @@ function pinnedForDayWithRotation(dayKey) {
 // plain algorithmic natural pick - so swiping to anything else (including
 // naturalMatchId, when rotation is overriding it) correctly becomes a real
 // pin instead of a no-op.
+//
+// That "what would show with no real pin" question has to be asked against
+// a version of state.pinnedChoices with THIS slot's own current real pin
+// already removed, not just filtered out of the merged result afterward -
+// pinnedForDayWithRotation/getVarietyRotation() run computeVarietyRotation
+// over the CURRENT state.pinnedChoices, and computeVarietyRotation resolves
+// every slot in a day together (Round 44's own "maximum matching", not a
+// per-slot decision), so a real pin still sitting in THIS slot can itself
+// change what rotation decides to force in a DIFFERENT slot that day.
+// Reusing that already-computed rotation here (as an earlier version of
+// this function did) meant "this slot's own natural pick" silently
+// depended on whatever THIS slot happened to be pinned to a moment ago -
+// so swiping out and immediately back could land on a genuinely different
+// unpinnedResultId than the one that was true before either swipe, and the
+// swipe-back got recorded as a new pin instead of clearing one. Live-
+// reported: "swiping then swiping back make recommended label into prefer
+// - not always but inconsistently and often" - it only showed up on days
+// where some OTHER slot's rotation assignment actually depended on this
+// one, which is exactly why it looked random rather than every time.
 function pinSlotChoice(dayKey, slotKey, matchId) {
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDayWithRotation(dayKey), {
+  const clusterMemberIds = new Set(slotKey.split('|'));
+  const daySet = state.pinnedChoices.get(dayKey);
+  const ownPinInCluster = daySet ? [...daySet].find(id => clusterMemberIds.has(id)) : undefined;
+  let pinnedChoicesWithoutThisSlot = state.pinnedChoices;
+  if (ownPinInCluster !== undefined) {
+    const nextDaySet = new Set(daySet);
+    nextDaySet.delete(ownPinInCluster);
+    pinnedChoicesWithoutThisSlot = new Map(state.pinnedChoices);
+    if (nextDaySet.size) pinnedChoicesWithoutThisSlot.set(dayKey, nextDaySet);
+    else pinnedChoicesWithoutThisSlot.delete(dayKey);
+  }
+  const matchesByDayKey = new Map();
+  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
+  const rotationWithoutThisSlot = computeVarietyRotation(matchesByDayKey, pinnedChoicesWithoutThisSlot).get(dayKey);
+  const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
+  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
     scoreField: 'planningScore'
   });
-  const clusterMemberIds = new Set(slotKey.split('|'));
-  const rotationForcedId = [...(getVarietyRotation().get(dayKey) || [])].find(id => clusterMemberIds.has(id));
+  const rotationForcedId = [...(rotationWithoutThisSlot || [])].find(id => clusterMemberIds.has(id));
   const unpinnedResultId = rotationForcedId || naturalMatchId;
   state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
