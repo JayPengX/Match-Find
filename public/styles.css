@@ -278,6 +278,18 @@ main#app {
   padding-left: 16px;
   padding-right: 16px;
   border-bottom: 1px solid var(--border);
+  /* Works around a real, long-standing Safari/WebKit bug: a
+     `position: sticky` element stuck to the document's own root scroller
+     (no other scrolling ancestor here - see this rule's own top comment)
+     can detach and vanish for the rest of the rubber-band bounce once a
+     viewer overscrolls past the very bottom of the page, only reappearing
+     on the next scroll event. Promoting this bar to its own compositing
+     layer keeps WebKit from recalculating its sticky position against that
+     out-of-range overscroll offset in the first place - reported directly:
+     the day-picker/sport-filter header disappearing on Safari specifically
+     when scrolling past the bottom and continuing to push. */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 .day-scroller {
   display: flex;
