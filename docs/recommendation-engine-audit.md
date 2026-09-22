@@ -4027,3 +4027,71 @@ next step is either (a) learning what specific reasoning/source informed
 their 9/23-25 picks so it can be encoded explicitly, or (b) using the
 app's own existing manual swipe-to-pin (which unconditionally overrides
 everything else, deterministic or Gemini) for cases like this one.
+
+## Round 38 (2026-09-22): research confirms the disagreement's real cause; billing unblocks grounding; locking down the now-billed route
+
+Direct follow-up to the user's "why the hell is everything I research online
+suggesting the recommended expected result" - did the actual research
+Round 37 hadn't: confirmed the Boston Red Sox clinched their Wild Card
+spot on September 20, 2026, and real sports coverage (Yahoo Sports, on
+that exact Guardians/Red Sox series) states outright that "Boston may
+already be looking ahead to an American League Wild Card Series in New
+York against the Yankees" - i.e. real reporting treats that series as
+Boston coasting, not fighting. Separately, Zack Wheeler (a genuine, elite
+ace) started for Philadelphia on 9/23 against Milwaukee's Dustin May,
+described in coverage as far less consistent - real appointment-viewing
+value from the pitching matchup itself. Both are exactly the class of
+live, current, above-the-box-score fact a win%/standings formula
+structurally cannot see - and, tellingly, neither did Round 37's own
+successful-but-non-grounded Gemini call, which only cited Cleveland's win
+streak. A probable-starting-pitcher-ERA fetch was considered (the exact
+API Round 33 already validated feasible) but not built: Round 33 already
+tested that comparison (Henderson 2.51 vs. Gray 2.82) and found bare ERA
+numbers don't cleanly separate these games - what actually matters here is
+Wheeler's reputation and Boston's "looking ahead" storyline, narrative
+facts a number can't encode. Conclusion put to the user plainly: this
+needs a real grounded search, not more (already-exhausted, per Round 33's
+own grid search) formula tuning.
+
+**Billing.** User chose to enable billing on the Google Cloud project
+behind `GEMINI_API_KEY`, specifically to lift the free-tier grounding
+quota Round 37 hit. Re-enabled Google Search grounding + `gemini-3.7-flash`
+on `/match-recommend` (Shared-Proxy, same shape as Round 35: `tools:
+[{ google_search: {} }]`, free-form JSON extraction via
+`MATCH_RECOMMEND_JSON_PATTERN` instead of `response_schema`), and
+broadened the prompt to explicitly ask about a team already having
+clinched and resting/looking ahead, on top of the existing injury/
+milestone/storyline/probable-pitcher language - directly targeting the
+exact failure mode just found. **Not re-verified with a live call this
+round** - direct instruction was to stop spending real, now-billed credit
+on manual verification calls. Verified instead with a local Node harness
+(`worker.js`'s own `export default` imported directly, `global.fetch` and
+`env.RATE_LIMIT_KV` both mocked) confirming the request/response plumbing
+end to end with zero real network calls to Google. The first real grounded
+call will happen from organic app usage; if it 429s again even on the paid
+tier, that would mean billing didn't actually lift the grounding-specific
+quota (some APIs gate tool-use on a separate allowlist from general paid
+access) and this should revert exactly the way Round 37 did rather than
+assuming billing alone guarantees it works.
+
+**Security.** Requested separately, same session: "lock others from using
+my Gemini API." Live-testing over Rounds 37-38 had just proven the exposure
+directly - `/match-recommend`'s URL, sitting in this repo's own public
+`app.js`, was callable by anyone with a bare `curl`, no enforcement beyond
+a per-IP rate limit (`isAllowedOrigin` only ever fed the advisory CORS
+response headers - real for a browser, meaningless to a direct request).
+Shared-Proxy (Round 38, its own worker.js/README) now hard-rejects with
+`403` before ever reaching a billed handler (`/gemini`, `/match-recommend`,
+`/nl-edit`, `/vocab-ai`) if `Origin` is missing or not in
+`ALLOWED_ORIGINS` - free for every real app (a JSON POST always carries a
+real `Origin` from a real browser) - plus a hard daily global cap per
+feature (`isDailyGlobalCapped`), the real financial backstop since it
+counts every caller combined rather than per IP. Documented honestly in
+that repo's own README: this stops opportunistic abuse, not a targeted
+attacker reading the same public source this repo already publishes -
+there is no such thing as a real secret in a fully public static site's
+own client code.
+
+Full Match Find suite unaffected by this round (**391/391**, no
+`recommendation.mjs` changes) - every change this round lives in
+Shared-Proxy's `worker.js`/README and this repo's own README/docs.

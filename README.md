@@ -1149,7 +1149,27 @@ independently agreed with the deterministic engine rather than the
 human-validated expectation this feature is meant to guarantee - worth
 knowing before assuming "the mechanism works" means "the mechanism always
 picks what I'd pick": it guarantees Gemini's own answer wins its slot, not
-that Gemini's answer matches any one viewer's personal judgment.
+that Gemini's answer matches any one viewer's personal judgment. Follow-up
+web research (same round) found real, current facts behind that specific
+disagreement - a team already clinched and reported as "looking ahead" to
+its real postseason opener, an elite starting pitcher on the mound that
+night - exactly the kind of live news a non-grounded call has no way to
+see, which directly motivated Round 38.
+
+Round 38 (2026-09-22) put grounding back on `gemini-3.7-flash` after the
+account's Google Cloud project moved to a paid billing plan specifically
+to lift the free-tier grounding quota Round 37 hit - and, separately,
+because that same live-testing had just demonstrated `/match-recommend`'s
+URL (sitting in plain sight in this repo's own public client source) was
+callable directly by anyone with no real enforcement beyond a per-IP rate
+limit, added a hard-enforced origin gate and a daily global call cap on
+Shared-Proxy's side (see that repo's own README for the full reasoning and
+its honest limits). Grounding was NOT re-verified with a live call this
+round, per direct instruction not to spend newly-real billed credit on
+manual testing - verified instead with a local harness that mocks
+`global.fetch` and the KV binding, confirming the request/response
+plumbing without touching the real Gemini API. The first real grounded
+call will happen from organic app usage.
 
 `MATCH_RECOMMEND_PROXY_URL` in `public/app.js` points at the real,
 live-verified `orbit-workers-proxy` deployment
