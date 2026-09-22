@@ -319,7 +319,7 @@ entirely), so it couldn't be checked against real data, but it runs through
 the exact same `computeNbaObjectiveScore`→`bestMatchScore` path with no
 special-casing, so the same behavior applies the moment real games exist.
 
-### Back-to-back variety (Round 41-43) - whole-window rotation among real close contenders
+### Back-to-back variety (Round 41-44) - whole-window rotation, hard-forced, among real close contenders
 
 Direct feedback: the deterministic scheduler's own math will happily
 recommend the exact same matchup three (or more) real calendar days
@@ -365,37 +365,59 @@ cross-day penalty, which only ever looked backward):
 2. For a run of 2+ days, build the POOL: that matchup plus every OTHER
    matchup that was a genuinely close rival (within `VARIETY_CLOSE_CALL_GAP`)
    on ANY day of the run.
-3. If the pool has more than one member, CYCLE the win through every pool
-   member, one per day, for the length of the run - a 3-day run with 3 real
-   contenders shows each of them exactly once; a run whose pool never
-   exceeds one member (nothing else ever close - the real Padres @ Dodgers
-   case) is left completely untouched, however many days it repeats.
+3. If the pool has more than one member, assign each day to a distinct
+   pool member via a maximum BIPARTITE MATCHING (Kuhn's algorithm - days on
+   one side, pool members on the other, an edge wherever a member was
+   actually close on that specific day) - covering as many DISTINCT members
+   as the run's own days can support, rather than a fixed `day i → pool[i]`
+   rotation that can't adapt when a later day's own assignment turns out
+   infeasible. Members are tried scarcest-eligibility-first (a rarely-close
+   alternative, eligible on only one day, has to claim it before the
+   incumbent - eligible every day of the run - crowds it out); among
+   members tied at the SAME scarcity, the incumbent goes first, so a
+   same-tier multi-way tie can't zero the actual best pick out of its own
+   run entirely (see Round 44 below for the live case that caught this).
 
-`app.js`'s `getVarietyRotation` computes this once per data refresh/pin
-change (memoized - `invalidateVarietyRotation` is called from
-`applyFreshBuild`/`applyEnabledSportsAndRender`, `pinSlotChoice`, and the
-sport-filter toggle, everywhere the underlying candidate set can change),
-scoped over every day in `state.days`. A real pin is always respected (a
-pinned day can only ever be its own 1-day run, never rotated).
+**Round 44, same day, two more corrections.** First: "if Brewer win day
+three outright then day one should be someone else" - Round 43's OWN first
+cut still used a fixed `pool[i % pool.length]` assignment, so a later
+day's own assignee turning out not-actually-close-that-day (falling back
+to the incumbent) meant the incumbent won TWICE while some other real
+contender never won at all - exactly this double-booking. Replaced with
+the maximum-matching approach described above. Second, caught live-testing
+the fix: penalizing the incumbent's own `planningScore` only ever
+guaranteed the incumbent LOST, not that the intended rotation winner in
+particular WON - `computeDayPlan` re-solves the WHOLE day's schedule fresh
+once a score changes, and a candidate entirely OUTSIDE the rotation's own
+pool can end up winning instead, simply by fitting the day's other
+constraints slightly better once the incumbent dropped (live-observed:
+penalizing Milwaukee Brewers @ Philadelphia Phillies to hand a day to
+Cleveland Guardians @ Boston Red Sox instead actually handed it to Tampa
+Bay Rays @ New York Yankees - a candidate the rotation's own pool never
+even considered). Fixed by switching from a soft penalty to a hard FORCE:
+`mergeVarietyForcedIds` merges the rotation's own assigned winner into the
+SAME `pinnedForDay` a real viewer pin already uses, so it wins
+unconditionally - the same guarantee a real pin has, never merely "probably
+wins once nudged". Since `computeDayPlan`'s own forced-pick mechanism marks
+every forced id `.isPreferred` (indistinguishable from a real viewer pin -
+the exact Round 41 bug that got Gemini's own forced override removed),
+`clearRotationIsPreferred` puts 推薦 back immediately after the real,
+final `computeDayPlan` call for anything ONLY rotation forced in.
 
 **Live-verified against the real 2026-09-22 fetch**: Milwaukee Brewers @
-Philadelphia Phillies naturally wins 09-23/24/25; its real pool across
-those 3 days actually has 4 members (Cleveland Guardians @ Boston Red Sox,
-Miami Marlins @ Chicago Cubs, and Tampa Bay Rays @ New York Yankees, each
-close on at least one of the 3 days) - more pool members than there are
-days, so a perfect one-each rotation isn't even mathematically possible.
-The algorithm's own honest behavior in that case: 09-23 (Brewers, its
-natural day-1 turn), 09-24 (rotates to Guardians @ Red Sox, close that
-day), 09-25 (the rotation's own next assignee, Miami Marlins @ Chicago
-Cubs, wasn't ACTUALLY close on that specific day, so forcing it in was
-skipped rather than manufacturing a fake close call - Brewers naturally
-wins 09-25 too). San Diego Padres @ Los Angeles Dodgers is untouched all 3
-days (pool size 1, nothing ever close). Separately, Tampa Bay Rays @
-Philadelphia Phillies's own 2-day run (09-26/27) has exactly one real
-alternative (Baltimore Orioles @ New York Yankees) and alternates cleanly:
-Rays keeps 09-26, Orioles/Yankees gets 09-27. A before/after diff across
-the whole fetched window shows exactly these 2 intended days differ
-(2026-09-24, 2026-09-27), zero unintended changes anywhere else.
+Philadelphia Phillies's own 3-day run (09-23/24/25) has a real pool of 3
+members (itself, Cleveland Guardians @ Boston Red Sox, Tampa Bay Rays @
+New York Yankees) - the matching correctly gives each one exactly one of
+the three days. Tampa Bay Rays @ Philadelphia Phillies's own 2-day run
+(09-26/27) has TWO other members tied with it at "close both days"
+(Baltimore Orioles @ New York Yankees, Chicago Cubs @ Boston Red Sox) - a
+3-way tie for only 2 days; the incumbent-priority tie-break correctly
+still lets Rays @ Phillies win one of its own two days rather than losing
+both to the other two tied members. San Diego Padres @ Los Angeles Dodgers
+stays untouched throughout both runs' whole span (pool size 1, nothing
+ever close). A before/after diff across the whole fetched window shows
+exactly 3 intended days differ, zero unintended changes anywhere else, and
+zero `.isPreferred` mislabels with no real pins anywhere in the window.
 
 ## The viewing plan
 

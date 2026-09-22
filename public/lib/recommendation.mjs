@@ -1292,11 +1292,12 @@ function closeAlternativeMatches(choice, byId) {
 // comment: every call fully resets `.recommended`/`.alternativeIds` at the
 // top) - only the LAST call's result is left mutated onto the matches.
 //
-// Returns Map<dayKey, Map<matchId, penalty>> - `penalty` is how much to
-// subtract from that match's own `planningScore` so a DIFFERENT pool
-// member (that day's own rotation turn) wins its slot instead. A
-// day/match absent from the map needs no adjustment - either no rotation
-// run applies there at all, or that match IS the day's own assigned turn.
+// Returns Map<dayKey, Set<matchId>> - the matchId(s) that must be FORCED
+// to win their own slot that day so the rotation's own assignment
+// actually happens (see this section's own Round 44 comment for why a
+// hard force, not a score nudge). A day absent from the map needs no
+// intervention at all - either no rotation run touches it, or its own
+// natural winner already IS that day's assigned turn.
 export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map()) {
   const dayKeys = [...matchesByDayKey.keys()].sort();
   const byIdByDay = new Map();
@@ -1335,9 +1336,9 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
   completedRuns.push(...active.values());
 
   const result = new Map();
-  function addPenalty(dayKey, matchId, amount) {
-    if (!result.has(dayKey)) result.set(dayKey, new Map());
-    result.get(dayKey).set(matchId, amount);
+  function addForced(dayKey, matchId) {
+    if (!result.has(dayKey)) result.set(dayKey, new Set());
+    result.get(dayKey).add(matchId);
   }
 
   completedRuns.forEach(run => {
@@ -1346,73 +1347,159 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     // that was a genuinely close alternative on AT LEAST ONE day of the
     // run - a matchup that was only ever close on day 2 still earns a
     // pool seat (and therefore a turn), the same as one close every day.
+    // `eligibleDaysByMember` is the same information indexed the other
+    // way - which days each pool member could actually win on, which is
+    // exactly what the matching below needs.
     const poolKeys = new Set([run.matchupKey]);
     const closeMatchByDay = new Map(); // dayKey -> Map<matchupKey, match>
+    const eligibleDaysByMember = new Map(); // matchupKey -> Set<dayKey>
     run.entries.forEach(({ dayKey, match }) => {
       const byId = byIdByDay.get(dayKey);
+      // The run's own matchupKey is trivially eligible every day of the
+      // run (it's the natural winner there) - every OTHER member is only
+      // eligible on the specific days it was actually a close rival.
       const map = new Map([[run.matchupKey, match]]);
       closeAlternativeMatches(match, byId).forEach(alt => {
-        const altKey = matchupKey(alt);
-        poolKeys.add(altKey);
-        map.set(altKey, alt);
+        poolKeys.add(matchupKey(alt));
+        map.set(matchupKey(alt), alt);
       });
       closeMatchByDay.set(dayKey, map);
+      map.forEach((m, key) => {
+        if (!eligibleDaysByMember.has(key)) eligibleDaysByMember.set(key, new Set());
+        eligibleDaysByMember.get(key).add(dayKey);
+      });
     });
     if (poolKeys.size < 2) return; // genuinely nothing else close, on any day - nothing to rotate (the real Padres @ Dodgers case)
 
-    // Deterministic order: the run's own matchupKey goes first (day 1 is
-    // its own natural home ground), the rest sorted alphabetically for
-    // stability across renders/re-fetches (never dependent on Map/Set
-    // iteration order or which day happened to introduce a given
-    // alternative first).
-    const pool = [run.matchupKey, ...[...poolKeys].filter(k => k !== run.matchupKey).sort()];
+    // Round 44: "if Brewer win day three outright then day one should be
+    // someone else" - a fixed `pool[i % pool.length]` rotation (Round 43's
+    // first cut) always gave day 1 to the run's own matchupKey regardless
+    // of what happened on later days, so a later day falling back to the
+    // incumbent (because that day's OWN assigned pool member wasn't
+    // actually close then) meant the incumbent won TWICE while some other
+    // real contender never won at all - exactly the double-booking
+    // reported. This replaces the fixed rotation with a proper maximum
+    // bipartite matching (Kuhn's algorithm - days on one side, pool
+    // members on the other, an edge wherever `eligibleDaysByMember` says a
+    // member could win that day): it finds the assignment that covers as
+    // many DISTINCT pool members as possible, so a day only "reuses" a
+    // member already assigned elsewhere when the run truly has more pool
+    // members than days can otherwise accommodate, never merely because
+    // the naive day-index happened to land on that member.
+    //
+    // Members are tried SCARCEST-eligibility-first (fewest eligible days),
+    // not in pool order - the whole point is that a rarely-close
+    // alternative (eligible on only ONE day) has to claim that day before
+    // the incumbent (eligible on every day of the run) greedily takes it
+    // instead; a naive first-come assignment in pool order would let the
+    // abundant incumbent crowd out a scarce alternative's only chance.
+    // Among members tied at the SAME scarcity, though, the run's own
+    // matchupKey goes first, not alphabetically - live-observed case this
+    // matters for: Tampa Bay Rays @ Philadelphia Phillies's own 2-day run
+    // had TWO other members tied with it at "eligible both days" (Baltimore
+    // Orioles @ New York Yankees, Chicago Cubs @ Boston Red Sox) - a pool
+    // of 3 equally-scarce members for only 2 days means one of them can
+    // never be placed regardless of tie-break order, but breaking the tie
+    // alphabetically happened to be the ONE incumbent, so the actual best
+    // natural pick ended up winning NEITHER of its own two days. Giving the
+    // incumbent first claim in an equal-scarcity tie still lets a genuinely
+    // SCARCER alternative (fewer eligible days) outrank it, and still
+    // spreads the OTHER two days out normally - it just stops a same-tier
+    // three-way tie from being able to zero the incumbent out entirely.
+    const membersByScarcity = [...poolKeys].sort((a, b) => {
+      const scarcityDiff = eligibleDaysByMember.get(a).size - eligibleDaysByMember.get(b).size;
+      if (scarcityDiff !== 0) return scarcityDiff;
+      if (a === run.matchupKey) return -1;
+      if (b === run.matchupKey) return 1;
+      return a.localeCompare(b);
+    });
+    const dayAssignedTo = new Map(); // dayKey -> matchupKey (the maximum-matching result so far)
+    function tryAssign(member, visitedDays) {
+      for (const dayKey of eligibleDaysByMember.get(member)) {
+        if (visitedDays.has(dayKey)) continue;
+        visitedDays.add(dayKey);
+        const current = dayAssignedTo.get(dayKey);
+        // Either this day is free, or its current occupant can be bumped
+        // to a DIFFERENT one of ITS OWN eligible days (the standard
+        // augmenting-path step) - only then does `member` get to claim it.
+        if (!current || tryAssign(current, visitedDays)) {
+          dayAssignedTo.set(dayKey, member);
+          return true;
+        }
+      }
+      return false;
+    }
+    membersByScarcity.forEach(member => tryAssign(member, new Set()));
 
-    run.entries.forEach(({ dayKey }, i) => {
-      const assignedKey = pool[i % pool.length];
+    // The matching above can only ever cover min(days, pool members) of
+    // the run's own days - if the pool is BIGGER than the run (as in the
+    // real Brewers @ Phillies case: a 4-member pool over a 3-day run),
+    // every day still gets assigned above (there are enough days to match
+    // 3 of the 4 members 1:1), so this loop is a no-op there. It only ever
+    // does real work the other way around - a run LONGER than its own
+    // pool (e.g. a 5-day series with only 2 real contenders) - where the
+    // leftover days beyond what a 1:1 matching can cover fall back to
+    // whichever eligible member has won the FEWEST days so far, spreading
+    // any unavoidable repeat out evenly rather than dumping every leftover
+    // day on the same member.
+    const winCount = new Map([...poolKeys].map(key => [key, 0]));
+    dayAssignedTo.forEach(member => winCount.set(member, winCount.get(member) + 1));
+    run.entries.forEach(({ dayKey }) => {
+      if (dayAssignedTo.has(dayKey)) return;
+      const eligible = [...closeMatchByDay.get(dayKey).keys()];
+      eligible.sort((a, b) => winCount.get(a) - winCount.get(b) || a.localeCompare(b));
+      const chosen = eligible[0];
+      dayAssignedTo.set(dayKey, chosen);
+      winCount.set(chosen, winCount.get(chosen) + 1);
+    });
+
+    run.entries.forEach(({ dayKey }) => {
+      const assignedKey = dayAssignedTo.get(dayKey);
       if (assignedKey === run.matchupKey) return; // today's natural winner IS today's assigned turn
-      const dayPool = closeMatchByDay.get(dayKey); // Map<matchupKey, match> - every pool member close TODAY, run.matchupKey's own match included
-      const assignedMatch = dayPool.get(assignedKey);
-      // The pool member assigned to this day wasn't actually a close
-      // alternative on THIS specific day (it earned its pool seat on a
-      // DIFFERENT day of the run) - rather than force in a match that
-      // isn't genuinely close today, skip forcing entirely and let the
-      // natural pick stand; a slightly uneven rotation is better than
-      // manufacturing a "close call" that isn't real today.
-      if (!assignedMatch) return;
-      const assignedScore = Number.isFinite(assignedMatch.planningScore) ? assignedMatch.planningScore : assignedMatch.effectiveScore;
-      // Penalize EVERY other pool member close today, not just the run's
-      // own natural winner - a 3+-member pool (e.g. Brewers/Guardians/Rays
-      // all close at once) means beating the incumbent alone can still
-      // lose the slot to a THIRD member nobody penalized. Just enough to
-      // flip each one's own ordering against the assigned winner (every
-      // pool member is close by construction - within
-      // VARIETY_CLOSE_CALL_GAP of each other via the incumbent - so this
-      // is always a small nudge, never enough to look like it's
-      // overriding a real quality gap elsewhere on the same day).
-      dayPool.forEach((match, key) => {
-        if (key === assignedKey) return;
-        const score = Number.isFinite(match.planningScore) ? match.planningScore : match.effectiveScore;
-        const penalty = score - assignedScore + 0.01;
-        if (penalty > 0) addPenalty(dayKey, match.id, penalty);
-      });
+      addForced(dayKey, closeMatchByDay.get(dayKey).get(assignedKey).id);
     });
   });
 
   return result;
 }
 
-// Applies a `computeVarietyRotation` result to one day's own candidates -
-// `penaltyByMatchId` is `computeVarietyRotation(...).get(dayKey)` (a
-// Map<matchId, penalty> or undefined if no rotation touches this day at
-// all). Same nudge point `applyLiveExcitementBonus` already uses.
-export function applyVarietyRotationPenalties(dayMatches, penaltyByMatchId) {
+// Round 44: forcing a rotation assignment by PENALIZING the incumbent's
+// `planningScore` (this section's own first cut) only ever guaranteed the
+// incumbent LOST - not that the intended rotation winner in particular
+// WON. Live-observed failure: penalizing Milwaukee Brewers @ Philadelphia
+// Phillies to hand its day to Cleveland Guardians @ Boston Red Sox instead
+// actually handed the slot to Tampa Bay Rays @ New York Yankees - a
+// candidate outside the rotation's own pool entirely, because the day's
+// OTHER scheduling constraints (weightedIntervalSchedule re-solving the
+// whole day fresh once a score changes) fit it slightly better once
+// Brewers dropped. A soft nudge can't account for that; only an outright
+// FORCE can. `mergeVarietyForcedIds` merges computeVarietyRotation's own
+// forced id(s) for a day into the SAME `pinnedForDay` shape a real
+// viewer's own swipe-to-pin already uses, so the assignment wins its slot
+// unconditionally (forcedIds' own `excludedIds` mechanism also correctly
+// excludes any other near-total-overlap conflict, exactly like a real pin
+// would) - never merely "probably wins once nudged".
+export function mergeVarietyForcedIds(pinnedForDay, forcedIds) {
+  if (!forcedIds || !forcedIds.size) return pinnedForDay;
+  return new Set([...(pinnedForDay ? [...pinnedForDay] : []), ...forcedIds]);
+}
+
+// computeDayPlan's own forcedIds mechanism marks EVERY forced pick as
+// `.isPreferred` (indistinguishable from a real viewer swipe-to-pin) -
+// the exact Round 41 bug that got Gemini's own forced override removed in
+// the first place (a system decision rendering 偏好 "Prefer" instead of
+// 推薦 "Recommended"). Call this immediately after the real, final
+// computeDayPlan pass (the one using `mergeVarietyForcedIds`'s own merged
+// pin set) to put the correct `.isPreferred = false` back on every id
+// THIS rotation forced in - `pinnedForDay` is the viewer's own REAL pins
+// for the day, checked so an id that happens to be both rotation-forced
+// AND genuinely pinned (the viewer swiped there themselves) still keeps
+// its true 偏好 tag.
+export function clearRotationIsPreferred(dayMatches, forcedIds, pinnedForDay) {
+  if (!forcedIds || !forcedIds.size) return;
+  const realPins = pinnedForDay instanceof Set ? pinnedForDay : new Set(pinnedForDay || []);
   dayMatches.forEach(match => {
-    const penalty = penaltyByMatchId?.get(match.id) || 0;
-    match.varietyPenalty = penalty;
-    if (penalty) {
-      const base = Number.isFinite(match.planningScore) ? match.planningScore : match.effectiveScore;
-      match.planningScore = Math.round((base - penalty) * 1e6) / 1e6;
-    }
+    if (forcedIds.has(match.id) && !realPins.has(match.id)) match.isPreferred = false;
   });
 }
 

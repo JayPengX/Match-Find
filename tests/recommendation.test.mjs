@@ -56,7 +56,8 @@ import {
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
   computeVarietyRotation,
-  applyVarietyRotationPenalties,
+  mergeVarietyForcedIds,
+  clearRotationIsPreferred,
   VARIETY_CLOSE_CALL_GAP
 } from '../public/lib/recommendation.mjs';
 
@@ -1318,32 +1319,73 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
-describe('Back-to-back variety (Round 43: whole-window rotation)', () => {
+describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)', () => {
   function teams(a, b) {
     return [{ name: a }, { name: b }];
   }
-  // Every match in a "day" below shares one start time by default (see
-  // makeMatch's own NOON_UTC default) so they form a single conflict
-  // cluster/`.alternativeIds` set, the same trick the rest of this file
-  // already uses for "these compete for one slot" tests.
   function day(matches) {
     return matches;
   }
 
-  describe('applyVarietyRotationPenalties', () => {
-    test('no entry for a match means no penalty at all', () => {
-      const match = makeMatch({ planningScore: 6 });
-      applyVarietyRotationPenalties([match], undefined);
-      assert.equal(match.varietyPenalty, 0);
-      assert.equal(match.planningScore, 6);
+  describe('mergeVarietyForcedIds', () => {
+    test('no forced ids at all returns the original pinnedForDay unchanged', () => {
+      const pins = new Set(['a']);
+      assert.equal(mergeVarietyForcedIds(pins, undefined), pins);
+      assert.equal(mergeVarietyForcedIds(pins, new Set()), pins);
     });
 
-    test('an entry subtracts exactly that amount from planningScore', () => {
-      const match = makeMatch({ id: 'm', planningScore: 6 });
-      applyVarietyRotationPenalties([match], new Map([['m', 0.3]]));
-      assert.equal(match.varietyPenalty, 0.3);
-      assert.equal(match.planningScore, 5.7);
+    test('unions real pins with rotation-forced ids', () => {
+      const merged = mergeVarietyForcedIds(new Set(['a']), new Set(['b', 'c']));
+      assert.deepEqual([...merged].sort(), ['a', 'b', 'c']);
     });
+
+    test('works with no real pins at all', () => {
+      const merged = mergeVarietyForcedIds(null, new Set(['b']));
+      assert.deepEqual([...merged], ['b']);
+    });
+  });
+
+  describe('clearRotationIsPreferred', () => {
+    test('resets isPreferred to false for a rotation-forced id', () => {
+      const match = makeMatch({ id: 'm', isPreferred: true });
+      clearRotationIsPreferred([match], new Set(['m']), null);
+      assert.equal(match.isPreferred, false);
+    });
+
+    test('leaves a genuinely pinned id alone even if it is ALSO in forcedIds', () => {
+      const match = makeMatch({ id: 'm', isPreferred: true });
+      clearRotationIsPreferred([match], new Set(['m']), new Set(['m']));
+      assert.equal(match.isPreferred, true);
+    });
+
+    test('a no-op with no forced ids at all', () => {
+      const match = makeMatch({ id: 'm', isPreferred: true });
+      clearRotationIsPreferred([match], undefined, null);
+      assert.equal(match.isPreferred, true);
+    });
+  });
+
+  test('a rotation-forced id wins its slot even against a candidate the rotation never accounted for (the real live bug this fixes)', () => {
+    // Live-observed failure: a soft score penalty on the incumbent only
+    // ever guaranteed the incumbent LOST, never that the rotation's own
+    // intended assignee WON - computeDayPlan re-solves the whole day's
+    // schedule fresh once a score changes, and a THIRD candidate the
+    // rotation's own pool never even considered (never close enough to
+    // the incumbent to earn a pool seat) could still win instead, simply
+    // by scoring higher than the intended assignee once the incumbent
+    // dropped. A hard force (the same mechanism a real pin already uses)
+    // has no such gap - it wins unconditionally, regardless of anyone
+    // else's score.
+    const incumbent = makeMatch({ id: 'incumbent', planningScore: 7.2, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+    const intended = makeMatch({ id: 'intended', planningScore: 6.75, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+    const outsider = makeMatch({ id: 'outsider', planningScore: 6.8, competitors: teams('Tampa Bay Rays', 'New York Yankees') });
+    const forcedIds = new Set(['intended']);
+    computeDayPlan('2026-09-25', [incumbent, intended, outsider], mergeVarietyForcedIds(null, forcedIds), { scoreField: 'planningScore' });
+    assert.equal(intended.recommended, true);
+    assert.equal(outsider.recommended, false);
+    assert.equal(incumbent.recommended, false);
+    clearRotationIsPreferred([incumbent, intended, outsider], forcedIds, null);
+    assert.equal(intended.isPreferred, false); // a system rotation, not a real viewer pin - must still read 推薦
   });
 
   describe('computeVarietyRotation', () => {
@@ -1364,7 +1406,7 @@ describe('Back-to-back variety (Round 43: whole-window rotation)', () => {
       for (const dayKey of days.keys()) assert.equal(rotation.get(dayKey), undefined);
     });
 
-    test('a 2-day run with one close alternative alternates: incumbent keeps day 1, the alternative gets day 2', () => {
+    test('a 2-day run with one close alternative alternates: the incumbent still wins exactly one of its own two days, the alternative gets the other', () => {
       const days = new Map();
       for (const dayKey of ['2026-09-23', '2026-09-24']) {
         const incumbent = makeMatch({ id: `inc-${dayKey}`, planningScore: 7, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
@@ -1372,11 +1414,21 @@ describe('Back-to-back variety (Round 43: whole-window rotation)', () => {
         days.set(dayKey, day([incumbent, rival]));
       }
       const rotation = computeVarietyRotation(days);
-      assert.equal(rotation.get('2026-09-23'), undefined); // day 1: incumbent's own natural turn, untouched
-      assert.ok(rotation.get('2026-09-24')?.has('inc-2026-09-24')); // day 2: incumbent penalized so the rival gets its turn
+      // Which SPECIFIC day keeps the incumbent isn't fixed (both are
+      // equally valid solutions to this symmetric case - see the
+      // incumbent-tie-break comment in recommendation.mjs) - what matters
+      // is that exactly one of the two days is untouched (the incumbent's
+      // own turn) and the other forces the rival in, never both touched or
+      // neither.
+      const day1Forced = rotation.get('2026-09-23');
+      const day2Forced = rotation.get('2026-09-24');
+      assert.equal(!day1Forced !== !day2Forced, true); // exactly one of the two days has a forced entry
+      const forcedDay = day1Forced || day2Forced;
+      assert.equal(forcedDay.size, 1);
+      assert.ok([...forcedDay][0].startsWith('rival-'));
     });
 
-    test('end-to-end: a 3-day run with 3 real close contenders gives each of them exactly one win (the literal case reported)', () => {
+    test('end-to-end: a 3-day run with 3 real close contenders gives each of them exactly one win, all correctly labeled 推薦', () => {
       const days = new Map();
       for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
         const brewers = makeMatch({ id: `brewers-${dayKey}`, planningScore: 7.2, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
@@ -1385,17 +1437,47 @@ describe('Back-to-back variety (Round 43: whole-window rotation)', () => {
         days.set(dayKey, day([brewers, guardians, rays]));
       }
       const rotation = computeVarietyRotation(days);
-      // Apply the plan for real and see who actually wins each day.
       const winners = [...days.keys()].map(dayKey => {
         const dayMatches = days.get(dayKey);
-        applyVarietyRotationPenalties(dayMatches, rotation.get(dayKey));
-        const picks = computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
-        return picks[0].id.replace(/-2026-09-2[345]$/, '');
+        const forcedIds = rotation.get(dayKey);
+        computeDayPlan(dayKey, dayMatches, mergeVarietyForcedIds(null, forcedIds), { scoreField: 'planningScore' });
+        clearRotationIsPreferred(dayMatches, forcedIds, null);
+        const picked = dayMatches.find(m => m.recommended);
+        assert.equal(picked.isPreferred, false); // never mislabeled 偏好 for a system rotation
+        return picked.id.replace(/-2026-09-2[345]$/, '');
       });
       // Each of the three contenders wins exactly one of the three days -
-      // no repeats, no contender skipped.
+      // no repeats, no contender skipped (the literal case reported).
       assert.deepEqual(new Set(winners), new Set(['brewers', 'guardians', 'rays']));
       assert.equal(new Set(winners).size, 3);
+    });
+
+    test('a 2-day run with THREE equally-scarce contenders (more contenders than days) still lets the incumbent win one of its own days - the real live Rays @ Phillies case', () => {
+      // Live-observed: Tampa Bay Rays @ Philadelphia Phillies's own real
+      // 2-day run had TWO other matchups tied with it at "close every day"
+      // (Baltimore Orioles @ New York Yankees, Chicago Cubs @ Boston Red
+      // Sox) - a 3-way tie for only 2 days. A pure alphabetical tie-break
+      // happened to rank the incumbent last, so it won NEITHER of its own
+      // two days even though it was the genuine best natural pick both
+      // times - overcorrecting well past "add variety" into "never let the
+      // best team win". The incumbent gets first claim in an equal-scarcity
+      // tie specifically to prevent this.
+      const days = new Map();
+      for (const dayKey of ['2026-09-26', '2026-09-27']) {
+        const incumbent = makeMatch({ id: `rays-${dayKey}`, planningScore: 6.85, competitors: teams('Tampa Bay Rays', 'Philadelphia Phillies') });
+        const orioles = makeMatch({ id: `orioles-${dayKey}`, planningScore: 6.5, competitors: teams('Baltimore Orioles', 'New York Yankees') });
+        const cubs = makeMatch({ id: `cubs-${dayKey}`, planningScore: 6.75, competitors: teams('Chicago Cubs', 'Boston Red Sox') });
+        days.set(dayKey, day([incumbent, orioles, cubs]));
+      }
+      const rotation = computeVarietyRotation(days);
+      const winners = [...days.keys()].map(dayKey => {
+        const dayMatches = days.get(dayKey);
+        const forcedIds = rotation.get(dayKey);
+        computeDayPlan(dayKey, dayMatches, mergeVarietyForcedIds(null, forcedIds), { scoreField: 'planningScore' });
+        return dayMatches.find(m => m.recommended).id.replace(/-2026-09-2[67]$/, '');
+      });
+      assert.ok(winners.includes('rays')); // the incumbent still wins at least one of its own two days
+      assert.equal(new Set(winners).size, 2); // still real variety - the two days aren't identical
     });
 
     test('a real gap day (no matches at all) breaks a run instead of silently joining two separate repeats across it', () => {

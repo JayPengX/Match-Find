@@ -31,10 +31,11 @@
 import { readFile } from 'node:fs/promises';
 import {
   applyLiveExcitementBonus,
-  applyVarietyRotationPenalties,
+  clearRotationIsPreferred,
   computeDayPlan,
   computeVarietyRotation,
   explainWhyNotRecommended,
+  mergeVarietyForcedIds,
   resolveViewingPlan
 } from '../public/lib/recommendation.mjs';
 
@@ -66,18 +67,24 @@ for (const match of matches) {
 // explainWhyNotRecommended below can safely read .planningScore straight
 // off these same objects afterward. applyLiveExcitementBonus (also
 // in-place) has to run first, per day, since that's what actually sets
-// .planningScore. computeVarietyRotation (Round 43) plans the WHOLE
+// .planningScore. computeVarietyRotation (Round 43/44) plans the WHOLE
 // window's own rotation in one pass - the exact same whole-window
-// computation app.js's own getVarietyRotation does - then each day's
-// candidates get that plan's penalty (if any) applied before the real,
-// final computeDayPlan call that decides what's actually printed below.
+// computation app.js's own getVarietyRotation does - then each day's own
+// assigned winner (if any) gets FORCED via the same pinnedForDay/forcedIds
+// mechanism a real pin uses, via the real, final computeDayPlan call that
+// decides what's actually printed below (a score nudge alone doesn't
+// guarantee the intended winner - see mergeVarietyForcedIds's own Round 44
+// comment). No real pins in this tool (see resolveViewingPlan's own
+// comment above), so `pinnedForDay` here is always just the rotation's own
+// forced ids.
 const allDayKeysSorted = [...matchesByDayKey.keys()].sort();
 allDayKeysSorted.forEach(dayKey => applyLiveExcitementBonus(matchesByDayKey.get(dayKey)));
 const rotation = computeVarietyRotation(matchesByDayKey);
 allDayKeysSorted.forEach(dayKey => {
   const dayMatches = matchesByDayKey.get(dayKey);
-  applyVarietyRotationPenalties(dayMatches, rotation.get(dayKey));
-  computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
+  const forcedIds = rotation.get(dayKey);
+  computeDayPlan(dayKey, dayMatches, mergeVarietyForcedIds(null, forcedIds), { scoreField: 'planningScore' });
+  clearRotationIsPreferred(dayMatches, forcedIds, null);
 });
 
 const dayKeys = allDayKeysSorted.filter(key => (!fromArg || key >= fromArg) && (!toArg || key <= toArg));

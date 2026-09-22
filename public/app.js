@@ -74,7 +74,8 @@ import {
   estimateLiveDurationMinutes,
   computeDayPlan,
   computeVarietyRotation,
-  applyVarietyRotationPenalties
+  mergeVarietyForcedIds,
+  clearRotationIsPreferred
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 import {
@@ -1174,16 +1175,29 @@ function getVarietyRotation() {
   return varietyRotationCache;
 }
 
-// The exact same day-candidate + variety-rotation preparation
-// renderRecommendedSection needs to build today's plan - factored out so
-// pinSlotChoice below can ask "what would the algorithm pick here on its
-// own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
-// the actual rendered plan uses, rather than a second, slightly different
-// computation that could disagree with what's on screen.
+// The exact same day-candidate preparation renderRecommendedSection needs
+// to build today's plan - factored out so pinSlotChoice below can ask
+// "what would the algorithm pick here on its own" (see naturalSlotChoice)
+// against the IDENTICAL candidate set/scores the actual rendered plan
+// uses, rather than a second, slightly different computation that could
+// disagree with what's on screen. Round 44: variety rotation is no longer
+// baked into these candidates' own `planningScore` - see
+// pinnedForDayWithRotation below for why it's applied as a hard FORCE via
+// computeDayPlan's own pinnedForDay instead.
 function dayCandidatesForPlan(dayKey) {
-  const dayCandidates = baseDayCandidates(dayKey);
-  applyVarietyRotationPenalties(dayCandidates, getVarietyRotation().get(dayKey));
-  return dayCandidates;
+  return baseDayCandidates(dayKey);
+}
+
+// The viewer's own real pins for `dayKey`, merged with whatever
+// computeVarietyRotation decided must be forced in that day (see
+// recommendation.mjs's own Round 44 comment on mergeVarietyForcedIds for
+// why a hard force, not a score nudge, is what actually guarantees a
+// rotation's assigned winner wins its slot). Every real computeDayPlan/
+// naturalSlotChoice call site below uses this instead of reading
+// state.pinnedChoices directly, so rotation and a genuine swipe-to-pin are
+// always resolved together, consistently.
+function pinnedForDayWithRotation(dayKey) {
+  return mergeVarietyForcedIds(state.pinnedChoices.get(dayKey), getVarietyRotation().get(dayKey));
 }
 
 // The actual "I will watch this" commitment (see buildMatchStack) - records
@@ -1207,7 +1221,7 @@ function dayCandidatesForPlan(dayKey) {
 // 偏好 forever instead of reverting to 推薦.
 function pinSlotChoice(dayKey, slotKey, matchId) {
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, state.pinnedChoices.get(dayKey), {
+  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDayWithRotation(dayKey), {
     scoreField: 'planningScore'
   });
   state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, naturalMatchId);
@@ -2082,7 +2096,15 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
+  const dayPlan = computeDayPlan(dayKey, dayCandidates, pinnedForDayWithRotation(dayKey), { scoreField: 'planningScore' });
+  // computeDayPlan's own forcedIds mechanism marks every forced pick as
+  // .isPreferred (indistinguishable from a real viewer pin) - correct for
+  // a genuine pin, wrong for a rotation-forced one (see
+  // recommendation.mjs's own Round 41/44 comments: this is exactly the
+  // bug that got Gemini's forced override removed). Put the correct 推薦
+  // label back on anything ONLY rotation forced in, never touching an id
+  // that's ALSO a real pin.
+  clearRotationIsPreferred(dayCandidates, getVarietyRotation().get(dayKey), state.pinnedChoices.get(dayKey));
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {

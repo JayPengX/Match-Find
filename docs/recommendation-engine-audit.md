@@ -4580,3 +4580,106 @@ real fetched-data localStorage snapshot per this doc's own established
 zero-cost pattern): zero `pageerror`s loading the page and navigating
 across multiple day tabs, confirming `getVarietyRotation`'s memoization/
 invalidation wiring doesn't crash or throw across real render cycles.
+
+## Round 44 (2026-09-22): two more corrections to the whole-window rotation, both caught before shipping via live-data debugging
+
+Two separate issues found while verifying Round 43 against the real
+2026-09-22 fetch, same day.
+
+**1. "if Brewer win day three outright then day one should be someone
+else."** Direct correction to Round 43's own first cut, which used a
+fixed `pool[i % pool.length]` assignment: day `i` of a run always got
+`pool[i]` regardless of what happened on other days. Live-tested against
+the real Milwaukee Brewers @ Philadelphia Phillies 3-day run
+(09-23/24/25): its real pool has 3 members (itself, Cleveland Guardians @
+Boston Red Sox - close all 3 days, Tampa Bay Rays @ New York Yankees -
+close only on 09-24). The fixed rotation assigned day 3 (09-25) to a pool
+position that, on investigation, mapped to whichever member the day index
+landed on - and because that assignment sometimes wasn't actually close on
+that SPECIFIC day, forcing was skipped and the incumbent won BOTH day 1
+and day 3, while Tampa Bay Rays @ New York Yankees (only close on day 2)
+never won at all. Replaced the fixed rotation with a proper maximum
+bipartite matching (Kuhn's algorithm): days on one side, pool members on
+the other, an edge wherever `eligibleDaysByMember` says a member was
+actually close on that specific day. Members are tried scarcest-first (a
+rarely-close alternative, eligible on only one day, has to claim it before
+the incumbent - eligible every day of the run - greedily takes it
+instead). Verified: Brewers @ Phillies's real 3-member/3-day case now
+gives each member exactly one win (09-23 Brewers, 09-24 Rays @ Yankees,
+09-25 Guardians @ Red Sox in one live run, or an equally-valid permutation
+depending on the exact tie-break state - the invariant checked is "each of
+the three wins exactly once", not a specific day assignment).
+
+**2. A real bug caught mid-verification, before it ever reached the live
+site**: forcing a rotation assignment by PENALIZING the incumbent's own
+`planningScore` (Round 43's own mechanism) only ever guaranteed the
+incumbent LOST - not that the intended rotation winner in particular WON.
+Debugging the real Brewers run's day 3 (09-25) revealed exactly why:
+`computeDayPlan` re-solves the WHOLE day's schedule fresh once a score
+changes (via `weightedIntervalSchedule`), and penalizing Brewers by 0.46 to
+hand its slot to Cleveland Guardians @ Boston Red Sox instead actually
+handed it to Tampa Bay Rays @ New York Yankees - a match NOT in Brewers'
+own near-total-overlap cluster (so absent from its `.alternativeIds`,
+hence never considered part of the rotation's own pool for that day) that
+still genuinely conflicted with Brewers/Guardians' time slot in the DP's
+own real-interval sense and simply scored higher than Guardians once
+Brewers dropped. A soft nudge has no way to account for a competitor
+outside its own pool; only an outright FORCE does. Replaced the
+score-penalty mechanism entirely:
+
+- `computeVarietyRotation` now returns `Map<dayKey, Set<matchId>>` (which
+  id(s) must be forced to win that day) instead of `Map<dayKey,
+  Map<matchId, penalty>>`.
+- `mergeVarietyForcedIds(pinnedForDay, forcedIds)` merges the rotation's
+  own forced id(s) into the SAME `pinnedForDay` a real viewer's own
+  swipe-to-pin already uses - `computeDayPlan`'s own `forcedIds`/
+  `excludedIds` mechanism then guarantees the assignment wins its slot
+  unconditionally, the identical guarantee a real pin has, with the same
+  correct exclusion of any other near-total-overlap conflict.
+  `applyVarietyRotationPenalties` (the old penalty-applier) is deleted.
+- Since `computeDayPlan`'s forced-pick mechanism marks every forced id
+  `.isPreferred = true` (no distinction between "the viewer pinned this"
+  and "a system process forced this in" - the EXACT Round 41 bug that got
+  Gemini's own forced override removed for mislabeling 推薦 as 偏好),
+  `clearRotationIsPreferred(dayMatches, forcedIds, pinnedForDay)` puts the
+  correct `.isPreferred = false` back immediately after the real, final
+  `computeDayPlan` call, for every id ONLY rotation forced in (never
+  touching an id that's ALSO a genuine pin).
+
+**3. A related tie-break refinement, found live-testing the SAME Rays @
+Phillies 2-day run (09-26/27)**: its real pool has TWO other matchups tied
+with it at "close every day" (Baltimore Orioles @ New York Yankees, Chicago
+Cubs @ Boston Red Sox) - a genuine 3-way tie for only 2 days, so one member
+necessarily can't be placed regardless of tie-break order. The first
+version's pure-alphabetical tie-break among equal-scarcity members
+happened to rank the incumbent (Rays @ Phillies) last, so the actual best
+natural pick won NEITHER of its own two days - overcorrecting well past
+"add variety" into "the best team never wins". Fixed by giving the run's
+own matchupKey first claim specifically among members tied at the SAME
+scarcity (a genuinely scarcer alternative - fewer eligible days - still
+outranks the incumbent, as intended; only an EQUAL-scarcity tie now favors
+it). Verified: the real Rays @ Phillies run now correctly keeps one of its
+two days.
+
+**Full live re-verification after both fixes**: `dump-day-plan.mjs` for
+2026-09-22 through 09-27, MLB - Brewers @ Phillies's 3-day run splits
+09-23/24/25 across all three real contenders, one win each. Rays @
+Phillies's 2-day run gives the incumbent one of its two days (09-27) and
+Baltimore Orioles @ New York Yankees the other (09-26). Padres @ Dodgers
+stays untouched throughout both runs' whole span. A before/after diff
+across the whole fetched window shows exactly 3 intended days differ, zero
+unintended changes anywhere else (including every non-MLB sport), and a
+direct check confirms zero `.isPreferred` mislabels anywhere in the window
+with no real pins set (matching Round 41's own original bug report).
+Re-verified once more in a real browser via Playwright (seeded from a real
+fetched-data localStorage snapshot): zero `pageerror`s, all visible
+recommended-tags correctly read 推薦.
+
+Rewrote the variety test suite around the new forced-id contract:
+`mergeVarietyForcedIds`/`clearRotationIsPreferred` tested directly, a
+dedicated regression test reproducing the exact "outside-the-pool
+candidate steals the slot" live bug (proving the hard-force fix), the
+3-day/3-contender end-to-end case (now also asserting `isPreferred` stays
+false throughout), and a new dedicated test for the 3-way-tie-over-2-days
+shape confirming the incumbent still wins at least one of its own days.
+Full suite **389/389**.
