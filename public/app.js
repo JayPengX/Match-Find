@@ -3012,18 +3012,21 @@ function reloadOntoNewAppVersion() {
 // comment). Live-reported directly: wanting the app to "always keep itself
 // up to date" rather than relying on that manual tap.
 //
-// Checks periodically in the background and, the moment a new deploy is
-// found, reloads automatically - but only while nobody is actually looking
-// at the tab, the same way every other background refresh tier here already
-// defers disruptive work rather than yanking an active viewer off whatever
-// they're doing (mid-swipe, mid-read). A tab that's already hidden at check
-// time reloads immediately (nothing to interrupt); a tab that's visible
-// just gets an unobtrusive note in Settings, applied automatically the
-// moment the viewer backgrounds the tab at all (even briefly - see the
+// No timer of its own - wired straight into refreshFullWindow below (the
+// existing full-window data grab, already running every FULL_REFRESH_MS in
+// the background, on top of once at init() and once on any stale foreground
+// return), so a version check just rides along with a fetch that was
+// happening anyway rather than this file needing to track yet another
+// independent schedule. The moment a new deploy is found, this reloads
+// automatically - but only while nobody is actually looking at the tab, the
+// same way every other background refresh tier here already defers
+// disruptive work rather than yanking an active viewer off whatever they're
+// doing (mid-swipe, mid-read). A tab that's already hidden at check time
+// reloads immediately (nothing to interrupt); a tab that's visible just
+// gets an unobtrusive note in Settings, applied automatically the moment
+// the viewer backgrounds the tab at all (even briefly - see the
 // `visibilitychange` listener below) rather than left for them to notice
 // and tap the button themselves.
-const APP_VERSION_CHECK_INTERVAL_MS = 10 * 60_000;
-let appVersionCheckTimer = null;
 let newAppVersionPending = false;
 
 async function checkForAppVersionUpdate() {
@@ -3036,14 +3039,6 @@ async function checkForAppVersionUpdate() {
   }
   newAppVersionPending = true;
   updateStatusText.textContent = '有新版本可用，將在你離開此頁籤時自動更新，或點擊「立即重新整理」立即更新。';
-}
-
-function scheduleAppVersionCheck() {
-  if (appVersionCheckTimer) clearTimeout(appVersionCheckTimer);
-  appVersionCheckTimer = setTimeout(async () => {
-    await checkForAppVersionUpdate();
-    scheduleAppVersionCheck();
-  }, APP_VERSION_CHECK_INTERVAL_MS);
 }
 
 // `silent` keeps the background timer from fighting with a viewer who just
@@ -3074,6 +3069,12 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = '資料已更新。';
+    // Rides along with this same periodic data grab rather than keeping its
+    // own separate schedule - see checkForAppVersionUpdate's own comment.
+    // Runs last, after the "資料已更新" status text above, so a version
+    // note this finds is the one left showing, not immediately overwritten
+    // by it.
+    await checkForAppVersionUpdate();
   } catch (error) {
     console.error('full refresh failed', error);
     if (!silent && statusEl) statusEl.textContent = '重新整理失敗，請稍後再試。';
@@ -3409,18 +3410,12 @@ async function handleForegroundReturn(awayMs) {
   // never "live" in the sense the other two tiers are, so a 45-second
   // backgrounding doesn't need to force ~50+ requests just to be thorough.
   if (awayMs >= FULL_REFRESH_MS) {
+    // Includes its own version check - see checkForAppVersionUpdate's own
+    // comment on why that's wired into refreshFullWindow directly rather
+    // than kept as a separate call here too.
     await refreshFullWindow({ silent: true }).catch(() => {});
     scheduleFullRefresh();
   }
-  // Same "don't wait up to APP_VERSION_CHECK_INTERVAL_MS more minutes"
-  // reasoning as the two tiers above - a tab back from being away doesn't
-  // need to wait on the periodic timer's own next tick to find out a new
-  // deploy went out while it was gone. Runs after the tab is already
-  // visible again (this function only ever runs from that transition), so
-  // it always takes checkForAppVersionUpdate's "visible" branch - never a
-  // disruptive reload the instant someone returns, just the same
-  // unobtrusive Settings note as any other daytime check.
-  await checkForAppVersionUpdate();
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -3560,11 +3555,10 @@ async function init() {
     pollLiveMatches().catch(error => console.error('initial live poll failed', error));
   }
   scheduleLivePoll();
-  // refreshFullWindow already ran once, awaited, above - just arm its
-  // own periodic timer for ongoing freshness from here, not a second
-  // redundant call.
+  // refreshFullWindow already ran once, awaited, above (including its own
+  // version check) - just arm its own periodic timer for ongoing
+  // freshness/update-checking from here, not a second redundant call.
   scheduleFullRefresh();
-  scheduleAppVersionCheck();
 }
 
 init();
