@@ -19,6 +19,17 @@
      directly (no real Safari/WebKit available here - see app.js's own
      comment on buildMatchStack for the fuller context). -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<!-- Traditional Chinese text below is this document's static, no-JS
+     fallback/initial paint only. This is a plain static file with no
+     per-request templating (see scripts/build-data.mjs's own top comment -
+     it never touches this file), so the REAL displayed language - title,
+     meta tags, every label below - is decided client-side by
+     applyStaticTranslations() in app.js, from public/lib/i18n.mjs's
+     detectLocale()/t(), the moment the page's script runs. Every element
+     that function targets by id below gets its text/aria-label overwritten
+     before #app or #settings-panel (both `hidden` by default) are ever
+     shown, so there's no real flash-of-wrong-language for anything except
+     the browser tab's own <title>, which cannot be hidden. -->
 <title>Match Find — 今晚看什麼</title>
 <meta name="description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
@@ -44,25 +55,25 @@
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>
   <div id="settings-panel" class="settings-panel" hidden role="dialog" aria-label="設定">
     <div class="settings-panel-header">
-      <h2>設定</h2>
+      <h2 id="settings-heading">設定</h2>
       <button id="settings-close-btn" type="button" aria-label="關閉">✕</button>
     </div>
 
     <section class="settings-section">
-      <h3>賽事優先順序</h3>
-      <p class="settings-hint">時間衝突時，排名較前的優先。</p>
+      <h3 id="settings-priority-heading">賽事優先順序</h3>
+      <p id="settings-priority-hint" class="settings-hint">時間衝突時，排名較前的優先。</p>
       <div id="settings-sport-list" class="settings-sport-list"></div>
       <button id="settings-reset-btn" type="button" class="settings-reset">重設為預設順序</button>
     </section>
 
     <section class="settings-section">
-      <h3>已啟用的運動</h3>
-      <p class="settings-hint">關閉的運動不會出現在網站上。</p>
+      <h3 id="settings-enabled-heading">已啟用的運動</h3>
+      <p id="settings-enabled-hint" class="settings-hint">關閉的運動不會出現在網站上。</p>
       <div id="settings-enabled-sports" class="settings-chip-list"></div>
     </section>
 
     <section class="settings-section">
-      <h3>更新</h3>
+      <h3 id="settings-update-heading">更新</h3>
       <p id="update-status-text" class="settings-hint">資料會持續自動更新。</p>
       <div class="settings-btn-row">
         <button id="refresh-data-btn" type="button" class="settings-action-btn">立即重新整理</button>
@@ -97,21 +108,21 @@
     </div>
 
     <section id="recommended-section">
-      <h2 class="section-label"><span data-day-label></span>推薦賽事</h2>
+      <h2 class="section-label"><span data-day-label></span><span id="recommended-heading-text">推薦賽事</span></h2>
       <div id="recommended-list"></div>
       <p id="recommended-empty" class="empty-state" hidden>今天沒有特別推薦的賽事。</p>
       <p id="recommended-loading" class="section-loading" hidden aria-label="載入中"><span class="loading-spinner" aria-hidden="true"></span></p>
     </section>
 
     <section id="all-matches-section">
-      <h2 class="section-label"><span data-day-label></span>所有賽事</h2>
+      <h2 class="section-label"><span data-day-label></span><span id="all-matches-heading-text">所有賽事</span></h2>
       <div id="all-match-list"></div>
       <p id="all-empty" class="empty-state" hidden>這一天沒有賽事。</p>
       <p id="all-loading" class="section-loading" hidden aria-label="載入中"><span class="loading-spinner" aria-hidden="true"></span></p>
     </section>
 
     <section id="tbd-section" hidden>
-      <h2 class="section-label">時間未定</h2>
+      <h2 class="section-label" id="tbd-heading">時間未定</h2>
       <div id="tbd-list"></div>
     </section>
   </main>

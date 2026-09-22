@@ -6,6 +6,16 @@
 
 ---
 
+## English
+
+The site's UI is available in both English and Traditional Chinese. The
+displayed language is auto-detected from your browser/device language
+preference on first visit (see `public/lib/i18n.mjs`); everything below this
+section is written for the project's primary Traditional-Chinese-speaking
+audience and is not translated in this document.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -26,7 +36,9 @@
 
 ## Overview
 
-Match Find is a small, Traditional-Chinese-labeled static site that answers
+Match Find is a small static site, with a UI available in both Traditional
+Chinese and English (auto-detected from your browser - see [English](#english)
+above), that answers
 one question: **what's actually worth watching today**, across the Premier
 League, MLB, NBA, and F1. It shows fixtures in the viewer's own local time,
 with team logos, home/away labels, bilingual (English / Traditional

@@ -40,10 +40,13 @@
 // local-only, in this browser's own localStorage, with no server-side sync
 // of any kind (see README's "Local-only, no accounts").
 //
-// UI copy is Traditional Chinese throughout; team names and venues stay
-// bilingual (see buildTeamRow/renderVenue) since an English team/venue name
-// is often the more recognizable half for a fixture nobody has a settled
-// Chinese name for yet.
+// UI copy goes through ./lib/i18n.mjs's t() (zh-TW by default, English
+// auto-detected from the browser - see that module's own top comment); team
+// names and venues stay bilingual regardless of UI language (see
+// buildTeamRow/renderVenue) since an English team/venue name is often the
+// more recognizable half for a fixture nobody has a settled Chinese name
+// for yet - that's real sports data, not UI chrome, so it isn't part of the
+// i18n layer at all.
 //
 // The pure scoring/viewing-plan math (overlap/slot/weighted-interval-
 // scheduling helpers, computeDayPlan, resolveViewingPlan, confidence, the
@@ -97,6 +100,11 @@ import {
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
 import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+// UI copy/locale layer - see that module's own top comment. Every piece of
+// genuine UI chrome (labels, hints, status text, aria-labels) goes through
+// t() rather than a hardcoded literal, so this file itself never has to
+// change again to add a third language, only ./lib/i18n.mjs does.
+import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
 
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
@@ -342,17 +350,23 @@ const state = {
 // Sport labels as ESPN/match-builder.mjs spell them internally (see
 // TEAM_LEAGUES in that script) stay the stable data key and CSS hook
 // (data-sport="Premier League" etc.) - only the on-screen label goes
-// through this map, so the underlying data model never has to change
-// just because the display language does. MLB/NBA/F1 stay as their
-// English initialisms - that's how Taiwanese sports media normally
-// writes them too, even in otherwise-Chinese text; only the Premier
-// League has a standard, universally-used Chinese short name.
-const SPORT_LABELS_ZH = {
-  'Premier League': '英超',
-  MLB: 'MLB',
-  NBA: 'NBA',
-  F1: 'F1'
+// through i18n.mjs's t(), so the underlying data model never has to change
+// just because the display language does (nor does adding a display
+// language ever need to touch this map - only ./lib/i18n.mjs's STRINGS).
+// MLB/NBA/F1 stay as their English initialisms in zh-TW too - that's how
+// Taiwanese sports media normally writes them, even in otherwise-Chinese
+// text; only the Premier League has a standard, universally-used Chinese
+// short name (see STRINGS['zh-TW'].sportPremierLeague).
+const SPORT_LABEL_KEYS = {
+  'Premier League': 'sportPremierLeague',
+  MLB: 'sportMLB',
+  NBA: 'sportNBA',
+  F1: 'sportF1'
 };
+
+function sportLabel(sport) {
+  return t(SPORT_LABEL_KEYS[sport]) || sport;
+}
 
 // Each league/sanctioning body's own real, official mark, hotlinked from
 // ESPN's CDN - the same team-logos.espncdn.com-family hosting the team
@@ -442,7 +456,7 @@ function buildSportIcon(sport) {
 // DEFAULT_MY_SERVICE_IDS below) means at all. Adding a new service
 // later is just one more entry here (id, matching pattern, badge/color) -
 // nothing else in this file needs to change, same reasoning as
-// SPORT_LABELS_ZH above for sports.
+// SPORT_LABEL_KEYS above for sports.
 //
 // `badge` is a short plain-text mark, not a reproduction of the real
 // trademarked logo (this is a static site with no image-licensing story of
@@ -466,7 +480,7 @@ function buildSportIcon(sport) {
 // text-matched rather than collapsed to those two exact values so a third
 // service (Netflix) already has a ready slot the day this site covers a
 // league that airs on it, with nothing else in this file needing to
-// change (same reasoning as SPORT_LABELS_ZH above for sports).
+// change (same reasoning as SPORT_LABEL_KEYS above for sports).
 // `logoBg` is a two-stop gradient, not a flat fill (an earlier version used
 // a flat fill, which read as a plain colored sticker sitting behind the
 // logo rather than a designed icon) - the logo itself stays each service's
@@ -527,6 +541,72 @@ const settingsEnabledSports = document.getElementById('settings-enabled-sports')
 const updateStatusText = document.getElementById('update-status-text');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
 
+// ---- Static UI copy (index.html) --------------------------------------
+//
+// public/index.html is served as-is, with no per-request templating (see
+// scripts/build-data.mjs's own top comment - it never touches this file),
+// so there is no build step to bake the detected/persisted locale (see
+// ./lib/i18n.mjs) into the page's markup. This runs once, up front, and
+// overwrites every piece of static Traditional-Chinese copy that HTML file
+// ships with - the <title>/meta tags, every Settings-panel label, every
+// section heading/hint/aria-label - with the real t() output for whichever
+// locale actually applies. Every element this touches inside #app/
+// #settings-panel is `hidden` by default (see index.html) until this app's
+// own render calls unhide it, so there's no user-visible flash of the
+// wrong language for any of it; the one exception is the browser tab's own
+// <title>, which can't be hidden, so a viewer whose tab was already open
+// before this ran could in principle see it change - unavoidable without a
+// server-side render this static site deliberately doesn't have (see
+// README's own "no build step" story).
+function applyStaticTranslations() {
+  document.documentElement.lang = getLocale() === 'en' ? 'en' : 'zh-Hant';
+  document.title = t('title');
+  const setMeta = (selector, value) => {
+    const el = document.querySelector(selector);
+    if (el) el.setAttribute('content', value);
+  };
+  setMeta('meta[name="description"]', t('metaDescription'));
+  setMeta('meta[property="og:title"]', t('title'));
+  setMeta('meta[property="og:description"]', t('metaDescription'));
+  setMeta('meta[name="twitter:title"]', t('title'));
+  setMeta('meta[name="twitter:description"]', t('metaDescription'));
+
+  const setText = (id, key) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = t(key);
+  };
+  const setAria = (el, key) => {
+    if (el) el.setAttribute('aria-label', t(key));
+  };
+
+  setAria(settingsPanel, 'settingsAriaLabel');
+  setText('settings-heading', 'settingsHeading');
+  setAria(settingsCloseBtn, 'closeAriaLabel');
+  setText('settings-priority-heading', 'sportPriorityHeading');
+  setText('settings-priority-hint', 'sportPriorityHint');
+  settingsResetBtn.textContent = t('resetPriorityBtn');
+  setText('settings-enabled-heading', 'enabledSportsHeading');
+  setText('settings-enabled-hint', 'enabledSportsHint');
+  setText('settings-update-heading', 'updateHeading');
+  updateStatusText.textContent = t('updateStatusDefault');
+  refreshDataBtn.textContent = t('refreshNowBtn');
+
+  setAria(loadingStateEl, 'loadingAriaLabel');
+  setAria(dayScrollerEl, 'daySelectorAriaLabel');
+  setAria(filtersRow, 'sportFilterAriaLabel');
+  setAria(settingsBtn, 'settingsAriaLabel');
+  setText('recommended-heading-text', 'recommendedHeading');
+  setText('recommended-empty', 'recommendedEmpty');
+  setAria(recommendedLoadingEl, 'loadingAriaLabel');
+  setText('all-matches-heading-text', 'allMatchesHeading');
+  setText('all-empty', 'allEmpty');
+  setAria(allLoadingEl, 'loadingAriaLabel');
+  setText('tbd-heading', 'tbdHeading');
+  setText('empty-state', 'globalEmpty');
+  setText('error-state', 'globalError');
+}
+applyStaticTranslations();
+
 // ---- Sport priority settings ---------------------------------------------
 //
 // The DP in resolveViewingPlan picks whichever match scores highest in each
@@ -569,7 +649,7 @@ const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // ./lib/recommendation.mjs alongside resolveViewingPlan, which is the only
 // place they're actually used.
 
-const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABELS_ZH);
+const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABEL_KEYS);
 
 function loadPriorityOrder() {
   try {
@@ -688,7 +768,7 @@ function renderSettingsPanel() {
       icon.classList.add('settings-sport-icon');
       const label = document.createElement('span');
       label.className = 'settings-sport-label';
-      label.textContent = SPORT_LABELS_ZH[sport];
+      label.textContent = sportLabel(sport);
       const moveGroup = document.createElement('div');
       moveGroup.className = 'settings-move-group';
 
@@ -704,14 +784,14 @@ function renderSettingsPanel() {
 
       const upBtn = document.createElement('button');
       upBtn.type = 'button';
-      upBtn.setAttribute('aria-label', `將 ${SPORT_LABELS_ZH[sport]} 往上移`);
+      upBtn.setAttribute('aria-label', t('moveSportUp', { sport: sportLabel(sport) }));
       upBtn.textContent = '↑';
       upBtn.disabled = index === 0;
       upBtn.addEventListener('click', () => move(-1));
 
       const downBtn = document.createElement('button');
       downBtn.type = 'button';
-      downBtn.setAttribute('aria-label', `將 ${SPORT_LABELS_ZH[sport]} 往下移`);
+      downBtn.setAttribute('aria-label', t('moveSportDown', { sport: sportLabel(sport) }));
       downBtn.textContent = '↓';
       downBtn.disabled = index === state.priorityOrder.length - 1;
       downBtn.addEventListener('click', () => move(1));
@@ -746,7 +826,7 @@ function renderEnabledSportsPanel() {
       chip.className = enabled ? 'settings-chip is-active' : 'settings-chip';
       chip.appendChild(buildSportIcon(sport));
       const label = document.createElement('span');
-      label.textContent = SPORT_LABELS_ZH[sport];
+      label.textContent = sportLabel(sport);
       chip.appendChild(label);
       chip.setAttribute('aria-pressed', String(enabled));
       chip.disabled = enabled && state.enabledSports.size === 1;
@@ -798,16 +878,18 @@ settingsResetBtn.addEventListener('click', () => {
   recomputeAndRender();
 });
 
-const LOCALE = 'zh-Hant';
-
+// Reads the CURRENT i18n locale on every call (via dateFnsLocaleTag), not a
+// fixed constant - a match's clock time/weekday name has to actually read
+// in English (AM/PM, "Wed" not "週三") for an English-UI viewer, not just
+// the surrounding label text.
 function localTimeFormatter() {
-  return new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', minute: '2-digit' });
+  return new Intl.DateTimeFormat(dateFnsLocaleTag(), { hour: 'numeric', minute: '2-digit' });
 }
 function localDayFormatter() {
-  return new Intl.DateTimeFormat(LOCALE, { weekday: 'long', month: 'long', day: 'numeric' });
+  return new Intl.DateTimeFormat(dateFnsLocaleTag(), { weekday: 'long', month: 'long', day: 'numeric' });
 }
 function shortDayFormatter() {
-  return new Intl.DateTimeFormat(LOCALE, { weekday: 'short', month: 'numeric', day: 'numeric' });
+  return new Intl.DateTimeFormat(dateFnsLocaleTag(), { weekday: 'short', month: 'numeric', day: 'numeric' });
 }
 
 // Reads matchLifecycleState (./lib/recommendation.mjs) rather than
@@ -824,15 +906,15 @@ function shortDayFormatter() {
 // styling below) can't independently drift from it.
 function relativeLabel(match, now = Date.now()) {
   const state = matchLifecycleState(match, now);
-  if (state === LIFECYCLE_STATES.LIVE || state === LIFECYCLE_STATES.ENDING_SOON) return '直播中';
-  if (state === LIFECYCLE_STATES.STARTING_SOON) return '即將開始';
+  if (state === LIFECYCLE_STATES.LIVE || state === LIFECYCLE_STATES.ENDING_SOON) return t('liveNow');
+  if (state === LIFECYCLE_STATES.STARTING_SOON) return t('startingSoon');
 
   const diffMin = Math.round((Date.parse(match.startTimeUtc) - now) / 60_000);
-  if (diffMin < 60) return `${diffMin} 分鐘後`;
+  if (diffMin < 60) return t('minutesLater', { mins: diffMin });
   if (diffMin < 1440) {
     const hours = Math.floor(diffMin / 60);
     const mins = diffMin % 60;
-    return mins ? `${hours} 小時 ${mins} 分後` : `${hours} 小時後`;
+    return mins ? t('hoursMinutesLater', { hours, mins }) : t('hoursLater', { hours });
   }
   // Past 24 hours, count in whole days instead of letting the hour count
   // just keep climbing (nobody reads "38 小時後" faster than "1 天 14
@@ -840,7 +922,7 @@ function relativeLabel(match, now = Date.now()) {
   // being enough to place a match without checking a calendar.
   const days = Math.floor(diffMin / 1440);
   const hours = Math.floor((diffMin % 1440) / 60);
-  return hours ? `${days} 天 ${hours} 小時後` : `${days} 天後`;
+  return hours ? t('daysHoursLater', { days, hours }) : t('daysLater', { days });
 }
 
 // "已結束" plus the final score, when match-builder.mjs actually got one back
@@ -850,9 +932,9 @@ function relativeLabel(match, now = Date.now()) {
 function finishedLabel(match) {
   const scores = (match.competitors || []).map(c => Number(c.score));
   if (scores.length === 2 && scores.every(Number.isFinite)) {
-    return `已結束．${scores[0]}–${scores[1]}`;
+    return t('finishedWithScore', { away: scores[0], home: scores[1] });
   }
-  return '已結束';
+  return t('finished');
 }
 
 // A sport-specific live in-progress WIDGET (MLB's base-occupancy diamond/
@@ -872,14 +954,14 @@ function finishedLabel(match) {
 // CSS class gets applied) - never user-supplied text - so building it via
 // innerHTML is the same safe, already-used pattern as SPORT_ICONS/
 // buildSportIcon above, not a fresh injection risk.
-const INNING_HALF_ZH = { Top: '上', Bot: '下', Mid: '中', End: '完' };
+const INNING_HALF_KEYS = { Top: 'inningTop', Bot: 'inningBot', Mid: 'inningMid', End: 'inningEnd' };
 
 function formatInningHalf(detail) {
   const m = /^(Top|Bot|Mid|End)\s+(\d+)/i.exec((detail || '').trim());
   if (!m) return detail || '';
   const key = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
-  const half = INNING_HALF_ZH[key] || '';
-  return `第 ${m[2]} 局${half}`;
+  const half = INNING_HALF_KEYS[key] ? t(INNING_HALF_KEYS[key]) : '';
+  return t('inningFormat', { n: m[2], half });
 }
 
 function svgFromMarkup(markup) {
@@ -959,7 +1041,12 @@ function basketballLiveNode(match) {
   const live = match.live;
   if (!live) return null;
   const period = Number(live.period);
-  const periodLabel = Number.isFinite(period) && period > 0 ? (period <= 4 ? `第 ${period} 節` : `延長賽 OT${period - 4}`) : '';
+  const periodLabel =
+    Number.isFinite(period) && period > 0
+      ? period <= 4
+        ? t('quarterLabel', { n: period })
+        : t('overtimeLabel', { n: period - 4 })
+      : '';
   const text = [periodLabel, live.displayClock].filter(Boolean).join('．');
   if (!text) return null;
   const wrap = document.createElement('span');
@@ -975,7 +1062,7 @@ function basketballLiveNode(match) {
 function soccerLiveNode(match) {
   const live = match.live;
   if (!live) return null;
-  const half = live.period === 2 ? '下半場' : live.period === 1 ? '上半場' : '';
+  const half = live.period === 2 ? t('secondHalf') : live.period === 1 ? t('firstHalf') : '';
   // A numeric match clock ("76'") gets the half label prefixed; anything
   // ESPN itself already reports as a plain state word (e.g. "Halftime")
   // is shown exactly as-is rather than force-fit into "上半場 Halftime".
@@ -1024,7 +1111,7 @@ function f1FlagIcon(statusDetail) {
 function f1LiveNode(match) {
   const live = match.live;
   if (!live) return null;
-  const lapLabel = Number.isFinite(live.lap) ? `第 ${live.lap} 圈` : '';
+  const lapLabel = Number.isFinite(live.lap) ? t('lapLabel', { n: live.lap }) : '';
   const text = [lapLabel, live.statusDetail].filter(Boolean).join('．');
   if (!text) return null;
   const wrap = document.createElement('span');
@@ -1064,7 +1151,7 @@ function f1LeaderboardNode(match) {
   wrap.className = 'live-leaderboard';
   const label = document.createElement('span');
   label.className = 'live-leaderboard-label';
-  label.textContent = '目前領先';
+  label.textContent = t('currentOrder');
   wrap.appendChild(label);
   live.leaderboard.forEach((driver, i) => {
     const chip = document.createElement('span');
@@ -1125,13 +1212,13 @@ function daysFromToday(date) {
 
 function dayLabelFor(date, { short = false } = {}) {
   const diffDays = daysFromToday(date);
-  if (diffDays === 0) return '今天';
-  if (diffDays === 1) return '明天';
+  if (diffDays === 0) return t('today');
+  if (diffDays === 1) return t('tomorrow');
   // Yesterday is a real, explicitly reachable day now (see match-builder.mjs's
   // own one-day lookback and computeDayPlan treating a finished match as a
   // normal candidate) - it deserves the same clear "昨天" label 今天/明天
   // already get, not just falling through to a bare weekday/date.
-  if (diffDays === -1) return '昨天';
+  if (diffDays === -1) return t('yesterday');
   return (short ? shortDayFormatter() : localDayFormatter()).format(date);
 }
 
@@ -1436,7 +1523,7 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
   const sideEl = node.querySelector('.team-side');
   if (homeAway === 'home' || homeAway === 'away') {
     sideEl.hidden = false;
-    sideEl.textContent = homeAway === 'home' ? '主' : '客';
+    sideEl.textContent = homeAway === 'home' ? t('homeShort') : t('awayShort');
     sideEl.classList.toggle('is-home', homeAway === 'home');
     sideEl.classList.toggle('is-away', homeAway === 'away');
   } else {
@@ -1534,7 +1621,7 @@ function updateMatchCard(node, match) {
     // match-builder.mjs's isTimeTbd) - showing it as a real clock time would
     // just be a confident-looking guess, so this says plainly that it
     // isn't known yet instead.
-    node.querySelector('.match-time-range').textContent = '時間未定';
+    node.querySelector('.match-time-range').textContent = t('timeTbd');
     node.querySelector('.match-time-relative').textContent = '';
   } else {
     // One line, not three stacked labels - "7:00 – 9:35 下午" reads at a
@@ -1563,7 +1650,7 @@ function updateMatchCard(node, match) {
     node.querySelector('.sport-icon').replaceWith(buildSportIcon(match.sport));
   }
   badge.dataset.sport = match.sport;
-  node.querySelector('.sport-badge-text').textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
+  node.querySelector('.sport-badge-text').textContent = sportLabel(match.sport);
 
   // Only shown once there's an actual score worth showing - a pre-game
   // fixture's own "0" from ESPN isn't a real score yet, it's just the
@@ -1666,8 +1753,19 @@ function updateMatchCard(node, match) {
     oddsEl.setAttribute(
       'aria-label',
       hasDraw
-        ? `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，和局 ${Math.round(match.oddsWinPctDraw)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
-        : `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
+        ? t('winProbAriaWithDraw', {
+            away: away.name,
+            awayPct: Math.round(match.oddsWinPctAway),
+            drawPct: Math.round(match.oddsWinPctDraw),
+            home: home.name,
+            homePct: Math.round(match.oddsWinPctHome)
+          })
+        : t('winProbAria', {
+            away: away.name,
+            awayPct: Math.round(match.oddsWinPctAway),
+            home: home.name,
+            homePct: Math.round(match.oddsWinPctHome)
+          })
     );
   } else {
     // Explicit reset, not just "leave it as the template default" - this
@@ -1694,10 +1792,14 @@ function updateMatchCard(node, match) {
     // the Grand Prix" - see resolvePoleWinnerOdds's own comment - so the
     // label has to say which one this actually is rather than always
     // reading as a race-winner probability.
-    const outrightLabel = match.id.endsWith('-qual') ? '桿位機率' : '奪冠機率';
+    const outrightLabel = match.id.endsWith('-qual') ? t('poleOdds') : t('titleOdds');
+    outrightEl.querySelector('.match-odds-outright-label').textContent = outrightLabel;
     outrightEl.setAttribute(
       'aria-label',
-      `${outrightLabel}：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
+      t('outrightAria', {
+        label: outrightLabel,
+        items: match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join(t('commaSeparator'))
+      })
     );
   } else {
     outrightEl.hidden = true; // see the odds bar's own reset comment just above
@@ -1802,7 +1904,7 @@ function updateMatchCard(node, match) {
   const recommendedTag = node.querySelector('.recommended-tag');
   if (match.isPreferred) {
     recommendedTag.hidden = false;
-    recommendedTag.textContent = '偏好';
+    recommendedTag.textContent = t('preferredTag');
     recommendedTag.classList.add('is-preferred');
   } else if (match.recommended) {
     recommendedTag.hidden = false;
@@ -1810,7 +1912,7 @@ function updateMatchCard(node, match) {
     // baked-in default text - a reused node (see this function's own top
     // comment) that showed "偏好" on an earlier render, before a pin got
     // released, would otherwise keep reading "偏好" forever.
-    recommendedTag.textContent = '推薦';
+    recommendedTag.textContent = t('recommendedTag');
     recommendedTag.classList.remove('is-preferred');
   } else {
     recommendedTag.hidden = true;
@@ -1879,12 +1981,14 @@ function updateMatchCard(node, match) {
     const mins = range ? Math.round((range.end - range.start) / 60_000) : null;
     const clause =
       mins === null
-        ? '時間重疊'
+        ? t('overlapGeneric')
         : mins < 60
-          ? `重疊 ${mins} 分鐘`
-          : `重疊 ${Math.floor(mins / 60)} 小時${mins % 60 ? ` ${mins % 60} 分` : ''}`;
+          ? t('overlapMinutes', { mins })
+          : mins % 60
+            ? t('overlapHoursMinutes', { hours: Math.floor(mins / 60), mins: mins % 60 })
+            : t('overlapHours', { hours: Math.floor(mins / 60) });
     conflictNote.hidden = false;
-    conflictNote.textContent = `與「${earlierOverlap.name}」${clause}`;
+    conflictNote.textContent = t('conflictNote', { name: earlierOverlap.name, clause });
     // Only dims the card when it's the weaker of the two - "you could be
     // watching a better game right now instead" is worth de-emphasizing
     // for; two matches that are BOTH recommended and simply overlap are
@@ -1907,6 +2011,7 @@ function updateMatchCard(node, match) {
   const preferBtn = node.querySelector('.match-prefer-btn');
   if (!match.isFinished && !match.recommended && !isQuietHours(match)) {
     preferBtn.hidden = false;
+    preferBtn.textContent = t('preferMatchBtn');
     // `_match` is refreshed every render; the click listener itself is
     // bound exactly once per node, ever (see updateTeamRow's own comment on
     // why a reused node needs this) and always reads the CURRENT match off
@@ -2152,7 +2257,7 @@ function renderFilters() {
       btn.type = 'button';
       if (sport !== 'all') btn.appendChild(buildSportIcon(sport));
       const label = document.createElement('span');
-      label.textContent = sport === 'all' ? '全部' : SPORT_LABELS_ZH[sport] || sport;
+      label.textContent = sport === 'all' ? t('filterAll') : sportLabel(sport);
       btn.appendChild(label);
       btn.setAttribute('aria-pressed', String(sport === state.activeSport));
       btn.addEventListener('click', () => {
@@ -2250,7 +2355,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   const hint = document.createElement('p');
   hint.className = 'match-stack-hint';
-  hint.textContent = '⟷ 這個時段只能擇一收看，點選切換要看哪一場';
+  hint.textContent = t('matchStackHint');
 
   // A FIXED order (by score, highest first), independent of which member is
   // currently primary - so the dots/arrows always land in the same visual
@@ -2472,7 +2577,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   const prevBtn = document.createElement('button');
   prevBtn.type = 'button';
   prevBtn.className = 'match-stack-arrow';
-  prevBtn.setAttribute('aria-label', '上一場');
+  prevBtn.setAttribute('aria-label', t('prevMatchAria'));
   prevBtn.textContent = '‹';
   prevBtn.disabled = currentIndex === 0;
   prevBtn.addEventListener('click', () => choose(currentIndex - 1));
@@ -2483,7 +2588,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const dot = document.createElement('button');
     dot.type = 'button';
     dot.className = 'match-stack-dot' + (index === currentIndex ? ' is-active' : '');
-    dot.setAttribute('aria-label', `切換到${match.name || index + 1}`);
+    dot.setAttribute('aria-label', t('switchToAria', { name: match.name || index + 1 }));
     dot.addEventListener('click', () => choose(index));
     dots.appendChild(dot);
   });
@@ -2491,7 +2596,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   const nextBtn = document.createElement('button');
   nextBtn.type = 'button';
   nextBtn.className = 'match-stack-arrow';
-  nextBtn.setAttribute('aria-label', '下一場');
+  nextBtn.setAttribute('aria-label', t('nextMatchAria'));
   nextBtn.textContent = '›';
   nextBtn.disabled = currentIndex === ordered.length - 1;
   nextBtn.addEventListener('click', () => choose(currentIndex + 1));
@@ -2984,7 +3089,10 @@ function applyFreshBuild(matches, generatedAt) {
   state.tbdMatches = tbdMatches;
   if (generatedAt) {
     const generated = new Date(generatedAt);
-    generatedNote.textContent = `資料最後更新於 ${localDayFormatter().format(generated)} ${localTimeFormatter().format(generated)}（你的當地時間）`;
+    generatedNote.textContent = t('generatedNote', {
+      day: localDayFormatter().format(generated),
+      time: localTimeFormatter().format(generated)
+    });
   }
   renderTbdSection();
 
@@ -3275,14 +3383,14 @@ async function checkForAppVersionUpdate() {
     return;
   }
   newAppVersionPending = true;
-  updateStatusText.textContent = '有新版本可用，將在你離開此頁籤時自動更新，或點擊「立即重新整理」立即更新。';
+  updateStatusText.textContent = t('newVersionAvailable', { refreshBtn: t('refreshNowBtn') });
 }
 
 // `silent` keeps the background timer from fighting with a viewer who just
 // tapped "立即重新整理" for status text either one might want to set.
 async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
   if (!silent) {
-    if (statusEl) statusEl.textContent = '重新整理中…';
+    if (statusEl) statusEl.textContent = t('refreshing');
     if (button) button.disabled = true;
   }
   try {
@@ -3305,7 +3413,7 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
     state.fullWindowLoaded = true;
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
-    if (!silent && statusEl) statusEl.textContent = '資料已更新。';
+    if (!silent && statusEl) statusEl.textContent = t('dataUpdated');
     // Rides along with this same periodic data grab rather than keeping its
     // own separate schedule - see checkForAppVersionUpdate's own comment.
     // Runs last, after the "資料已更新" status text above, so a version
@@ -3314,7 +3422,7 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
     await checkForAppVersionUpdate();
   } catch (error) {
     console.error('full refresh failed', error);
-    if (!silent && statusEl) statusEl.textContent = '重新整理失敗，請稍後再試。';
+    if (!silent && statusEl) statusEl.textContent = t('refreshFailed');
   } finally {
     if (!silent && button) button.disabled = false;
   }
@@ -3351,7 +3459,7 @@ function scheduleFullRefresh() {
 // buildMatches() fetch, not after it.
 refreshDataBtn.addEventListener('click', async () => {
   refreshDataBtn.disabled = true;
-  updateStatusText.textContent = '檢查版本中…';
+  updateStatusText.textContent = t('checkingVersion');
   const hasNewVersion = await checkForNewAppVersion().catch(() => false);
   if (hasNewVersion) {
     reloadOntoNewAppVersion();
@@ -3697,7 +3805,7 @@ function renderNextUpdateCountdown() {
     return;
   }
   const secs = Math.round(ms / 1000);
-  nextUpdateNote.textContent = secs > 0 ? `下次更新：${secs} 秒後` : '更新中…';
+  nextUpdateNote.textContent = secs > 0 ? t('nextUpdateIn', { secs }) : t('updatingNow');
 }
 
 setInterval(renderNextUpdateCountdown, 1000);
