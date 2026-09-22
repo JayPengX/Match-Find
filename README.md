@@ -195,7 +195,14 @@ competing ones: `bestMatchScore` (`public/lib/recommendation.mjs`) is the
 single blend every viewer's 推薦賽事 is built from - an earlier version let
 you pick between two subtly different "recommendation styles"; that choice
 added confusion without adding real value, so it's gone. `bestMatchScore`
-itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`):
+itself is a weighted blend of five axes (`BEST_MATCH_WEIGHTS`, `skill: 0.35,
+competitiveness: 0.05, watchability: 0.35, enduranceScore: 0.1,
+broadcastQuality: 0.15` as of Round 39 - see that round's own entry in
+`docs/recommendation-engine-audit.md` for why skill was raised and
+competitiveness lowered from their original 0.2/0.2: a direct, explicit
+choice that a clearly-better team should generally beat a merely-tenser
+pairing, accepted with its real, live-verified consequence on an
+already-validated day, not stumbled into):
 
 - **skill** - how GOOD the two teams actually are (`public/lib/objective-score.mjs`'s
   `skillFromWinPct`, from each side's own win%/points-rate) - deliberately a

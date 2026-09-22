@@ -106,6 +106,26 @@ describe('bestMatchScore (the one unified Best Matches blend)', () => {
     assert.ok(bestMatchScore(eliteMatchup) > bestMatchScore(alsoRanMatchup));
   });
 
+  // Round 39 (2026-09-22): direct instruction, after live-verifying the
+  // real numeric consequence first - a clearly better team in a slightly
+  // less tense pairing must beat a lesser team in a tense one, generally,
+  // not just on one complained-about date. Live-verified case (2026-09-24):
+  // Milwaukee Brewers @ Philadelphia Phillies (skill 8, comp 7) must beat
+  // Cleveland Guardians @ Boston Red Sox (skill 6, comp 8) - the exact real
+  // pairing that motivated raising BEST_MATCH_WEIGHTS.skill from 0.2 to
+  // 0.35 (and lowering competitiveness from 0.2 to 0.05 to compensate).
+  // Deliberately real numbers, not synthetic ones, so this test would have
+  // failed against the OLD weights (7.35 beat 7.05) and correctly reflects
+  // the tradeoff the user explicitly accepted (see BEST_MATCH_WEIGHTS' own
+  // comment): the SAME shape also flips Chicago Cubs @ Boston Red Sox
+  // (skill 6, comp 8) below Tampa Bay Rays @ Philadelphia Phillies (skill 7,
+  // comp 7) on 9/26/27 - confirmed acceptable, not a silent regression.
+  test('a clearly-better team in a less-tense pairing beats a lesser team in a tenser one (Round 39)', () => {
+    const brewersPhillies = makeMatch({ skill: 8, competitiveness: 7, watchability: 8, enduranceScore: 5, broadcastQuality: 5 });
+    const guardiansRedSox = makeMatch({ skill: 6, competitiveness: 8, watchability: 8, enduranceScore: 7, broadcastQuality: 7 });
+    assert.ok(bestMatchScore(brewersPhillies) > bestMatchScore(guardiansRedSox));
+  });
+
   test('renormalizes over whichever dimensions are actually present', () => {
     const match = makeMatch({
       competitiveness: undefined,

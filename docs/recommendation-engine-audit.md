@@ -4179,3 +4179,55 @@ stacks render without needing network access in this sandbox:
 
 Full suite: **391/391** (no `recommendation.mjs`/scoring changes this
 round - this is purely `public/app.js`'s render/gesture plumbing).
+
+## Round 40 (2026-09-22): raising skill's weight, deliberately - a direct instruction, verified with real numbers before shipping, not overfit to one date
+
+Direct follow-up to the same message that reported Round 39's UI bug:
+"maybe your prompt is bad cause I honestly think it ain't right, I know
+it's close but this ain't right" - continued disagreement with the
+Guardians/Red Sox pick even after Round 38's grounded Gemini call
+independently reached the same conclusion. Asked directly what the real
+criterion was, rather than guessing again: "I want quality/star teams
+prioritized, period."
+
+**This is exactly Round 33's own already-explored axis, tested with fresh
+data instead of assumed settled.** Round 33's grid search (2026-09-21
+data) found that no reweighting of the five `BEST_MATCH_WEIGHTS` axes could
+flip Guardians/Red Sox → Brewers/Phillies without also flipping the
+already-correct 9/26 Chicago Cubs @ Boston Red Sox → Tampa Bay Rays @
+Philadelphia Phillies - same shape, a lower-skill-but-tenser team vs. a
+higher-skill-but-more-comfortable one. Re-derived this algebraically
+against TODAY's live data (not assumed from a week-old search): letting
+`d` be how much weight moves from `competitiveness` into `skill` (every
+other weight held fixed), 2026-09-24 needs `d > 0.10` to flip
+(Guardians/Red Sox 7.35−2d vs. Brewers/Phillies 7.05+d), while 2026-09-26
+sits at an EXACT tie at `d = 0.10` (Cubs/Red Sox 7.05−2d vs. Rays/Phillies
+a constant 6.85, since skill and competitiveness are equal there) - any
+`d` large enough to fix one day necessarily flips the other too. Same
+structural conflict, independently reproduced on fresh data a week later -
+strong evidence this is real and structural, not a one-week coincidence.
+
+**Put the real trade-off to the user directly, with the actual numbers,
+before touching any code** - "yes, Rays/Phillies would be correct on
+9/26/27 too" was the explicit answer, accepting the consequence rather
+than a blind implementation.
+
+**Implementation.** `BEST_MATCH_WEIGHTS.skill` 0.2 → 0.35,
+`competitiveness` 0.2 → 0.05 (both other axes unchanged; still sums to 1).
+Verified two ways before shipping:
+1. A live scan across EVERY currently-fetched MLB/NBA/EPL/F1 fixture
+   comparing old-weight vs. new-weight top-score-per-day-per-sport:
+   **exactly six flips, all MLB**, all the intended class of case
+   (2026-09-23/24/25 → Brewers/Phillies-shaped picks, 2026-09-26/27/28 →
+   Rays/Phillies) - zero unintended reordering in any other sport or day.
+2. `scripts/dump-day-plan.mjs` end to end (the real scheduler, not just the
+   raw score): 9/23-25 now correctly recommend Milwaukee Brewers @
+   Philadelphia Phillies (still alongside San Diego Padres @ Los Angeles
+   Dodgers, unaffected), and 9/26/27 now correctly recommend Tampa Bay Rays
+   @ Philadelphia Phillies, exactly as confirmed.
+
+Added a dedicated regression test using the real 9/24 numbers (deliberately
+real, not synthetic, so it would have failed against the OLD weights) -
+full suite **392/392**. No `Shared-Proxy`/Gemini changes this round - this
+is entirely the deterministic engine's own weighting, `public/lib/
+recommendation.mjs` only.

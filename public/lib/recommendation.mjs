@@ -107,9 +107,28 @@ export function resolveService(whereToWatchTw) {
 // present" posture public/lib/objective-score.mjs's own weightedAverage uses.
 // Falls back to the build-time composite `match.score` only when NONE of
 // these dimensions are set at all (nothing left to blend).
+// Round 39 (2026-09-22): `skill` raised from 0.2 to 0.35, `competitiveness`
+// lowered from 0.2 to 0.05 (every other weight unchanged) - direct instruction
+// after a real, live disagreement: the deterministic engine kept recommending
+// Cleveland Guardians @ Boston Red Sox (skill 6, a tight, tense pairing) over
+// Milwaukee Brewers @ Philadelphia Phillies (skill 8, a clearly better team,
+// tonight's pairing less nail-biting) on 2026-09-23/24/25, and Round 33's own
+// exhaustive grid search (still true, see that round's own entry) had already
+// proven no such reweight can flip THAT case without also flipping the
+// already-validated 9/26/27 pick (Chicago Cubs @ Boston Red Sox, skill 6,
+// over Tampa Bay Rays @ Philadelphia Phillies, skill 7) the same way - same
+// shape, a lower-skill-but-tenser team vs. a higher-skill-but-more-comfortable
+// one. Put to the user directly with the real numbers rather than reweighted
+// silently: their answer was explicit - "skill/quality should generally win,
+// period," accepting that the 9/26/27 pick becomes Rays/Phillies too. This
+// is that same trade-off, chosen deliberately, not stumbled into. Re-verified
+// live (2026-09-22 build) across every currently-fetched MLB/NBA/EPL/F1
+// fixture: exactly six flips, all MLB, all this exact class of case (9/23-25
+// to Brewers/Phillips-alternatives, 9/26-28 to Rays/Phillies) - zero
+// unintended reordering anywhere else.
 export const BEST_MATCH_WEIGHTS = {
-  skill: 0.2, // how good the two teams actually are
-  competitiveness: 0.2, // how close tonight's specific pairing is
+  skill: 0.35, // how good the two teams actually are
+  competitiveness: 0.05, // how close tonight's specific pairing is
   watchability: 0.35, // entertainment value / mainstream public attention
   enduranceScore: 0.1, // does the competitive stakes actually last
   broadcastQuality: 0.15 // production quality of watching it
