@@ -2107,29 +2107,36 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   //     that disambiguation wrong.
   //   - The decision to advance is made directly in the pointerup handler,
   //     synchronously, from the pointer's own final position - never from
-  //     a transition/animation callback. A commit does NOT set a fly-off
-  //     transform/opacity on the card before choose() replaces it - an
-  //     earlier version did, purely decorative, on the reasoning that
-  //     nothing downstream waited on it to finish - but setting a
-  //     transform/opacity (which promotes the card to its own GPU-composited
-  //     layer) and then, in the very same tick, having choose() tear that
-  //     exact DOM node out from under it turned out to be exactly the same
-  //     "removed mid-transition" pattern this comment already warns about
-  //     above, just manifesting differently: Safari can leave that
-  //     already-rasterized layer visually stuck on screen - a ghost of the
-  //     swiped-away card - until something forces it to reconcile the
-  //     compositor, which nothing here ever reliably does. Live-reported on
-  //     iPad, with a screenshot showing exactly that: faded, rotated ghost
-  //     cards left over from earlier swipes. The card now just disappears
-  //     the instant choose() replaces it - less flourish, but no layer ever
-  //     gets promoted in the first place, so there's nothing left to
-  //     orphan.
+  //     a transition/animation callback. On a COMMIT specifically (the card
+  //     is about to be replaced outright), nothing here touches card.style
+  //     at all between the drag's last live frame and choose() tearing the
+  //     node out - see resetDragState/resetDrag's own split just below for
+  //     why. Two earlier versions of this both got that wrong in slightly
+  //     different ways: first a decorative fly-off transform/opacity set
+  //     right before removal, then - after removing THAT - discovering
+  //     resetDrag() itself was still doing the same thing on every commit,
+  //     just resetting to a NEUTRAL transform/transition instead of a
+  //     fly-off one. Either way, mutating card.style (which promotes the
+  //     card to its own GPU-composited layer the instant it has a
+  //     non-default transform, as it does throughout an active drag) and
+  //     then, in the very same tick, having choose() tear that exact DOM
+  //     node out from under it left Safari holding onto that
+  //     already-rasterized layer - a ghost of the swiped-away card visibly
+  //     stuck on screen - regardless of what the LAST value written to it
+  //     was. Live-reported on iPad, with a screenshot showing exactly that:
+  //     faded, rotated ghost cards left over from earlier swipes, on both
+  //     sides (confirming they'd accumulated across several swipes, since
+  //     nothing was ever cleaning them up). A commit now leaves card.style
+  //     completely alone - it disappears mid-drag-transform, still tilted
+  //     from wherever the finger last was, rather than snapping to neutral
+  //     first - since it's about to vanish anyway.
   //   - pointerup, pointercancel AND lostpointercapture all route through
-  //     the same resetDrag(), so however the gesture ends (a normal
-  //     release, the OS taking the gesture back for its own use, a second
-  //     finger landing), the card is guaranteed to leave the drag state -
-  //     never left stranded mid-transform waiting for an event that might
-  //     not come.
+  //     resetDrag() (or, on a commit specifically, its own resetDragState()
+  //     half - see above), so however the gesture ends (a normal release,
+  //     the OS taking the gesture back for its own use, a second finger
+  //     landing), the card is guaranteed to leave the drag state - never
+  //     left stranded mid-transform waiting for an event that might not
+  //     come.
   const SWIPE_COMMIT_PX = 60;
   const SWIPE_START_PX = 8;
   let activePointerId = null;
@@ -2149,16 +2156,28 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     card.style.transform = `translateX(${dx}px) rotate(${dx / 28}deg)`;
   }
 
-  function resetDrag() {
+  // Just the pointer/tracking bookkeeping, deliberately WITHOUT touching
+  // card.style - see endDrag's own commit branch for the one place this
+  // matters: card.style must stay completely untouched between the drag's
+  // last live frame and choose() removing the node, or Safari can be left
+  // holding a stale, ghosted compositor layer for it (see this function's
+  // own swipe-gesture comment above for the full story). resetDrag() below
+  // is this PLUS the style reset, for the two cases where the card
+  // actually stays in the DOM and genuinely needs to animate back.
+  function resetDragState() {
     activePointerId = null;
     isHorizontalDrag = false;
     dragDx = 0;
-    card.style.transition = 'transform 180ms ease';
-    card.style.transform = '';
     if (isTrackingSwipe) {
       isTrackingSwipe = false;
       stopTrackingSwipe();
     }
+  }
+
+  function resetDrag() {
+    resetDragState();
+    card.style.transition = 'transform 180ms ease';
+    card.style.transform = '';
   }
 
   // A card contains real <img> team-logo elements, and starting a mouse
@@ -2217,8 +2236,11 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     if (event.pointerId !== activePointerId) return;
     const committedDx = isHorizontalDrag ? dragDx : 0;
     const wasHorizontalDrag = isHorizontalDrag;
-    resetDrag();
-    if (!wasHorizontalDrag || Math.abs(committedDx) < SWIPE_COMMIT_PX) return;
+
+    if (!wasHorizontalDrag || Math.abs(committedDx) < SWIPE_COMMIT_PX) {
+      resetDrag(); // stays in the DOM - genuinely snap back to center
+      return;
+    }
     // Already at that end of the stack (e.g. swiping right on the very
     // first card) - nothing to advance to, so this must snap back like any
     // other below-threshold drag rather than fly off into an empty
@@ -2226,11 +2248,17 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     // target index is already the current one - see its own clamp).
     const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
     const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
-    if (!target || target.id === primary.id) return;
-    // No fly-off transform/opacity here - see this function's own top
-    // comment on the swipe gesture for why setting one right before
-    // choose() below tears this exact card out of the DOM was live-reported
-    // as leaving a stuck ghost card on iPad Safari.
+    if (!target || target.id === primary.id) {
+      resetDrag(); // also stays in the DOM
+      return;
+    }
+    // Committing - card.style is deliberately left completely untouched
+    // from here on (resetDragState, not resetDrag) - see this function's
+    // own top comment on the swipe gesture for why even resetting it to a
+    // NEUTRAL transform right before choose() below tears this exact card
+    // out of the DOM was still enough to leave a stuck ghost on iPad
+    // Safari.
+    resetDragState();
     choose(targetIndex);
   }
 

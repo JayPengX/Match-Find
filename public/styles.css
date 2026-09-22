@@ -411,6 +411,21 @@ main#app {
 .match-stack {
   position: relative;
   margin-bottom: 12px;
+  /* Belt-and-suspenders against the swiped-off-card-ghosting-on-iPad-Safari
+     bug (see buildMatchStack's own endDrag/resetDragState comment for the
+     actual JS-level fix - not touching the card's own style between its
+     last live drag frame and removal). Whatever residual paint Safari's
+     compositor might still be holding onto for an already-removed card can
+     only ever have been positioned by this exact card's own translateX
+     drag/fly-off transform, which only ever moves it horizontally within
+     (or just past) this box - clipping anything outside it here means
+     nothing can ever be VISIBLE beyond this stack's own bounds regardless
+     of what's technically still painted behind the scenes. A card actively
+     mid-drag gets clipped at this box's own edges on its way past them
+     rather than sliding fully into the neighboring content, same as most
+     swipe-to-dismiss card UIs - the card is leaving anyway at that point,
+     so it reads as exiting rather than as a visual bug. */
+  overflow: hidden;
 }
 .match-stack-viewport > .match-card {
   margin-bottom: 0;
