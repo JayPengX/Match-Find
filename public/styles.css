@@ -1065,8 +1065,20 @@ main#app {
    see app.js's isDayPending. Deliberately styled like a quieter sibling of
    #recommended-empty/#all-empty (same padding/font-size/left alignment),
    not the big centered full-page .loading-state - this is one section on
-   an otherwise-already-usable page, not the whole app still starting up. */
-.section-loading {
+   an otherwise-already-usable page, not the whole app still starting up.
+
+   `:not([hidden])` matters here, not just style - see .loading-state's own
+   comment above for exactly why: a bare `.section-loading` selector has
+   the SAME specificity as the browser's own `[hidden] { display: none }`
+   rule, but an author stylesheet's normal rules always beat the
+   user-agent stylesheet's, tie or not - so `display: flex` unconditionally
+   here silently overrode `recommendedLoadingEl.hidden = true`/
+   `allLoadingEl.hidden = true` in app.js: the attribute got set, but the
+   element never actually disappeared. Live-reported as a stray spinner
+   still showing next to an already-loaded single match - this is that
+   same bug, just on the new per-section element instead of the original
+   page-level one. */
+.section-loading:not([hidden]) {
   display: flex;
   align-items: center;
   gap: 10px;
