@@ -174,16 +174,66 @@ const proxyFetchInFlight = new Map(); // url -> Promise<data>
 // and losing to this timeout on every genuinely slow (not stuck) request.
 const PROXY_FETCH_TIMEOUT_MS = 12_000;
 
+// Caps how many proxied requests this tab ever has ACTUALLY in flight to the
+// network at once, regardless of how many logical callers are "awaiting" one
+// right now - buildMatches' own full-window call alone fires 50+ of these
+// (3 leagues x 17 dates, see fetchTeamLeagueMatches) with no concurrency
+// limit of its own, all at the exact same instant. That stampede is exactly
+// what PROXY_FETCH_TIMEOUT_MS's own comment above already describes: any
+// ONE straggler among 50+ simultaneous requests can eat its full timeout,
+// and since init() now awaits the WHOLE full-window build before first
+// paint (see init()'s own comment), a straggler here no longer just delays
+// a quiet background refresh - it directly delays, and can even fail, the
+// very first thing the viewer sees. Live-reported directly: "sometimes it
+// failed to load also the load time is significantly longer". Gating the
+// underlying fetch() calls to a small, fixed number in flight at a time -
+// everything past that just queues, FIFO, and gets a slot the instant one
+// frees up - keeps every individual request fast and un-contended instead
+// of all 50+ competing for the same connection pool/upstream rate limit at
+// once; extra requests wait a few hundred ms for a slot rather than each
+// one risking the full 12s timeout. Chosen to match the browser's own
+// classic HTTP/1.1 per-host connection cap - conservative enough that even
+// a connection that can't multiplex (no HTTP/2) never queues at the browser
+// level on top of this queue too.
+const PROXY_FETCH_MAX_CONCURRENCY = 6;
+let proxyFetchActiveCount = 0;
+const proxyFetchWaitQueue = [];
+
+function acquireProxyFetchSlot() {
+  if (proxyFetchActiveCount < PROXY_FETCH_MAX_CONCURRENCY) {
+    proxyFetchActiveCount++;
+    return Promise.resolve();
+  }
+  return new Promise(resolve => proxyFetchWaitQueue.push(resolve));
+}
+
+function releaseProxyFetchSlot() {
+  const next = proxyFetchWaitQueue.shift();
+  // Handing the freed slot straight to the next waiter (rather than
+  // decrementing and letting some later acquire() re-increment) keeps
+  // proxyFetchActiveCount an accurate live count of in-flight requests at
+  // every instant, never briefly wrong between a release and the next
+  // acquire.
+  if (next) next();
+  else proxyFetchActiveCount--;
+}
+
 async function proxyFetchJson(url) {
   const cached = proxyFetchCache.get(url);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
   const pending = proxyFetchInFlight.get(url);
   if (pending) return pending;
   const request = (async () => {
-    const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
-    });
+    await acquireProxyFetchSlot();
+    let response;
+    try {
+      response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
+      });
+    } finally {
+      releaseProxyFetchSlot();
+    }
     if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
     const data = await response.json();
     proxyFetchCache.set(url, { data, expiresAt: Date.now() + PROXY_FETCH_CACHE_TTL_MS });
