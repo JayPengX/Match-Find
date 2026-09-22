@@ -163,10 +163,11 @@ unaddressed, same posture as `docs/recommendation-engine-audit.md`):
   back INTO the deterministic score for every fixture would mean a new
   paid data source or the same per-fixture search/grounding integration
   Round 9/11 tried and abandoned for burning free-tier quota. Round 32/35
-  DID reintroduce real, current, Google-Search-grounded knowledge, but
-  narrowly: as an optional, at-most-once-a-day tie-break for one day's
-  headline slot (see "`MATCH_RECOMMEND_PROXY_URL`" above), never as an
-  input to `objective-score.mjs`'s own score for every fixture.
+  DID reintroduce real, current, Google-Search-grounded knowledge, as an
+  optional, at-most-once-a-day tie-break for one day's headline slot (see
+  "The Gemini tie-break" below) - but Round 41 removed that too, per direct
+  instruction that its real billed cost outweighed its improvement, so
+  there is once again no AI input anywhere in this engine.
 - **F1's per-race modifiers (safety car, weather) aren't modeled.** Neither
   is knowable before a race starts from data this build already has, and
   adding real weather data would mean taking on a new API key/dependency
@@ -299,6 +300,71 @@ one place your own taste actually overrides the algorithm is
 **Prefer** - swiping a card stack to commit to a specific alternative (see
 "The viewing plan" below) - which is local, explicit, and per-match, not a
 blanket ranking toggle.
+
+**Round 39/41: "quality/star teams should generally win" already applies to
+every sport, not just MLB.** `bestMatchScore`/`BEST_MATCH_WEIGHTS` is one
+shared blend for every sport's own `skill`/`competitiveness`/`watchability`/
+`enduranceScore`/`broadcastQuality` fields - there's no MLB-only gate
+anywhere in `computeEffectiveScore`. Round 39 raised `skill`'s weight (0.2
+→ 0.35) and lowered `competitiveness`'s (0.2 → 0.05) purely because MLB was
+the concrete, human-validated case in hand at the time; the change itself
+was never MLB-specific, and Round 41 re-verified this live rather than
+assuming it: a fresh EPL fetch (2026-09-22) already puts Sunderland @
+Manchester City (skill 10, competitiveness 1 - a lopsided pairing on paper)
+ahead of Crystal Palace @ Leeds United (skill 3, competitiveness 6) under
+these exact weights, correctly prioritizing the star club despite the
+lopsided score. NBA had zero fetchable fixtures at verification time (real
+2026-27 season hadn't started; Round 25 already excludes preseason
+entirely), so it couldn't be checked against real data, but it runs through
+the exact same `computeNbaObjectiveScore`→`bestMatchScore` path with no
+special-casing, so the same behavior applies the moment real games exist.
+
+### Back-to-back variety (Round 41) - bounded, and exempt for real elite games
+
+Direct feedback: the deterministic scheduler's own math will happily
+recommend the exact same matchup three (or more) real calendar days
+running whenever a live series/back-to-back naturally scores best every
+one of those days - "I don't like that, add variety... but real good games
+get kept, like the Dodgers @ Padres back-to-back game." This is a
+deliberately NARROWER reintroduction of the cross-day repeat penalty Round
+25 removed entirely (see that round's own entry below) - that older
+version compared today's pick against ANY recent day in the whole fetched
+window, including weekdays this viewer never watches, which is exactly
+what silently buried a genuinely great weekend game for a "variety"
+benefit nobody wanted.
+
+This version (`applyVarietyPenalty`/`isVarietyExempt`/
+`VARIETY_ELITE_SKILL_THRESHOLD`/`VARIETY_MAX_FREE_REPEATS`/
+`VARIETY_REPEAT_PENALTY`, all in `public/lib/recommendation.mjs`) only ever
+looks at the real two immediately PRECEDING calendar days, and is skipped
+entirely once a matchup's own `skill` reaches 7 (the better team having at
+least a .600-equivalent winning percentage) - the SAME field
+`BEST_MATCH_WEIGHTS` now weighs most heavily, deliberately NOT
+`bestMatchScore`/`planningScore`, since those are relative to whatever else
+is on that specific day and could read a genuinely great matchup on an
+otherwise-quiet day as "marginal" for reasons that have nothing to do with
+how good it actually is. `app.js`'s `dayCandidatesForPlan` folds this in
+automatically for every render (and for `pinSlotChoice`'s own "what would
+the algorithm pick naturally" question), using `recentMatchupKeySets` to
+walk `state.days` backward and score those two prior days' own NATURAL
+(pre-variety) plan - deliberately not recursive into their own variety
+adjustment, to keep this a simple, boundedly-shallow lookup rather than a
+chain that could walk arbitrarily far back through the fetched window.
+
+Live-verified against the real 2026-09-22 fetch: Milwaukee Brewers @
+Philadelphia Phillies (skill 8) and San Diego Padres @ Los Angeles Dodgers
+(skill 7) both naturally repeat as top picks for 3 real consecutive days
+(09-23 through 09-25) - both are elite-exempt, so this feature makes
+exactly ZERO difference to either of them, confirmed by a before/after
+diff across the whole fetched window (0 days differ). That's the correct,
+intended outcome, not a sign the feature does nothing: the two real
+repeats happening right now are genuinely the "real good games" the user
+pointed at keeping, and the feature exists for a mediocre repeat that
+isn't currently occurring - covered instead by a dedicated unit test using
+synthetic data (a mediocre skill-5 matchup that already won two straight
+days loses its 3rd to a fresh, only-slightly-worse alternative once
+penalized, while an identical-shaped but skill-8 "elite" repeat keeps
+winning).
 
 ## The viewing plan
 
@@ -658,11 +724,13 @@ LIVE, ESPN's own in-progress status - see below) - never a Gemini call:
 **Gemini has no role in either of these** (see `docs/recommendation-engine-
 audit.md`'s Round 11) - both duration and broadcast source are, and have
 long been, fully deterministic from data ESPN already provides. (Round 32
-did reintroduce ONE small, optional, bounded Gemini call elsewhere in this
-pipeline - see "`MATCH_RECOMMEND_PROXY_URL`" above - but it plays no part
-in either of these two, or in objective-score.mjs's own scoring itself;
-it's a once-a-day tie-break layered on top, at the recommendation-plan
-level, never a re-guess of duration/broadcast/competitiveness/watchability.)
+briefly reintroduced ONE small, optional, bounded Gemini call elsewhere in
+this pipeline - see "The Gemini tie-break" above - but it never played any
+part in either of these two, or in objective-score.mjs's own scoring
+itself; it was a once-a-day tie-break layered on top, at the
+recommendation-plan level, never a re-guess of duration/broadcast/
+competitiveness/watchability. Round 41 removed it entirely anyway, so this
+whole engine has no AI involvement at all now.)
 
 ## Broadcast service registry (logos, and "do I actually have this?")
 
@@ -864,9 +932,9 @@ Kong block) applies to its whole script, and used to force this route
 through the same pinned Virginia isolate too, adding a real, live-confirmed
 Taiwan↔Virginia round trip to every single one of this app's requests, for
 a route that itself calls no AI service at all (Round 32's own bounded
-Gemini tie-break, added later, deliberately stayed OFF this Worker for
-exactly this reason - see `MATCH_RECOMMEND_PROXY_URL`'s own comment above).
-That was a genuine, previously
+Gemini tie-break, added later and removed again in Round 41, deliberately
+stayed OFF this Worker for exactly this reason - see "The Gemini tie-break"
+above). That was a genuine, previously
 undiscovered contributor to reports of the first load going blank for 10+
 seconds and refreshes taking 10-20+ seconds - see `PROXY_URL`'s own comment
 in `public/app.js` for the live confirmation (`X-Worker-Colo: IAD` on a
@@ -1118,75 +1186,51 @@ Worker. If you fork this repo and deploy your own shared-proxy Worker,
 update that constant to your own Worker's base URL (**no path suffix**);
 there's no environment variable to set instead.
 
-### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32/35/37)
+### The Gemini tie-break (Round 32-38) - removed entirely in Round 41
 
-As of `docs/recommendation-engine-audit.md`'s Round 11, Match Find's
-deterministic engine was the sole source of truth for every fixture's score
-- no AI call anywhere. Round 32 reintroduced ONE small, bounded Gemini call
-(`/match-recommend`, on that repo's *other*, `orbit-workers-proxy` Worker -
-the same one Orbit/Orbit Vocab's AI features already live on, not
-`sports-proxy`), used as an at-most-once-per-day tie-break for whichever
-day's headline slot the deterministic engine's own top pick has a real
-alternative for - see `./lib/recommendation.mjs`'s "Gemini bounded daily
-tie-break" section for the concrete trace that led to this and why it's a
-fundamentally different, much narrower shape than the per-fixture
-validation call Round 11 removed. Round 35 hardened this twice: the answer
-is now FORCED IN via `computeDayPlan`'s own pin mechanism (the exact one a
-viewer's own swipe-to-pin already uses) rather than a score nudge that
-could fail to overcome a wide-enough gap, and Google Search grounding was
-turned on for this one call.
+Match Find tried adding a small, bounded Gemini call three times, and
+removed it every time. As of `docs/recommendation-engine-audit.md`'s Round
+11, its deterministic engine was the sole source of truth for every
+fixture's score. Round 32 reintroduced ONE bounded Gemini call
+(`/match-recommend`, on the shared proxy's *other*, `orbit-workers-proxy`
+Worker), an at-most-once-per-day tie-break for whichever day's headline
+slot the deterministic engine's own top pick had a real alternative for.
+Round 35 forced the answer in via `computeDayPlan`'s own pin mechanism
+(the same one a viewer's own swipe-to-pin uses) and turned on Google
+Search grounding. Round 37 fixed a real multi-slot selection bug, then
+live-tested grounding directly against the deployed Worker and found it
+hard-blocked by a 429 free-tier quota wall (the same RESOURCE_EXHAUSTED
+signature Round 9 already hit) - reverted grounding, confirmed a plain
+call worked, and found that live pick agreed with the deterministic
+engine's own choice rather than the human-validated expectation this
+feature existed to guarantee: proof the mechanism only ever guarantees
+"whatever Gemini says wins," never "Gemini matches any one viewer's
+taste." Round 38 turned grounding back on after the account moved to paid
+billing, and added a hard-enforced origin gate plus a daily global call
+cap on the Shared-Proxy side specifically because live-testing had just
+shown `/match-recommend`'s URL was callable by anyone who read this
+repo's own public source.
 
-Round 37 found and fixed a real bug in the FIRST of those two hardenings,
-live-verified against real 2026-09-23/24/25 data: a day can have more than
-one recommended slot at once (an earlier, non-overlapping "continuation"
-pick alongside the evening headline pick - see Round 36), and the old
-candidate-selection code only ever looked at whichever recommended slot
-sorted first chronologically - almost always the early, low-stakes one
-with no real alternative, so the genuinely contested evening slot (the
-whole reason this feature exists) was silently never offered to Gemini at
-all, on any of those three days. Fixed to scan every recommended slot and
-pick whichever one has the smallest top-vs-runner-up score gap. Round 37
-also live-tested Google Search grounding directly against the deployed
-Worker and found it hard-blocked by a 429 quota wall on this account (the
-exact RESOURCE_EXHAUSTED signature Round 9 already hit) despite Round 35's
-reasoning that low call volume would avoid it - reverted grounding, back to
-`gemini-3.5-flash-lite` with `response_schema`-enforced JSON, and
-confirmed that shape does return a real, valid pick live. That live pick
-independently agreed with the deterministic engine rather than the
-human-validated expectation this feature is meant to guarantee - worth
-knowing before assuming "the mechanism works" means "the mechanism always
-picks what I'd pick": it guarantees Gemini's own answer wins its slot, not
-that Gemini's answer matches any one viewer's personal judgment. Follow-up
-web research (same round) found real, current facts behind that specific
-disagreement - a team already clinched and reported as "looking ahead" to
-its real postseason opener, an elite starting pitcher on the mound that
-night - exactly the kind of live news a non-grounded call has no way to
-see, which directly motivated Round 38.
-
-Round 38 (2026-09-22) put grounding back on `gemini-3.7-flash` after the
-account's Google Cloud project moved to a paid billing plan specifically
-to lift the free-tier grounding quota Round 37 hit - and, separately,
-because that same live-testing had just demonstrated `/match-recommend`'s
-URL (sitting in plain sight in this repo's own public client source) was
-callable directly by anyone with no real enforcement beyond a per-IP rate
-limit, added a hard-enforced origin gate and a daily global call cap on
-Shared-Proxy's side (see that repo's own README for the full reasoning and
-its honest limits). Grounding was NOT re-verified with a live call this
-round, per direct instruction not to spend newly-real billed credit on
-manual testing - verified instead with a local harness that mocks
-`global.fetch` and the KV binding, confirming the request/response
-plumbing without touching the real Gemini API. The first real grounded
-call will happen from organic app usage.
-
-`MATCH_RECOMMEND_PROXY_URL` in `public/app.js` points at the real,
-live-verified `orbit-workers-proxy` deployment
-(`https://orbit-workers-proxy.pengzjay.workers.dev/match-recommend`) as of
-Round 37. Every call site (`maybeRequestGeminiTieBreak`) still no-ops
-immediately if this is ever unset or the call fails/times out/is rate-
-limited - the deterministic pick simply renders as it always has, with no
-visible error. If you fork this repo and deploy your own shared-proxy
-Worker (own `GEMINI_API_KEY`, own `/match-recommend` route), update this to
-your own Worker's base URL.
+**Round 41: removed entirely**, direct instruction - "the credits it's
+burning is way beyond its improvement to our system." Every Gemini-related
+export (`selectGeminiTieBreakCandidates`/`buildGeminiTieBreakPayload`/
+`resolveGeminiOverridePin`/`computeDayPlanWithGeminiTieBreak`/
+`GEMINI_TIE_BREAK_MAX_CANDIDATES`) is deleted from `public/lib/
+recommendation.mjs`, `public/app.js` no longer imports or calls any of
+them (`renderRecommendedSection` calls `computeDayPlan` directly again),
+and the `/match-recommend` route is deleted from Shared-Proxy's
+`worker.js` outright (see that repo's own README). This also fixed a real,
+separately-reported UI bug: Gemini's forced pin reused the exact same
+`forcedIds`/`.isPreferred` mechanism as a genuine viewer swipe-pin, so a
+day whose headline slot got a forced Gemini override showed 偏好
+("Preferred", the viewer's-own-choice tag) instead of 推薦
+("Recommended", the system's-own-judgment tag) - reported as "every first
+game recommended of the day is 'Prefer' rather than 'Recommended'". With
+Gemini gone, `forcedIds` is populated only from a real viewer pin again
+(`state.pinnedChoices`, written only by `pinSlotChoice`/`preferMatch`), so
+this can't recur. Match Find's deterministic engine
+(`public/lib/recommendation.mjs`) is its only recommendation logic now -
+no AI call anywhere, for the second time in this project's history.
 
 ## Local dev tooling
 

@@ -72,9 +72,10 @@ import {
   LIFECYCLE_STATES,
   estimatedDurationMinutes,
   estimateLiveDurationMinutes,
-  buildGeminiTieBreakPayload,
-  tieBreakCandidateKey,
-  computeDayPlanWithGeminiTieBreak
+  computeDayPlan,
+  applyVarietyPenalty,
+  recommendedMatchupKeys,
+  VARIETY_MAX_FREE_REPEATS
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 import {
@@ -122,37 +123,6 @@ import { buildMatches, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // Cloudflare's default placement apply: run near whichever colo actually
 // received the request, i.e. near this app's own real viewers.
 const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
-
-// jaypengx-collab/shared-proxy's MAIN `orbit-workers-proxy` Worker (the one
-// Orbit Class/Vocab's own AI features already live on) with `/match-
-// recommend` appended - a DIFFERENT Worker/URL from PROXY_URL above, not a
-// typo (see that constant's own comment for why /sports-proxy was pulled
-// into its own separate, unpinned deployment; /match-recommend has no such
-// latency concern - it fires at most once a day, nowhere near often enough
-// to matter, so it stays on the shared Worker rather than needing its own).
-//
-// Empty by default rather than a guessed URL: unlike PROXY_URL (a real,
-// already-deployed value this repo's own maintainer confirmed live),
-// nothing here has ever pointed at `orbit-workers-proxy` before Round 32 -
-// see docs/recommendation-engine-audit.md for why that round reintroduced
-// a (deliberately tiny, bounded) Gemini call at all. Filling this in is a
-// one-time step: deploy this repo's updated shared-proxy worker.js (or
-// confirm an existing deployment already has the `/match-recommend` route
-// and a configured GEMINI_API_KEY - see that repo's README), then set this
-// to `<that Worker's base URL>/match-recommend`. Left empty, every call
-// site below just no-ops (see maybeRequestGeminiTieBreak) - the exact same
-// "unset = feature unavailable, everything else works normally" contract
-// PROXY_URL itself would have if this app had no shared-proxy deployment
-// at all.
-//
-// Round 37 (2026-09-22): live-verified against the real deployed Worker
-// (same one PROXY_URL below points at) with a real 2026-09-23 candidate
-// set - returns a genuine 200 with a valid pick (see docs/recommendation-
-// engine-audit.md's own Round 37 entry for the exact response and what it
-// means, including a real, uncomfortable finding: Gemini's own independent
-// judgment agreed with the deterministic engine's pick, not the human-
-// validated one this whole feature exists to guarantee).
-const MATCH_RECOMMEND_PROXY_URL = 'https://orbit-workers-proxy.pengzjay.workers.dev/match-recommend';
 
 // Every host buildMatches needs (ESPN, Polymarket, the MLB Stats API,
 // Jolpica) sends no CORS headers, so a browser can't fetch any of them
@@ -1167,133 +1137,48 @@ function dayLabelFor(date, { short = false } = {}) {
 // computeOverlapRange is still used directly below, in buildMatchCard's
 // own overlap note.
 
-// ---- Gemini bounded daily tie-break cache ---------------------------------
+// ---- Back-to-back variety (bounded, elite-exempt) --------------------------
 //
-// See MATCH_RECOMMEND_PROXY_URL's own comment and
-// ./lib/recommendation.mjs's "Gemini bounded daily tie-break" section for
-// the full design (Round 32, redesigned Round 35). This part owns the
-// actual network call and the per-day cache that keeps it to AT MOST ONE
-// live call per (dayKey, exact candidate-id-set): every other render for
-// the same day+candidates reads the cached answer straight out of
-// localStorage. Round 35: this is no longer an additive score nudge -
-// `computeDayPlanWithGeminiTieBreak` (called from renderRecommendedSection)
-// forces a valid cached pick in via computeDayPlan's own pinnedForDay
-// mechanism, the same one a real user pin already uses, so it wins its
-// slot UNCONDITIONALLY rather than only when a score bonus happens to be
-// big enough - see that function's own comment for why a bonus wasn't
-// good enough to guarantee the user's own validated result.
-const GEMINI_TIE_BREAK_CACHE_STORAGE_KEY = 'matchfind-gemini-tiebreak-cache';
-// A day's own candidates/scores can shift as standings/odds/live scores
-// update through the day - 24h keeps a good answer from going stale across
-// a full day of viewing while still asking fresh the next day.
-const GEMINI_TIE_BREAK_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-// A failed/unconfigured/rate-limited attempt is cached too (with no
-// pickId), so an unset MATCH_RECOMMEND_PROXY_URL or a transient upstream
-// error can't turn into a retry on every single render - shorter than the
-// success TTL since a transient failure is worth retrying sooner than a
-// full day.
-const GEMINI_TIE_BREAK_FAILURE_TTL_MS = 2 * 60 * 60 * 1000;
-
-// Memoized in-memory after the first read - renderRecommendedSection reads
-// this on every render (including near-term/live-poll refreshes, far more
-// often than this cache ever actually changes), so re-reading and
-// JSON.parse-ing localStorage that often would be pure waste (see this
-// repo's own Round 59/60 client-side performance passes for why that
-// matters here). Invalidated only by saveGeminiTieBreakCache itself.
-let geminiTieBreakCacheMemo = null;
-function loadGeminiTieBreakCache() {
-  if (geminiTieBreakCacheMemo) return geminiTieBreakCacheMemo;
-  try {
-    const stored = JSON.parse(localStorage.getItem(GEMINI_TIE_BREAK_CACHE_STORAGE_KEY));
-    geminiTieBreakCacheMemo = stored && typeof stored === 'object' ? stored : {};
-  } catch {
-    geminiTieBreakCacheMemo = {};
-  }
-  return geminiTieBreakCacheMemo;
-}
-function saveGeminiTieBreakCache(cache) {
-  geminiTieBreakCacheMemo = cache;
-  try {
-    localStorage.setItem(GEMINI_TIE_BREAK_CACHE_STORAGE_KEY, JSON.stringify(cache));
-  } catch {
-    // Private browsing / blocked storage - the feature just re-asks more
-    // often than intended (never past the failure TTL's own bound), never
-    // breaks anything.
-  }
+// See ./lib/recommendation.mjs's own "Back-to-back variety" section for the
+// scoring mechanics (applyVarietyPenalty/isVarietyExempt/matchupKey) - this
+// part just supplies the one thing that logic needs and can't compute
+// itself: which matchups actually WON their own slot on the real preceding
+// calendar day(s), which requires walking state.days backward and running
+// the exact same (unpenalized) scoring pass those days would get on their
+// own first real render. Deliberately NOT recursive (each lookback day's
+// own streak isn't itself variety-adjusted here) - see this function's own
+// git history/docs/recommendation-engine-audit.md Round 41 entry for why
+// that simplification was chosen over chasing an already-varied answer
+// arbitrarily far back through the whole fetched window.
+function baseDayCandidates(dayKey) {
+  const dayCandidates = applySportFilter(matchesForDay(dayKey));
+  applyLiveExcitementBonus(dayCandidates);
+  return dayCandidates;
 }
 
-// Fire-and-forget: `close` is renderRecommendedSection's own fresh call to
-// selectGeminiTieBreakCandidates (via computeDayPlanWithGeminiTieBreak's
-// return) - null means today's top pick has no real alternative at all,
-// nothing to ask about. Asks Shared-Proxy's /match-recommend for a tie-
-// break and caches the answer, but only when nothing fresh is already
-// cached for this exact candidate set - almost always a cheap synchronous
-// no-op (MATCH_RECOMMEND_PROXY_URL unset, no close call today, or already
-// answered/cached/recently-failed); a live network request only actually
-// fires the first time a given day's close call is seen. A genuinely NEW
-// pick triggers one re-render so computeDayPlanWithGeminiTieBreak's next
-// call picks it up and forces it in.
-async function maybeRequestGeminiTieBreak(dayKey, close) {
-  if (!MATCH_RECOMMEND_PROXY_URL || !close) return;
-  const candidateKey = tieBreakCandidateKey(close);
-  const cache = loadGeminiTieBreakCache();
-  const entry = cache[dayKey];
-  if (entry && entry.candidateKey === candidateKey) {
-    const ttl = entry.pickId ? GEMINI_TIE_BREAK_CACHE_TTL_MS : GEMINI_TIE_BREAK_FAILURE_TTL_MS;
-    if (Date.now() - entry.fetchedAt <= ttl) return; // Already have a fresh answer (or recent-enough failure).
+function recentMatchupKeySets(dayKey) {
+  const idx = state.days.findIndex(d => d.key === dayKey);
+  if (idx === -1) return [];
+  const sets = [];
+  for (let back = 1; back <= VARIETY_MAX_FREE_REPEATS; back++) {
+    const priorDay = state.days[idx - back];
+    if (!priorDay) break;
+    const priorCandidates = baseDayCandidates(priorDay.key);
+    if (!priorCandidates.length) break;
+    sets.push(recommendedMatchupKeys(priorDay.key, priorCandidates, state.pinnedChoices.get(priorDay.key)));
   }
-  let pickId = null;
-  let reason = '';
-  try {
-    const response = await fetch(MATCH_RECOMMEND_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildGeminiTieBreakPayload(dayKey, close, { scoreField: 'planningScore' })),
-      signal: AbortSignal.timeout(30_000)
-    });
-    if (response.ok) {
-      const data = await response.json();
-      if (typeof data?.pickId === 'string') {
-        pickId = data.pickId;
-        reason = typeof data.reason === 'string' ? data.reason : '';
-      }
-    }
-  } catch {
-    // Offline, timed out, or the Worker isn't deployed/configured yet - the
-    // deterministic pick already rendered stands unchanged; see this
-    // function's own top comment.
-  }
-  cache[dayKey] = { candidateKey, pickId, reason, fetchedAt: Date.now() };
-  saveGeminiTieBreakCache(cache);
-  // A cached failure needs no re-render at all: nothing about the
-  // already-rendered plan changes. Nor does a pick that AGREES with the
-  // natural default already on screen - `close[0]` is that default (see
-  // selectGeminiTieBreakCandidates), so `pickId === close[0].id` means
-  // Gemini's answer changes nothing visible. Both of Round 38's own live
-  // test calls landed exactly here (Gemini agreed with the deterministic
-  // pick both times) - forcing a full renderSections() anyway would have
-  // been a pure-cost, zero-benefit DOM teardown/rebuild every single time,
-  // real contributor to the reported logo-flash/swipe-breaks-mid-drag bug
-  // (renderSections' own activeSwipeCount guard fixes the mechanism; this
-  // fixes the frequency by not firing it at all when nothing changed). Also
-  // skip if the viewer has since navigated off this day entirely - the next
-  // real visit to it re-reads this same cache fresh, nothing to show right
-  // now either way.
-  if (pickId && pickId !== close[0].id && dayKey === state.selectedDayKey) renderSections();
+  return sets;
 }
 
-// The exact same day-candidate + cross-day-repeat-penalty preparation
+// The exact same day-candidate + variety-penalty preparation
 // renderRecommendedSection needs to build today's plan - factored out so
 // pinSlotChoice below can ask "what would the algorithm pick here on its
 // own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
 // the actual rendered plan uses, rather than a second, slightly different
-// computation that could disagree with what's on screen. Deliberately does
-// NOT involve the Gemini tie-break (see renderRecommendedSection's own
-// comment) - pinSlotChoice's own "natural" question is about a viewer's
-// manual pin, a separate concern.
+// computation that could disagree with what's on screen.
 function dayCandidatesForPlan(dayKey) {
-  const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyLiveExcitementBonus(dayCandidates);
+  const dayCandidates = baseDayCandidates(dayKey);
+  applyVarietyPenalty(dayCandidates, recentMatchupKeySets(dayKey));
   return dayCandidates;
 }
 
@@ -1926,8 +1811,9 @@ function renderFilters() {
 // itself while this is nonzero instead of tearing the DOM out from under
 // an active gesture - see that function's own comment for the two real,
 // reported bugs this fixes: a team-logo flash on every background-
-// triggered re-render (the Gemini tie-break's async answer, or a routine
-// live-data poll, arriving mid-interaction) and a swipe silently breaking
+// triggered re-render (a routine live-data poll arriving mid-interaction -
+// this used to also cover the now-removed Gemini tie-break's own async
+// answer, see docs/recommendation-engine-audit.md's Round 41) and a swipe silently breaking
 // mid-drag (the dragged card's own DOM node, and its pointer capture, gets
 // removed out from under an active pointerdown, so the browser has
 // nowhere left to deliver the rest of that gesture's move/up events).
@@ -2184,20 +2070,7 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  // computeDayPlanWithGeminiTieBreak runs computeDayPlan itself (once, or
-  // twice if a valid cached Gemini pick needs forcing in - see that
-  // function's own comment) - never call computeDayPlan directly here as
-  // well, or the second call would just overwrite whatever this one did.
-  const { picks: dayPlan, close } = computeDayPlanWithGeminiTieBreak(
-    dayKey,
-    dayCandidates,
-    state.pinnedChoices.get(dayKey),
-    loadGeminiTieBreakCache()[dayKey],
-    { scoreField: 'planningScore' }
-  );
-  // Fire-and-forget - never awaited, never blocks this render. Almost
-  // always a cheap no-op; see its own comment.
-  maybeRequestGeminiTieBreak(dayKey, close);
+  const dayPlan = computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {

@@ -4231,3 +4231,152 @@ real, not synthetic, so it would have failed against the OLD weights) -
 full suite **392/392**. No `Shared-Proxy`/Gemini changes this round - this
 is entirely the deterministic engine's own weighting, `public/lib/
 recommendation.mjs` only.
+
+## Round 41 (2026-09-22): Gemini removed entirely (again), skill-priority reweight extended cross-sport, and a bounded back-to-back variety pass with an elite exemption
+
+Four items reported together in one message.
+
+**1. Gemini removed from Match Find entirely, again.** Direct instruction:
+"the credits it's burning is way beyond its improvement to our system."
+This is the third time this project has added and then removed a Gemini
+call (Round 11's per-fixture validation, then Round 32-38's much narrower
+bounded daily tie-break) - see README.md's own "The Gemini tie-break"
+section for the condensed history. Deleted outright, not just disabled,
+per this codebase's own "don't keep unused code around" convention:
+`selectGeminiTieBreakCandidates`/`buildGeminiTieBreakPayload`/
+`tieBreakCandidateKey`/`resolveGeminiOverridePin`/
+`computeDayPlanWithGeminiTieBreak`/`GEMINI_TIE_BREAK_MAX_CANDIDATES` from
+`public/lib/recommendation.mjs`; `MATCH_RECOMMEND_PROXY_URL`/
+`maybeRequestGeminiTieBreak`/`loadGeminiTieBreakCache`/
+`saveGeminiTieBreakCache`/the whole Gemini cache section from `public/
+app.js` (`renderRecommendedSection` now calls `computeDayPlan` directly
+again); and the entire `/match-recommend` route (`handleMatchRecommendRequest`
+and its dozen `MATCH_RECOMMEND_*` constants) from `jaypengx-collab/
+shared-proxy`'s `worker.js`, along with `/match-recommend`'s entry in
+`GEMINI_BILLED_PATHS` and every stale doc cross-reference in both repos'
+README.md.
+
+This also fixed a real, separately-reported bug: **"every first game
+recommended of the day is 偏好 ('Prefer') rather than 推薦
+('Recommended')."** Root cause: `computeDayPlanWithGeminiTieBreak` forced
+a valid Gemini answer in via `computeDayPlan`'s `pinnedForDay`/`forcedIds`
+mechanism (Round 35's own design - "the exact same mechanism a viewer's
+own swipe-to-pin already uses"), and `computeDayPlan` marks
+`.isPreferred = forcedIds.has(choice.id)` with NO distinction between "the
+viewer pinned this" and "Gemini's override forced this in" - both paths
+set the exact same flag. `buildMatchCard` renders 偏好 whenever
+`.isPreferred` is true, so a day whose headline slot got a live-cached
+Gemini override showed the viewer's-own-choice tag on a pick the viewer
+never touched. Since Gemini's tie-break specifically targets each day's
+own closest-margin slot (`selectGeminiTieBreakCandidates`), and that's
+disproportionately likely to BE the day's first/headline card, this read
+exactly as reported. With Gemini's code path deleted, `forcedIds` can only
+ever come from a genuine `state.pinnedChoices` entry again (written only by
+`pinSlotChoice`/`preferMatch`, both real user swipes) - structurally
+impossible to recur, verified with a real Playwright load (seeded from a
+real fetched-data localStorage snapshot, `matchfind-match-snapshot`, per
+this doc's own established zero-cost verification pattern): zero
+`pageerror`s, four visible recommended-tags, all four read 推薦, zero
+`.is-preferred` elements, with no pins set.
+
+**2. "Prioritize quality/star teams" (Round 39's `BEST_MATCH_WEIGHTS`
+reweight) confirmed to already apply to NBA/EPL, not just MLB.**
+`bestMatchScore`/`computeEffectiveScore` blend all five axes
+(`skill`/`competitiveness`/`watchability`/`enduranceScore`/
+`broadcastQuality`) identically for every sport - there is no MLB-only
+gate anywhere in that path, and `computeNbaObjectiveScore`/
+`computeEplObjectiveScore` both already set `.skill` from `skillFromWinPct`
+the same way `computeMlbObjectiveScore` does. Verified live rather than
+assumed: a fresh EPL fetch (2026-09-22) already ranks Sunderland @
+Manchester City (skill 10, competitiveness 1) above Crystal Palace @ Leeds
+United (skill 3, competitiveness 6) under the current weights - correctly
+prioritizing the star club over a closer-on-paper mismatch. NBA had zero
+fetchable fixtures at verification time (the real 2026-27 season hadn't
+started yet; Round 25 already excludes preseason entirely), so it
+couldn't be checked against real data this round, but runs through the
+identical code path with no special-casing. No code change was needed for
+this item - it was already correct by construction; this is a
+verification-only entry.
+
+**3. Bounded back-to-back variety, with a real elite exemption.** Direct
+feedback: "if a lot of back to back games happen it will result in three
+straight days recommending the same match, I don't like that... but real
+good games get kept, like the Dodgers @ Padres back-to-back game." Round
+25 removed an earlier, much broader cross-day repeat penalty
+(`RECENT_REPEAT_PENALTY_BY_GAP_DAYS`/`recentRepeatPenalty`/
+`SPORT_CONCENTRATION_*`) entirely, because it compared today's pick
+against ANY recent day in the whole fetched window (including weekdays
+this viewer doesn't watch), which silently buried a genuinely great
+weekend game for a "variety" benefit that never applied to him. This
+round's version is deliberately narrower in exactly the way that matters:
+
+- `VARIETY_MAX_FREE_REPEATS = 2` - only ever looks at the real two
+  immediately PRECEDING calendar days, never anywhere else in the window.
+- `VARIETY_ELITE_SKILL_THRESHOLD = 7` - a matchup whose `skill` (the same
+  field Round 39 now weighs most heavily) reaches 7 (the better team
+  having at least a .600-equivalent winning percentage) is EXEMPT no
+  matter how many days straight it's recommended. Deliberately an
+  ABSOLUTE bar on `skill` itself, not on `bestMatchScore`/`planningScore` -
+  those are relative to whatever else is on that specific day, so a
+  genuinely great matchup on an otherwise-quiet day could read as
+  "marginal" for reasons that have nothing to do with how good it
+  actually is, which is exactly the wrong signal for "is this a real good
+  game."
+- `VARIETY_REPEAT_PENALTY = 1` - a `planningScore` nudge (same
+  insertion point `applyLiveExcitementBonus` already uses), sized well
+  under `ALTERNATIVE_MAX_SCORE_GAP` (2.5) so a genuinely close call gets
+  flipped once repeated but a decisively-better repeat still wins on
+  merit even penalized.
+
+New exports in `public/lib/recommendation.mjs`: `isVarietyExempt`,
+`recommendedMatchupKeys` (runs `computeDayPlan` on a day purely to read
+back which matchup(s) won, reusing the existing `matchupKey` diagnostic),
+and `applyVarietyPenalty`. Wired into `app.js`'s `dayCandidatesForPlan`
+(the single function both `renderRecommendedSection` and `pinSlotChoice`'s
+own "natural pick" question already share) via a new
+`recentMatchupKeySets(dayKey)` that walks `state.days` backward up to
+`VARIETY_MAX_FREE_REPEATS` days and scores each one's own NATURAL
+(pre-variety) plan - deliberately NOT recursive into those prior days' own
+variety adjustment, a conscious simplification to keep this a bounded,
+O(1)-extra-work lookup rather than a chain that could walk arbitrarily far
+back through the whole fetched window chasing an already-varied answer.
+`scripts/dump-day-plan.mjs` was updated to mirror this exact behavior
+(tracking each processed day's own recommended matchup keys as it goes,
+chronologically) so it stays useful as a live cross-check against
+`app.js`'s real behavior.
+
+Live-verified against the real 2026-09-22 fetch two ways:
+1. `dump-day-plan.mjs` for 2026-09-22 → 2026-09-27, MLB: Milwaukee Brewers
+   @ Philadelphia Phillies (skill 8) and San Diego Padres @ Los Angeles
+   Dodgers (skill 7) both naturally repeat as top picks for all 3 real
+   consecutive days they play (09-23 through 09-25) - both elite-exempt
+   (`skill` ≥ 7), so variety makes no difference to either, exactly the
+   "keep real good games" case the user pointed at by name.
+2. A dedicated before/after diff script comparing the whole fetched
+   window's own recommended-matches list with and without
+   `applyVarietyPenalty` applied: **zero days differ, 0/11**. This is the
+   correct, intended result given today's real data - not evidence the
+   feature does nothing, since the two real repeats happening right now
+   are genuinely elite-caliber and were never going to be varied away.
+
+Since no real "mediocre matchup repeats 3 days" case currently exists in
+the live data to observe the penalty actually firing, this was verified
+with a dedicated unit test using clearly-labeled synthetic numbers: a
+skill-5 matchup that already won two straight days loses its 3rd to a
+fresh, only-slightly-worse (but non-repeating) alternative once penalized;
+an identically-shaped skill-8 "elite" repeat (modeled directly on the real
+live Brewers/Phillies case) keeps winning its 3rd straight day unchanged.
+Six more tests cover `isVarietyExempt`/`recommendedMatchupKeys`/
+`applyVarietyPenalty` individually (multi-slot days, missing-skill
+handling, matching-a-different-matchup-than-the-one-repeating, and the
+"fewer than 2 prior days on record" no-op case).
+
+Full suite **385/385** (the 17-test Gemini describe block was deleted
+along with the feature; 10 new variety tests added, net -7 from Round 40's
+392).
+
+**4. No formula/prompt "tie-break disagreement" work this round** - moot,
+since item 1 removed the only mechanism that could disagree with the
+deterministic engine's own pick in the first place. The deterministic
+engine (`public/lib/recommendation.mjs`) is Match Find's sole
+recommendation logic now, for the second time in this project's history.

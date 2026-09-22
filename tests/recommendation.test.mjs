@@ -55,12 +55,12 @@ import {
   LIVE_EXCITEMENT_MAX_BONUS,
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
-  selectGeminiTieBreakCandidates,
-  buildGeminiTieBreakPayload,
-  tieBreakCandidateKey,
-  resolveGeminiOverridePin,
-  computeDayPlanWithGeminiTieBreak,
-  GEMINI_TIE_BREAK_MAX_CANDIDATES
+  isVarietyExempt,
+  recommendedMatchupKeys,
+  applyVarietyPenalty,
+  VARIETY_ELITE_SKILL_THRESHOLD,
+  VARIETY_MAX_FREE_REPEATS,
+  VARIETY_REPEAT_PENALTY
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -1321,231 +1321,134 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
-describe('Gemini bounded daily tie-break (Round 35: a hard pin, not a score nudge)', () => {
-  function planFor(matches, pinnedForDay = null) {
-    applyLiveExcitementBonus(matches);
-    computeDayPlan('2026-09-19', matches, pinnedForDay, { scoreField: 'planningScore' });
-    return matches;
+describe('Back-to-back variety (Round 41: bounded, elite-exempt)', () => {
+  function teams(a, b) {
+    return [{ name: a }, { name: b }];
   }
 
-  describe('selectGeminiTieBreakCandidates', () => {
-    test('returns null when the top pick has no alternatives at all', () => {
-      const a = makeMatch({ id: 'a', effectiveScore: 8 });
-      const day = planFor([a]);
-      assert.equal(selectGeminiTieBreakCandidates(day), null);
+  describe('isVarietyExempt', () => {
+    test('exempt once skill reaches VARIETY_ELITE_SKILL_THRESHOLD', () => {
+      assert.equal(isVarietyExempt(makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD })), true);
+      assert.equal(isVarietyExempt(makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD - 1 })), false);
     });
 
-    test('offers every alternative computeDayPlan itself already considers close (no separate, extra margin)', () => {
-      // A gap of 0.7 - live-verified TOO WIDE for the old, separate
-      // GEMINI_TIE_BREAK_MARGIN (0.5) that Round 35 removed, but well
-      // within this file's own ALTERNATIVE_MAX_SCORE_GAP (2.5), so
-      // computeDayPlan already shows b as a swipeable alternative. It must
-      // still be offered to Gemini - this is the exact live bug (Tampa Bay
-      // Rays @ New York Yankees excluded from ever being asked about) this
-      // round fixes.
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      assert.ok(close);
-      assert.equal(close.length, 2);
-      assert.equal(close[0].id, 'a');
-      assert.equal(close[1].id, 'b');
-    });
-
-    test('returns null when there genuinely is no alternative (gap beyond ALTERNATIVE_MAX_SCORE_GAP)', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 - ALTERNATIVE_MAX_SCORE_GAP - 0.1 });
-      const day = planFor([a, b]);
-      assert.equal(selectGeminiTieBreakCandidates(day), null);
-    });
-
-    test('caps the offered set at GEMINI_TIE_BREAK_MAX_CANDIDATES', () => {
-      const matches = [0, 1, 2, 3, 4].map(i =>
-        makeMatch({ id: `m${i}`, startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 - i * 0.1 })
-      );
-      const day = planFor(matches);
-      const close = selectGeminiTieBreakCandidates(day);
-      assert.equal(close.length, GEMINI_TIE_BREAK_MAX_CANDIDATES);
-    });
-
-    // Round 37: live-verified bug (2026-09-23/24/25) - a day can have MORE
-    // THAN ONE recommended slot at once (an early, non-overlapping
-    // "continuation" pick alongside the evening headline pick - see Round
-    // 36's own scheduling-floor fix). The old `dayMatches.find(m =>
-    // m.recommended)` just grabbed whichever recommended slot sorted first
-    // chronologically - on the real slate this was always the early,
-    // low-stakes slot with NO alternatives, so the genuinely contested
-    // evening headline slot (the one this whole feature exists for) was
-    // NEVER offered to Gemini at all, silently, every single day.
-    test('scans EVERY recommended slot, not just whichever one airs first, and picks the one with a real tie', () => {
-      const early = makeMatch({ id: 'early', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 8 });
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([early, a, b]);
-      // Both the early slot and the noon slot are independently recommended
-      // (they don't overlap) - the bug this guards against is exactly this
-      // shape: more than one `recommended` match on the same day.
-      assert.deepEqual(day.filter(m => m.recommended).map(m => m.id).sort(), ['a', 'early']);
-      const close = selectGeminiTieBreakCandidates(day);
-      assert.ok(close, 'must find the noon slot\'s real tie, not bail out because the early slot has none');
-      assert.deepEqual(close.map(c => c.id).sort(), ['a', 'b']);
-    });
-
-    test('when multiple recommended slots each have alternatives, picks whichever has the SMALLEST top-vs-runner-up gap', () => {
-      // Slot 1 (early): a clear win with only a distant alternative - a real
-      // tie exists (within ALTERNATIVE_MAX_SCORE_GAP) but it's a wide 1.5
-      // gap, not a genuine toss-up.
-      const early1 = makeMatch({ id: 'early1', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 8 });
-      const early2 = makeMatch({ id: 'early2', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 6.5 });
-      // Slot 2 (noon): a genuine near-tie, 0.1 apart.
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.9 });
-      const day = planFor([early1, early2, a, b]);
-      assert.deepEqual(day.filter(m => m.recommended).map(m => m.id).sort(), ['a', 'early1']);
-      const close = selectGeminiTieBreakCandidates(day);
-      assert.deepEqual(close.map(c => c.id).sort(), ['a', 'b']);
+    test('a match with no skill signal at all (e.g. F1) is never exempt', () => {
+      assert.equal(isVarietyExempt(makeMatch({ skill: null })), false);
+      assert.equal(isVarietyExempt(makeMatch({})), false);
     });
   });
 
-  describe('tieBreakCandidateKey', () => {
-    test('is stable regardless of input order', () => {
-      const a = { id: 'a' };
-      const b = { id: 'b' };
-      assert.equal(tieBreakCandidateKey([a, b]), tieBreakCandidateKey([b, a]));
+  describe('recommendedMatchupKeys', () => {
+    test('returns every distinct matchup actually recommended that day, not just the first', () => {
+      // Two non-overlapping games, both independently recommended - the
+      // real Round 36/37 "headline pick plus an earlier continuation pick"
+      // shape.
+      const early = makeMatch({ id: 'e', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, competitors: teams('A', 'B'), planningScore: 5 });
+      const late = makeMatch({ id: 'l', startTimeUtc: '2026-09-19T12:00:00.000Z', durationMinutes: 60, competitors: teams('C', 'D'), planningScore: 6 });
+      const keys = recommendedMatchupKeys('2026-09-19', [early, late]);
+      assert.equal(keys.size, 2);
+      assert.ok(keys.has(matchupKey(early)));
+      assert.ok(keys.has(matchupKey(late)));
+    });
+
+    test('empty input is an empty set, not an error', () => {
+      assert.equal(recommendedMatchupKeys('2026-09-19', []).size, 0);
     });
   });
 
-  describe('buildGeminiTieBreakPayload', () => {
-    test('carries id/sport/name/score/reason/facts straight from each candidate, with safe defaults', () => {
-      const a = makeMatch({
-        id: 'a',
-        name: 'A @ B',
-        sport: 'MLB',
-        startTimeUtc: NOON_UTC,
-        durationMinutes: 190,
-        effectiveScore: 8,
-        reason: 'r',
-        objectiveFactors: ['f1', 'f2']
-      });
-      const b = makeMatch({ id: 'b', name: 'C @ D', sport: 'MLB', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.6 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      const payload = buildGeminiTieBreakPayload('2026-09-19', close);
-      assert.equal(payload.day, '2026-09-19');
-      assert.equal(payload.candidates.length, 2);
-      assert.deepEqual(payload.candidates[0], {
-        id: 'a',
-        sport: 'MLB',
-        name: 'A @ B',
-        score: day.find(m => m.id === 'a').planningScore,
-        reason: 'r',
-        facts: ['f1', 'f2']
-      });
-      assert.equal(payload.candidates[1].reason, '');
-      assert.deepEqual(payload.candidates[1].facts, []);
+  describe('applyVarietyPenalty', () => {
+    test('no penalty at all with fewer than VARIETY_MAX_FREE_REPEATS prior days on record', () => {
+      const match = makeMatch({ skill: 5, planningScore: 6, competitors: teams('A', 'B') });
+      applyVarietyPenalty([match], [new Set([matchupKey(match)])]); // only 1 prior day, need 2
+      assert.equal(match.varietyPenalty, 0);
+      assert.equal(match.planningScore, 6);
+    });
+
+    test('penalizes a non-elite matchup that already won BOTH preceding days', () => {
+      const match = makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD - 1, planningScore: 6, competitors: teams('A', 'B') });
+      const key = matchupKey(match);
+      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
+      assert.equal(match.varietyPenalty, VARIETY_REPEAT_PENALTY);
+      assert.equal(match.planningScore, 6 - VARIETY_REPEAT_PENALTY);
+    });
+
+    test('an elite matchup (e.g. real Padres @ Dodgers, skill 7) is exempt even on its 3rd straight day', () => {
+      const match = makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD, planningScore: 7.1, competitors: teams('San Diego Padres', 'Los Angeles Dodgers') });
+      const key = matchupKey(match);
+      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
+      assert.equal(match.varietyPenalty, 0);
+      assert.equal(match.planningScore, 7.1);
+    });
+
+    test('does not penalize a DIFFERENT matchup than the one that was actually repeating', () => {
+      const match = makeMatch({ id: 'other', skill: 5, planningScore: 6, competitors: teams('E', 'F') });
+      const repeatingKey = 'MLB: A vs B';
+      applyVarietyPenalty([match], [new Set([repeatingKey]), new Set([repeatingKey])]);
+      assert.equal(match.varietyPenalty, 0);
+    });
+
+    test('missing skill (never scored) is treated as non-elite, not silently exempt', () => {
+      const match = makeMatch({ skill: null, planningScore: 6, competitors: teams('A', 'B') });
+      const key = matchupKey(match);
+      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
+      assert.equal(match.varietyPenalty, VARIETY_REPEAT_PENALTY);
     });
   });
 
-  describe('resolveGeminiOverridePin', () => {
-    test('returns null when there is no cached pick at all', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      assert.equal(resolveGeminiOverridePin(day, close, null), null);
-      assert.equal(resolveGeminiOverridePin(day, close, { candidateKey: tieBreakCandidateKey(close), pickId: null }), null);
+  test('end-to-end: a mediocre repeat loses its 3rd straight day to a decent alternative once penalized, but a real elite repeat (skill 8, like the live Brewers @ Phillies case) keeps winning', () => {
+    // Day 3 candidates: the same mediocre matchup that won days 1-2 (skill
+    // 5, no real rival those days) now has a genuine, only-slightly-worse
+    // alternative it should lose to once variety kicks in.
+    const repeat = makeMatch({
+      id: 'repeat',
+      skill: 5,
+      competitiveness: 6,
+      watchability: 6,
+      planningScore: 6,
+      competitors: teams('Mediocre A', 'Mediocre B')
     });
+    // Same start time as `repeat` - a genuinely competing candidate for the
+    // SAME slot, not an independent non-overlapping pick.
+    const fresh = makeMatch({
+      id: 'fresh',
+      skill: 5,
+      competitiveness: 6,
+      watchability: 6,
+      planningScore: 5.8,
+      competitors: teams('Fresh C', 'Fresh D')
+    });
+    const repeatKey = matchupKey(repeat);
+    applyVarietyPenalty([repeat, fresh], [new Set([repeatKey]), new Set([repeatKey])]);
+    // computeDayPlan mutates every candidate in place and only returns the
+    // ones that actually won a slot (see its own comment) - a losing
+    // candidate is never IN the returned array at all, so the loss is
+    // checked on `repeat` itself, not by searching the return value for it.
+    computeDayPlan('2026-09-21', [repeat, fresh], null, { scoreField: 'planningScore' });
+    assert.equal(fresh.recommended, true);
+    assert.equal(repeat.recommended, false);
 
-    test('returns null when the cached candidateKey no longer matches (stale cache safety)', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      const stale = { candidateKey: 'some-other-id,another-id', pickId: 'b' };
-      assert.equal(resolveGeminiOverridePin(day, close, stale), null);
+    // Same shape, but the repeating matchup is genuinely elite (skill 8,
+    // the real live Brewers @ Phillies case from 2026-09-22/23/24) - it
+    // keeps winning its 3rd straight day too, exactly as the user asked.
+    const eliteRepeat = makeMatch({
+      id: 'eliteRepeat',
+      skill: 8,
+      competitiveness: 6,
+      watchability: 6,
+      planningScore: 6,
+      competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies')
     });
-
-    test('returns null when the cached pickId is not one of the currently-offered candidates', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'not-actually-offered' };
-      assert.equal(resolveGeminiOverridePin(day, close, entry), null);
+    const eliteKey = matchupKey(eliteRepeat);
+    const freshRival = makeMatch({
+      id: 'freshRival',
+      skill: 5,
+      competitiveness: 6,
+      watchability: 6,
+      planningScore: 5.8,
+      competitors: teams('Fresh C', 'Fresh D')
     });
-
-    test('returns the pickId when the cache is fresh and valid', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      const day = planFor([a, b]);
-      const close = selectGeminiTieBreakCandidates(day);
-      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
-      assert.equal(resolveGeminiOverridePin(day, close, entry), 'b');
-    });
-
-    test('an explicit human pin in the same conflict cluster always wins over Gemini\'s own pick', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      // The viewer has pinned 'a' for this exact slot.
-      const day = planFor([a, b], new Set(['a']));
-      const close = selectGeminiTieBreakCandidates(day);
-      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
-      assert.equal(resolveGeminiOverridePin(day, close, entry, new Set(['a'])), null);
-    });
-
-    test('a human pin on a DIFFERENT, non-conflicting slot does not block Gemini\'s own pick', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      // c starts well after a/b's own slot ends - a totally separate pin.
-      const c = makeMatch({ id: 'c', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 5 });
-      const day = planFor([a, b, c], new Set(['c']));
-      const close = selectGeminiTieBreakCandidates(day);
-      const entry = { candidateKey: tieBreakCandidateKey(close), pickId: 'b' };
-      assert.equal(resolveGeminiOverridePin(day, close, entry, new Set(['c'])), 'b');
-    });
-  });
-
-  describe('computeDayPlanWithGeminiTieBreak', () => {
-    test('with no cache entry, behaves exactly like a plain computeDayPlan call', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
-      applyLiveExcitementBonus([a, b]);
-      const { picks, close } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], null, null, { scoreField: 'planningScore' });
-      assert.equal(a.recommended, true);
-      assert.equal(b.recommended, false);
-      assert.equal(picks.length, 1);
-      assert.equal(picks[0].id, 'a');
-      assert.equal(close.length, 2); // still surfaces the close call for app.js to ask about
-    });
-
-    test('a valid cached pick wins its slot UNCONDITIONALLY, regardless of how wide the score gap is - this is the whole point of Round 35', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
-      // b trails by a full 2.0 - nowhere near the old, removed 0.5 margin,
-      // and still not enough for a mere score bonus to safely guarantee a
-      // flip - the hard pin guarantees it regardless.
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.0 });
-      applyLiveExcitementBonus([a, b]);
-      computeDayPlan('2026-09-19', [a, b], null, { scoreField: 'planningScore' });
-      const naturalClose = selectGeminiTieBreakCandidates([a, b], { scoreField: 'planningScore' });
-      const cacheEntry = { candidateKey: tieBreakCandidateKey(naturalClose), pickId: 'b' };
-      const { picks } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], null, cacheEntry, { scoreField: 'planningScore' });
-      assert.equal(a.recommended, false);
-      assert.equal(b.recommended, true);
-      assert.equal(picks.length, 1);
-      assert.equal(picks[0].id, 'b');
-    });
-
-    test('a viewer\'s own explicit pin still overrides the cached Gemini pick', () => {
-      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 9 });
-      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.0 });
-      applyLiveExcitementBonus([a, b]);
-      computeDayPlan('2026-09-19', [a, b], null, { scoreField: 'planningScore' });
-      const naturalClose = selectGeminiTieBreakCandidates([a, b], { scoreField: 'planningScore' });
-      const cacheEntry = { candidateKey: tieBreakCandidateKey(naturalClose), pickId: 'b' };
-      const { picks } = computeDayPlanWithGeminiTieBreak('2026-09-19', [a, b], new Set(['a']), cacheEntry, { scoreField: 'planningScore' });
-      assert.equal(a.recommended, true);
-      assert.equal(picks[0].id, 'a');
-    });
+    applyVarietyPenalty([eliteRepeat, freshRival], [new Set([eliteKey]), new Set([eliteKey])]);
+    computeDayPlan('2026-09-21', [eliteRepeat, freshRival], null, { scoreField: 'planningScore' });
+    assert.equal(eliteRepeat.recommended, true);
   });
 });

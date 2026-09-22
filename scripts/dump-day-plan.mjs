@@ -29,7 +29,15 @@
 //   applySportFilter split (the scheduler always sees every enabled sport;
 //   only the rendered/printed list is ever narrowed by a sport filter).
 import { readFile } from 'node:fs/promises';
-import { applyLiveExcitementBonus, computeDayPlan, explainWhyNotRecommended, resolveViewingPlan } from '../public/lib/recommendation.mjs';
+import {
+  applyLiveExcitementBonus,
+  applyVarietyPenalty,
+  computeDayPlan,
+  explainWhyNotRecommended,
+  matchupKey,
+  resolveViewingPlan,
+  VARIETY_MAX_FREE_REPEATS
+} from '../public/lib/recommendation.mjs';
 
 function localDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -59,15 +67,28 @@ for (const match of matches) {
 // explainWhyNotRecommended below can safely read .planningScore straight
 // off these same objects afterward. applyLiveExcitementBonus (also
 // in-place) has to run first, per day, since that's what actually sets
-// .planningScore.
-for (const dayMatches of matchesByDayKey.values()) {
+// .planningScore. Processed in chronological order (not Map insertion
+// order) and tracking each day's own recommended matchupKeys as we go, so
+// applyVarietyPenalty sees the exact same real-two-preceding-days context
+// app.js's own recentMatchupKeySets does - see that function's own comment
+// in recommendation.mjs (Round 41).
+const allDayKeysSorted = [...matchesByDayKey.keys()].sort();
+const matchupKeysByDay = new Map();
+for (const dayKey of allDayKeysSorted) {
+  const dayMatches = matchesByDayKey.get(dayKey);
   applyLiveExcitementBonus(dayMatches);
-  computeDayPlan(localDateKey(new Date(dayMatches[0].startTimeUtc)), dayMatches, null, { scoreField: 'planningScore' });
+  const recentSets = [];
+  for (let back = 1; back <= VARIETY_MAX_FREE_REPEATS; back++) {
+    const priorKeys = matchupKeysByDay.get(allDayKeysSorted[allDayKeysSorted.indexOf(dayKey) - back]);
+    if (!priorKeys) break;
+    recentSets.push(priorKeys);
+  }
+  applyVarietyPenalty(dayMatches, recentSets);
+  computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
+  matchupKeysByDay.set(dayKey, new Set(dayMatches.filter(m => m.recommended).map(matchupKey)));
 }
 
-const dayKeys = [...matchesByDayKey.keys()]
-  .sort()
-  .filter(key => (!fromArg || key >= fromArg) && (!toArg || key <= toArg));
+const dayKeys = allDayKeysSorted.filter(key => (!fromArg || key >= fromArg) && (!toArg || key <= toArg));
 
 console.log(`TZ=${process.env.TZ || '(system default)'} now=${new Date().toString()}`);
 
