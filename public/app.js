@@ -1176,8 +1176,23 @@ function recentMatchupKeySets(dayKey) {
 // own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
 // the actual rendered plan uses, rather than a second, slightly different
 // computation that could disagree with what's on screen.
+//
+// Two computeDayPlan passes, deliberately: applyVarietyPenalty's own
+// isVarietyExempt (recommendation.mjs) decides whether TODAY's pick is
+// exempt by reading its real `.alternativeIds` - a real alternative to
+// rotate to means variety should apply; no alternative (the pick is simply
+// the best thing on) means it's exempt, whatever its score. That field
+// only exists once computeDayPlan has actually run once, so a first,
+// natural pass (today's REAL pins already respected, no variety penalty
+// yet) has to happen before applyVarietyPenalty can even ask the question.
+// The caller's own subsequent computeDayPlan call (with the now-penalized
+// planningScore) is what actually decides what renders - computeDayPlan
+// resets every match's own `.recommended`/`.alternativeIds` at the top of
+// each call (see its own comment), so running it twice here is safe: only
+// the LAST call's result is left mutated onto the matches.
 function dayCandidatesForPlan(dayKey) {
   const dayCandidates = baseDayCandidates(dayKey);
+  computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
   applyVarietyPenalty(dayCandidates, recentMatchupKeySets(dayKey));
   return dayCandidates;
 }

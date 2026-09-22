@@ -83,6 +83,10 @@ for (const dayKey of allDayKeysSorted) {
     if (!priorKeys) break;
     recentSets.push(priorKeys);
   }
+  // Natural pass first - isVarietyExempt needs .alternativeIds, which only
+  // exists once computeDayPlan has actually run once (see that function's
+  // own comment in recommendation.mjs and app.js's dayCandidatesForPlan).
+  computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
   applyVarietyPenalty(dayMatches, recentSets);
   computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
   matchupKeysByDay.set(dayKey, new Set(dayMatches.filter(m => m.recommended).map(matchupKey)));

@@ -58,9 +58,9 @@ import {
   isVarietyExempt,
   recommendedMatchupKeys,
   applyVarietyPenalty,
-  VARIETY_ELITE_SKILL_THRESHOLD,
   VARIETY_MAX_FREE_REPEATS,
-  VARIETY_REPEAT_PENALTY
+  VARIETY_REPEAT_PENALTY,
+  VARIETY_CLOSE_CALL_GAP
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -1321,20 +1321,25 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
-describe('Back-to-back variety (Round 41: bounded, elite-exempt)', () => {
+describe('Back-to-back variety (Round 41/42: bounded, exempt only when there is no real alternative)', () => {
   function teams(a, b) {
     return [{ name: a }, { name: b }];
   }
 
   describe('isVarietyExempt', () => {
-    test('exempt once skill reaches VARIETY_ELITE_SKILL_THRESHOLD', () => {
-      assert.equal(isVarietyExempt(makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD })), true);
-      assert.equal(isVarietyExempt(makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD - 1 })), false);
+    test('exempt when there is no real alternative at all (closestAlternativeGap is null)', () => {
+      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: null })), true);
+      assert.equal(isVarietyExempt(makeMatch({})), true); // never even went through computeDayPlan
     });
 
-    test('a match with no skill signal at all (e.g. F1) is never exempt', () => {
-      assert.equal(isVarietyExempt(makeMatch({ skill: null })), false);
-      assert.equal(isVarietyExempt(makeMatch({})), false);
+    test('exempt once the margin over the closest real alternative exceeds VARIETY_CLOSE_CALL_GAP (the real Padres @ Dodgers case: 0.75-1.0)', () => {
+      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: VARIETY_CLOSE_CALL_GAP + 0.01 })), true);
+      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: 0.75 })), true);
+    });
+
+    test('NOT exempt when the margin is at or under VARIETY_CLOSE_CALL_GAP (the real Brewers @ Phillies case: 0.15-0.45)', () => {
+      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: VARIETY_CLOSE_CALL_GAP })), false);
+      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: 0.15 })), false);
     });
   });
 
@@ -1358,22 +1363,22 @@ describe('Back-to-back variety (Round 41: bounded, elite-exempt)', () => {
 
   describe('applyVarietyPenalty', () => {
     test('no penalty at all with fewer than VARIETY_MAX_FREE_REPEATS prior days on record', () => {
-      const match = makeMatch({ skill: 5, planningScore: 6, competitors: teams('A', 'B') });
+      const match = makeMatch({ closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('A', 'B') });
       applyVarietyPenalty([match], [new Set([matchupKey(match)])]); // only 1 prior day, need 2
       assert.equal(match.varietyPenalty, 0);
       assert.equal(match.planningScore, 6);
     });
 
-    test('penalizes a non-elite matchup that already won BOTH preceding days', () => {
-      const match = makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD - 1, planningScore: 6, competitors: teams('A', 'B') });
+    test('penalizes a close-margin repeat that already won BOTH preceding days (the real Brewers @ Phillies shape, gap 0.15-0.45)', () => {
+      const match = makeMatch({ closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
       const key = matchupKey(match);
       applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
       assert.equal(match.varietyPenalty, VARIETY_REPEAT_PENALTY);
       assert.equal(match.planningScore, 6 - VARIETY_REPEAT_PENALTY);
     });
 
-    test('an elite matchup (e.g. real Padres @ Dodgers, skill 7) is exempt even on its 3rd straight day', () => {
-      const match = makeMatch({ skill: VARIETY_ELITE_SKILL_THRESHOLD, planningScore: 7.1, competitors: teams('San Diego Padres', 'Los Angeles Dodgers') });
+    test('a wide-margin repeat (the real Padres @ Dodgers shape, gap 0.75-1.0) is exempt even on its 3rd straight day', () => {
+      const match = makeMatch({ closestAlternativeGap: 0.95, planningScore: 7.1, competitors: teams('San Diego Padres', 'Los Angeles Dodgers') });
       const key = matchupKey(match);
       applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
       assert.equal(match.varietyPenalty, 0);
@@ -1381,74 +1386,73 @@ describe('Back-to-back variety (Round 41: bounded, elite-exempt)', () => {
     });
 
     test('does not penalize a DIFFERENT matchup than the one that was actually repeating', () => {
-      const match = makeMatch({ id: 'other', skill: 5, planningScore: 6, competitors: teams('E', 'F') });
+      const match = makeMatch({ id: 'other', closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('E', 'F') });
       const repeatingKey = 'MLB: A vs B';
       applyVarietyPenalty([match], [new Set([repeatingKey]), new Set([repeatingKey])]);
       assert.equal(match.varietyPenalty, 0);
     });
 
-    test('missing skill (never scored) is treated as non-elite, not silently exempt', () => {
-      const match = makeMatch({ skill: null, planningScore: 6, competitors: teams('A', 'B') });
+    test('a pick that never went through computeDayPlan (no .closestAlternativeGap at all) is treated as exempt, not penalized', () => {
+      const match = makeMatch({ planningScore: 6, competitors: teams('A', 'B') });
       const key = matchupKey(match);
       applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
-      assert.equal(match.varietyPenalty, VARIETY_REPEAT_PENALTY);
+      assert.equal(match.varietyPenalty, 0);
     });
   });
 
-  test('end-to-end: a mediocre repeat loses its 3rd straight day to a decent alternative once penalized, but a real elite repeat (skill 8, like the live Brewers @ Phillies case) keeps winning', () => {
-    // Day 3 candidates: the same mediocre matchup that won days 1-2 (skill
-    // 5, no real rival those days) now has a genuine, only-slightly-worse
-    // alternative it should lose to once variety kicks in.
+  test('end-to-end: the natural pass decides exemption correctly - a close-margin repeat loses its 3rd day, a wide-margin repeat (Padres @ Dodgers) keeps winning', () => {
+    // Day 3 candidates for the "Brewers @ Phillies" shape: a genuine,
+    // only-slightly-worse rival exists in the SAME slot every day (this is
+    // exactly what the user pointed out - "the Brewer time they got equal
+    // match ups"), so once it's won its slot 2 days running, variety should
+    // push it aside on the 3rd. Scores chosen to reproduce the real
+    // observed margin (~0.2, comfortably under VARIETY_CLOSE_CALL_GAP).
     const repeat = makeMatch({
       id: 'repeat',
-      skill: 5,
-      competitiveness: 6,
-      watchability: 6,
-      planningScore: 6,
-      competitors: teams('Mediocre A', 'Mediocre B')
-    });
-    // Same start time as `repeat` - a genuinely competing candidate for the
-    // SAME slot, not an independent non-overlapping pick.
-    const fresh = makeMatch({
-      id: 'fresh',
-      skill: 5,
-      competitiveness: 6,
-      watchability: 6,
-      planningScore: 5.8,
-      competitors: teams('Fresh C', 'Fresh D')
-    });
-    const repeatKey = matchupKey(repeat);
-    applyVarietyPenalty([repeat, fresh], [new Set([repeatKey]), new Set([repeatKey])]);
-    // computeDayPlan mutates every candidate in place and only returns the
-    // ones that actually won a slot (see its own comment) - a losing
-    // candidate is never IN the returned array at all, so the loss is
-    // checked on `repeat` itself, not by searching the return value for it.
-    computeDayPlan('2026-09-21', [repeat, fresh], null, { scoreField: 'planningScore' });
-    assert.equal(fresh.recommended, true);
-    assert.equal(repeat.recommended, false);
-
-    // Same shape, but the repeating matchup is genuinely elite (skill 8,
-    // the real live Brewers @ Phillies case from 2026-09-22/23/24) - it
-    // keeps winning its 3rd straight day too, exactly as the user asked.
-    const eliteRepeat = makeMatch({
-      id: 'eliteRepeat',
-      skill: 8,
-      competitiveness: 6,
-      watchability: 6,
       planningScore: 6,
       competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies')
     });
-    const eliteKey = matchupKey(eliteRepeat);
-    const freshRival = makeMatch({
-      id: 'freshRival',
-      skill: 5,
-      competitiveness: 6,
-      watchability: 6,
+    const rival = makeMatch({
+      id: 'rival',
       planningScore: 5.8,
-      competitors: teams('Fresh C', 'Fresh D')
+      competitors: teams('Cleveland Guardians', 'Boston Red Sox')
     });
-    applyVarietyPenalty([eliteRepeat, freshRival], [new Set([eliteKey]), new Set([eliteKey])]);
-    computeDayPlan('2026-09-21', [eliteRepeat, freshRival], null, { scoreField: 'planningScore' });
-    assert.equal(eliteRepeat.recommended, true);
+    const repeatKey = matchupKey(repeat);
+    const recentSets = [new Set([repeatKey]), new Set([repeatKey])];
+    // Natural pass first - this is what actually populates
+    // .closestAlternativeGap, which isVarietyExempt/applyVarietyPenalty
+    // need to see below (see app.js's dayCandidatesForPlan for the real
+    // two-pass call site).
+    computeDayPlan('2026-09-21', [repeat, rival], null, { scoreField: 'planningScore' });
+    assert.ok(repeat.closestAlternativeGap < VARIETY_CLOSE_CALL_GAP); // confirms the natural pass really did see a close rival
+    applyVarietyPenalty([repeat, rival], recentSets);
+    computeDayPlan('2026-09-21', [repeat, rival], null, { scoreField: 'planningScore' });
+    assert.equal(rival.recommended, true);
+    assert.equal(repeat.recommended, false);
+
+    // Same shape, but this time the runner-up is far enough back to
+    // reproduce the real live Padres @ Dodgers margin (~1.0, well over
+    // VARIETY_CLOSE_CALL_GAP but still under ALTERNATIVE_MAX_SCORE_GAP,
+    // i.e. it still shows up as a swipeable `.alternativeIds` entry in the
+    // UI - just not a close enough call for variety to touch). Even after
+    // "winning" its slot 2 days running, nothing is close enough to
+    // meaningfully rotate to, so it MUST keep winning its 3rd day too.
+    const uniqueRepeat = makeMatch({
+      id: 'uniqueRepeat',
+      planningScore: 7,
+      competitors: teams('San Diego Padres', 'Los Angeles Dodgers')
+    });
+    const distantRival = makeMatch({
+      id: 'distantRival',
+      planningScore: 6,
+      competitors: teams('Houston Astros', 'Seattle Mariners')
+    });
+    const uniqueKey = matchupKey(uniqueRepeat);
+    computeDayPlan('2026-09-21', [uniqueRepeat, distantRival], null, { scoreField: 'planningScore' });
+    assert.ok(uniqueRepeat.closestAlternativeGap > VARIETY_CLOSE_CALL_GAP); // confirms the natural pass really did see only a distant rival
+    applyVarietyPenalty([uniqueRepeat, distantRival], [new Set([uniqueKey]), new Set([uniqueKey])]);
+    computeDayPlan('2026-09-21', [uniqueRepeat, distantRival], null, { scoreField: 'planningScore' });
+    assert.equal(uniqueRepeat.recommended, true);
   });
 });
+

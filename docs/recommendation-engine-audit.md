@@ -4380,3 +4380,98 @@ since item 1 removed the only mechanism that could disagree with the
 deterministic engine's own pick in the first place. The deterministic
 engine (`public/lib/recommendation.mjs`) is Match Find's sole
 recommendation logic now, for the second time in this project's history.
+
+## Round 42 (2026-09-22): fixed the back-to-back variety exemption criterion - a real margin, not an absolute skill bar
+
+Direct correction to Round 41's variety feature, same day: "I want
+variety, because the Brewer time they got equal match ups[,] the dodger
+one in it's time it's the best[,] no alternative."
+
+**What was wrong.** Round 41's `isVarietyExempt` exempted any matchup once
+its own `skill` reached 7 (the same field `BEST_MATCH_WEIGHTS` weighs
+heavily). That reasoning conflated two different questions: "is this
+matchup good in isolation" and "does the viewer actually have something
+comparable to rotate to instead." Milwaukee Brewers @ Philadelphia
+Phillies (skill 8) got wrongly exempted under the old rule even though its
+own real time slot has several genuinely close alternatives every day it
+repeats (Cleveland Guardians @ Boston Red Sox, Tampa Bay Rays @ New York
+Yankees, etc.) - exactly the "equal match ups" case the user says should
+get varied. San Diego Padres @ Los Angeles Dodgers (skill 7) happened to
+ALSO get exempted under the old rule, which looked right, but for the
+wrong reason - it's actually exempt because nothing else that late in the
+day comes remotely close, not because of its skill number.
+
+**A second, intermediate attempt** (exempt whenever `.alternativeIds` is
+merely non-empty, dropping skill entirely) was checked against real
+numbers before shipping and also found wanting: `ALTERNATIVE_MAX_SCORE_GAP`
+(2.5, this file's own "worth a swipe" bar for the UI) is deliberately
+generous, so Padres @ Dodgers technically HAS an `.alternativeIds` entry
+every single day too (Houston Astros @ Seattle Mariners etc.) - a
+boolean "has an alternative at all" doesn't distinguish it from Brewers @
+Phillies.
+
+**The real signal, confirmed against live data**, is the MARGIN over the
+closest real alternative, not merely whether one exists:
+
+| Date | Matchup | Margin over closest same-slot rival |
+| --- | --- | --- |
+| 09-22 | Toronto Blue Jays @ Baltimore Orioles | 0.55 |
+| 09-23 | Milwaukee Brewers @ Philadelphia Phillies | 0.40 |
+| 09-23 | San Diego Padres @ Los Angeles Dodgers | 1.00 |
+| 09-24 | Milwaukee Brewers @ Philadelphia Phillies | 0.15 |
+| 09-24 | San Diego Padres @ Los Angeles Dodgers | 0.75 |
+| 09-25 | Milwaukee Brewers @ Philadelphia Phillies | 0.45 |
+| 09-25 | San Diego Padres @ Los Angeles Dodgers | 0.95 |
+| 09-26 | Tampa Bay Rays @ Philadelphia Phillies | 0.10 |
+| 09-27 | Tampa Bay Rays @ Philadelphia Phillies | 0.10 |
+
+Brewers/Phillies never exceeds 0.45; Padres/Dodgers never drops below
+0.75 - a genuine, real dividing line, not a coincidence of one date.
+
+**Implementation.** `computeDayPlan` (`public/lib/recommendation.mjs`) now
+sets `choice.closestAlternativeGap` alongside `choice.alternativeIds` -
+`Math.min(...alternatives.map(m => pickedScore - getScore(m)))`, `null`
+when there's no alternative at all (reset at the top of every call, same
+as `.alternativeIds`). `isVarietyExempt` is now:
+
+```js
+export const VARIETY_CLOSE_CALL_GAP = 0.5;
+export function isVarietyExempt(match) {
+  return !Number.isFinite(match.closestAlternativeGap) || match.closestAlternativeGap > VARIETY_CLOSE_CALL_GAP;
+}
+```
+
+0.5 sits directly between the two live ranges above (Brewers tops out at
+0.45, Dodgers bottoms out at 0.75) - chosen because a real dividing line
+exists there, not picked first and hoped for.
+
+This changes `dayCandidatesForPlan`'s own contract in `app.js`:
+`.closestAlternativeGap` only exists once `computeDayPlan` has actually
+run once, so `applyVarietyPenalty` can no longer be called on a bare,
+never-scheduled candidate list. `dayCandidatesForPlan` now runs
+`computeDayPlan` TWICE - a natural pass (today's real pins respected, no
+variety penalty yet) purely to populate `.closestAlternativeGap`, then
+`applyVarietyPenalty`, then the caller's own final `computeDayPlan` call
+with the now-penalized `planningScore`. Safe by the same reasoning
+`computeDayPlanWithGeminiTieBreak` (now-removed) already established:
+`computeDayPlan` resets every match's own scheduling fields at the top of
+each call, so calling it twice on the same array is idempotent except for
+which call's result is left mutated on afterward. `scripts/
+dump-day-plan.mjs` was updated the same way (natural pass, then
+`applyVarietyPenalty`, then the real pass).
+
+**Live-verified end to end**: `dump-day-plan.mjs` for 2026-09-22 through
+09-27, MLB - 09-23/09-24 still show both Brewers/Phillies and
+Padres/Dodgers (within the 2-free-repeats allowance). 09-25 (the would-be
+3rd straight day for both): Brewers/Phillies is correctly varied away to
+Tampa Bay Rays @ New York Yankees (its own close rival, matching the
+"equal match ups" description), while Padres/Dodgers correctly keeps
+winning unchanged (its own wide margin, matching "the best, no
+alternative"). A before/after diff across the whole fetched window shows
+**exactly 1 day differs (2026-09-25)** - precisely the intended, and only
+the intended, change; every other day (including every non-MLB sport) is
+byte-identical to the no-variety baseline.
+
+Rewrote the Round 41 unit tests to use `closestAlternativeGap` directly
+(the real live numbers above, not synthetic skill values) rather than
+`alternativeIds` presence or skill. Full suite **386/386**.

@@ -319,7 +319,7 @@ entirely), so it couldn't be checked against real data, but it runs through
 the exact same `computeNbaObjectiveScore`→`bestMatchScore` path with no
 special-casing, so the same behavior applies the moment real games exist.
 
-### Back-to-back variety (Round 41) - bounded, and exempt for real elite games
+### Back-to-back variety (Round 41/42) - bounded, exempt only when there's genuinely nothing else close
 
 Direct feedback: the deterministic scheduler's own math will happily
 recommend the exact same matchup three (or more) real calendar days
@@ -333,38 +333,50 @@ window, including weekdays this viewer never watches, which is exactly
 what silently buried a genuinely great weekend game for a "variety"
 benefit nobody wanted.
 
-This version (`applyVarietyPenalty`/`isVarietyExempt`/
-`VARIETY_ELITE_SKILL_THRESHOLD`/`VARIETY_MAX_FREE_REPEATS`/
-`VARIETY_REPEAT_PENALTY`, all in `public/lib/recommendation.mjs`) only ever
-looks at the real two immediately PRECEDING calendar days, and is skipped
-entirely once a matchup's own `skill` reaches 7 (the better team having at
-least a .600-equivalent winning percentage) - the SAME field
-`BEST_MATCH_WEIGHTS` now weighs most heavily, deliberately NOT
-`bestMatchScore`/`planningScore`, since those are relative to whatever else
-is on that specific day and could read a genuinely great matchup on an
-otherwise-quiet day as "marginal" for reasons that have nothing to do with
-how good it actually is. `app.js`'s `dayCandidatesForPlan` folds this in
-automatically for every render (and for `pinSlotChoice`'s own "what would
-the algorithm pick naturally" question), using `recentMatchupKeySets` to
-walk `state.days` backward and score those two prior days' own NATURAL
-(pre-variety) plan - deliberately not recursive into their own variety
-adjustment, to keep this a simple, boundedly-shallow lookup rather than a
-chain that could walk arbitrarily far back through the fetched window.
+**Round 41's first cut got the exemption criterion wrong** - it exempted a
+matchup once its own `skill` reached 7, on the theory that a "real good
+game" should always keep repeating. Direct correction: "I want variety,
+because the Brewer time they got equal match ups[,] the dodger one in it's
+time it's the best[,] no alternative." Milwaukee Brewers @ Philadelphia
+Phillies (skill 8) has several genuinely comparable alternatives in its
+own time slot every day it repeats - a skill-based bar wrongly exempted it
+anyway. **Round 42 fixed the criterion**: `isVarietyExempt` now reads
+`.closestAlternativeGap` (a new field `computeDayPlan` sets alongside
+`.alternativeIds` - the score margin over the CLOSEST real rival in the
+same slot, not just whether one exists at all), and is exempt only when
+that margin exceeds `VARIETY_CLOSE_CALL_GAP` (0.5) or there's no
+alternative at all. This is a genuinely different question from "is
+`.alternativeIds` non-empty": `ALTERNATIVE_MAX_SCORE_GAP` (2.5, the "worth
+a swipe" bar) is generous enough that Padres @ Dodgers technically HAS an
+`.alternativeIds` entry every day too - its real margin over that
+alternative (0.75-1.0, live-measured) is just far too wide to call it a
+genuine toss-up, while Brewers @ Phillies's own margin over its closest
+rival (0.15-0.45, same real days) is exactly the "equal match ups" the
+user pointed at. 0.5 sits directly in the gap between those two live
+ranges, not an arbitrary round number.
 
-Live-verified against the real 2026-09-22 fetch: Milwaukee Brewers @
-Philadelphia Phillies (skill 8) and San Diego Padres @ Los Angeles Dodgers
-(skill 7) both naturally repeat as top picks for 3 real consecutive days
-(09-23 through 09-25) - both are elite-exempt, so this feature makes
-exactly ZERO difference to either of them, confirmed by a before/after
-diff across the whole fetched window (0 days differ). That's the correct,
-intended outcome, not a sign the feature does nothing: the two real
-repeats happening right now are genuinely the "real good games" the user
-pointed at keeping, and the feature exists for a mediocre repeat that
-isn't currently occurring - covered instead by a dedicated unit test using
-synthetic data (a mediocre skill-5 matchup that already won two straight
-days loses its 3rd to a fresh, only-slightly-worse alternative once
-penalized, while an identical-shaped but skill-8 "elite" repeat keeps
-winning).
+`app.js`'s `dayCandidatesForPlan` now runs `computeDayPlan` TWICE per
+render: a natural pass first (so `.closestAlternativeGap` actually exists
+to check), then `applyVarietyPenalty`, then the real final pass with the
+now-penalized `planningScore` - safe because `computeDayPlan` resets every
+match's own `.recommended`/`.alternativeIds`/`.closestAlternativeGap` at
+the top of each call (only the LAST call's result is left mutated onto the
+matches, same "call it twice, last one wins" pattern the old Gemini
+override used). `recentMatchupKeySets` (looking back at the two preceding
+real calendar days) still uses each of THOSE days' own natural,
+un-penalized plan - deliberately not recursive into their own variety
+adjustment, to keep this a bounded lookup rather than a chain walking
+arbitrarily far back through the fetched window.
+
+Live-verified against the real 2026-09-22 fetch: on 09-23/09-24, Milwaukee
+Brewers @ Philadelphia Phillies and San Diego Padres @ Los Angeles Dodgers
+both repeat (within the 2-free-repeats allowance). On 09-25 - the would-be
+3rd straight day for both - Brewers @ Phillies is correctly varied away to
+Tampa Bay Rays @ New York Yankees (its own close rival, gap 0.15-0.45),
+while Padres @ Dodgers correctly keeps winning its 3rd day unchanged (gap
+0.75-1.0, nothing close enough to rotate to) - exactly the split the user
+described, confirmed by a before/after diff across the whole fetched
+window (exactly 1 day differs, 2026-09-25, exactly as expected).
 
 ## The viewing plan
 

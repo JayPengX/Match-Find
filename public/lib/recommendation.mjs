@@ -908,6 +908,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
+    match.closestAlternativeGap = null;
     match.isPreferred = false;
     match.slotKey = null;
   });
@@ -1081,7 +1082,19 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
         isNearTotalOverlap(m, choice) &&
         pickedScore - getScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );
-    if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
+    if (alternatives.length) {
+      choice.alternativeIds = alternatives.map(m => m.id);
+      // The margin over the CLOSEST of those alternatives specifically -
+      // see applyVarietyPenalty/isVarietyExempt's own comment for why this,
+      // not merely "does .alternativeIds exist at all", is what actually
+      // answers "is this genuinely a toss-up". ALTERNATIVE_MAX_SCORE_GAP
+      // (2.5) is generous on purpose (a real second opinion worth
+      // SWIPING to, see that constant's own comment) - a match sitting
+      // near the far end of that gap is still clearly the best thing on,
+      // not a close call, even though it technically has an
+      // "alternative" by that looser bar.
+      choice.closestAlternativeGap = Math.min(...alternatives.map(m => pickedScore - getScore(m)));
+    }
   });
 
   return picks.map(p => p.choice);
@@ -1208,27 +1221,42 @@ export function applyLiveExcitementBonus(dayMatches) {
 // including weekdays this viewer never watches, which is exactly what
 // silently buried a genuinely great weekend game for a "variety" benefit
 // nobody wanted. This version only ever looks at the REAL two immediately
-// PRECEDING calendar days (VARIETY_MAX_FREE_REPEATS), and is skipped
-// entirely for a genuinely elite matchup (VARIETY_ELITE_SKILL_THRESHOLD) -
-// so Padres @ Dodgers (skill 7 - the better team has at least a .600
-// winning percentage) can keep winning every single day of its real series,
-// same as it always could, while a mediocre matchup that only keeps winning
-// because nothing else is on gets nudged aside once it would otherwise
-// repeat a third straight day.
+// PRECEDING calendar days (VARIETY_MAX_FREE_REPEATS).
 //
-// `skill` - the SAME field BEST_MATCH_WEIGHTS now weighs most heavily (see
-// Round 39's own comment above) - is deliberately the quality signal used
-// here too, NOT bestMatchScore/planningScore: those are relative to
-// whatever ELSE is on that specific day, so a genuinely great matchup on an
-// otherwise-quiet day could read as "marginal" for reasons that have
-// nothing to do with how good it actually is. An absolute quality bar is
-// what "real good games get kept" actually means.
-export const VARIETY_ELITE_SKILL_THRESHOLD = 7;
+// Round 42: the first cut of this feature (isVarietyExempt keyed off an
+// absolute `skill >= 7` bar) got the EXEMPTION criterion backwards - direct
+// correction: "I want variety, because the Brewer time they got equal
+// match ups[,] the dodger one in it's time it['s] the best[,] no
+// alternative." A second attempt (exempt whenever `.alternativeIds` is
+// merely non-empty) turned out too permissive on real data: San Diego
+// Padres @ Los Angeles Dodgers DOES technically have an `.alternativeIds`
+// entry every day (Houston Astros @ Seattle Mariners etc.) because
+// ALTERNATIVE_MAX_SCORE_GAP (2.5, this file's own "worth a swipe" bar) is
+// deliberately generous - but real live numbers show its actual margin
+// over that alternative is 0.75-1.0, while Milwaukee Brewers @
+// Philadelphia Phillies's own margin over ITS closest real rival is only
+// 0.15-0.45 on the exact same days. That gap-of-the-gap is precisely
+// "equal match ups" (Brewers) vs. "the best, no [real] alternative"
+// (Dodgers) - a boolean "has an alternativeIds entry at all" collapses
+// that real, live distinction into one bucket; the actual MARGIN is what
+// answers it. `choice.closestAlternativeGap` (set alongside
+// `alternativeIds` above, for exactly this reason) is that margin -
+// `null` when there's no alternative at all. VARIETY_CLOSE_CALL_GAP (0.5)
+// sits in the real, observed gap between the two live cases (Brewers
+// tops out at 0.45; Dodgers bottoms out at 0.75 across five real repeat
+// days, 2026-09-22 through 09-27) - not an arbitrary number, a threshold
+// chosen because a genuine dividing line exists there in this exact data.
+export const VARIETY_CLOSE_CALL_GAP = 0.5;
 
-// How many CONSECUTIVE real calendar days a non-elite matchup is allowed to
-// win its own slot before the penalty kicks in -2, matching the user's own
-// framing ("three straight days... I don't like that": days 1 and 2 are a
-// normal back-to-back, day 3 is where variety should start pushing back).
+export function isVarietyExempt(match) {
+  return !Number.isFinite(match.closestAlternativeGap) || match.closestAlternativeGap > VARIETY_CLOSE_CALL_GAP;
+}
+
+// How many CONSECUTIVE real calendar days a non-exempt matchup is allowed
+// to win its own slot before the penalty kicks in - 2, matching the user's
+// own framing ("three straight days... I don't like that": days 1 and 2
+// are a normal back-to-back, day 3 is where variety should start pushing
+// back).
 export const VARIETY_MAX_FREE_REPEATS = 2;
 
 // Large enough to flip a genuinely marginal/close call (the exact case this
@@ -1239,16 +1267,17 @@ export const VARIETY_MAX_FREE_REPEATS = 2;
 // count, only a genuine toss-up actually gets varied away.
 export const VARIETY_REPEAT_PENALTY = 1;
 
-export function isVarietyExempt(match) {
-  return Number.isFinite(match.skill) && match.skill >= VARIETY_ELITE_SKILL_THRESHOLD;
-}
-
 // `dayMatches` must already have planningScore set (applyLiveExcitementBonus)
 // - runs computeDayPlan itself (mutating `dayMatches` in place, same
 // convention as the rest of this module) purely to read which matchup(s)
-// actually won this day's own slot(s); a day can have more than one
-// independently-recommended slot at once (Round 36/37's own scheduling-
-// floor case), so this returns every one of them, not just the first.
+// actually won this day's own slot(s), and whether each pick had a real
+// alternative (see isVarietyExempt above - this is also how
+// applyVarietyPenalty's own caller learns whether TODAY's pick is exempt,
+// since `.alternativeIds` only exists after a computeDayPlan pass has run -
+// see dayCandidatesForPlan's own two-pass comment in app.js). A day can
+// have more than one independently-recommended slot at once (Round 36/37's
+// own scheduling-floor case), so this returns every one of them, not just
+// the first.
 export function recommendedMatchupKeys(dayKey, dayMatches, pinnedForDay = null) {
   if (!dayMatches || !dayMatches.length) return new Set();
   const picks = computeDayPlan(dayKey, dayMatches, pinnedForDay, { scoreField: 'planningScore' });
@@ -1256,19 +1285,23 @@ export function recommendedMatchupKeys(dayKey, dayMatches, pinnedForDay = null) 
 }
 
 // Nudges `.planningScore` down by VARIETY_REPEAT_PENALTY for any candidate
-// that (a) isn't elite (isVarietyExempt) and (b) matches the SAME matchupKey
-// that ALREADY won its slot on every one of the preceding
-// VARIETY_MAX_FREE_REPEATS real calendar days (`recentMatchupKeySets`, most-
-// recent-first, from recommendedMatchupKeys run on those days). A no-op
-// (every `.varietyPenalty` set to 0) whenever fewer than
-// VARIETY_MAX_FREE_REPEATS prior days are available - a day at the start of
-// the fetched window, or a sport with a gap, never gets an unearned
-// penalty. This only ever moves `.planningScore`, the same nudge point
-// applyLiveExcitementBonus already uses, so the scheduler is free to (and
-// often will, per its own weightedIntervalSchedule) still pick the
-// "penalized" match anyway when nothing comparable exists that day -
-// exactly the same "never buries a genuinely great game with no rival"
-// guarantee Round 9 of this file's own scoring nudges already established.
+// that (a) isn't exempt (isVarietyExempt - no real alternative to rotate to)
+// and (b) matches the SAME matchupKey that ALREADY won its slot on every
+// one of the preceding VARIETY_MAX_FREE_REPEATS real calendar days
+// (`recentMatchupKeySets`, most-recent-first, from recommendedMatchupKeys
+// run on those days). Must be called AFTER a computeDayPlan pass has
+// already set `.alternativeIds` on `dayMatches` (see this module's own
+// isVarietyExempt comment) - dayCandidatesForPlan in app.js does exactly
+// that natural pass first. A no-op (every `.varietyPenalty` set to 0)
+// whenever fewer than VARIETY_MAX_FREE_REPEATS prior days are available -
+// a day at the start of the fetched window, or a sport with a gap, never
+// gets an unearned penalty. This only ever moves `.planningScore`, the
+// same nudge point applyLiveExcitementBonus already uses, so the scheduler
+// is free to (and often will, per its own weightedIntervalSchedule) still
+// pick the "penalized" match anyway when nothing comparable exists that
+// day - exactly the same "never buries a genuinely great game with no
+// rival" guarantee Round 9 of this file's own scoring nudges already
+// established, now reinforced directly by isVarietyExempt itself.
 export function applyVarietyPenalty(dayMatches, recentMatchupKeySets = []) {
   dayMatches.forEach(match => {
     const key = matchupKey(match);
