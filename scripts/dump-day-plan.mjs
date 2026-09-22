@@ -31,12 +31,11 @@
 import { readFile } from 'node:fs/promises';
 import {
   applyLiveExcitementBonus,
-  applyVarietyPenalty,
+  applyVarietyRotationPenalties,
   computeDayPlan,
+  computeVarietyRotation,
   explainWhyNotRecommended,
-  matchupKey,
-  resolveViewingPlan,
-  VARIETY_MAX_FREE_REPEATS
+  resolveViewingPlan
 } from '../public/lib/recommendation.mjs';
 
 function localDateKey(date) {
@@ -67,30 +66,19 @@ for (const match of matches) {
 // explainWhyNotRecommended below can safely read .planningScore straight
 // off these same objects afterward. applyLiveExcitementBonus (also
 // in-place) has to run first, per day, since that's what actually sets
-// .planningScore. Processed in chronological order (not Map insertion
-// order) and tracking each day's own recommended matchupKeys as we go, so
-// applyVarietyPenalty sees the exact same real-two-preceding-days context
-// app.js's own recentMatchupKeySets does - see that function's own comment
-// in recommendation.mjs (Round 41).
+// .planningScore. computeVarietyRotation (Round 43) plans the WHOLE
+// window's own rotation in one pass - the exact same whole-window
+// computation app.js's own getVarietyRotation does - then each day's
+// candidates get that plan's penalty (if any) applied before the real,
+// final computeDayPlan call that decides what's actually printed below.
 const allDayKeysSorted = [...matchesByDayKey.keys()].sort();
-const matchupKeysByDay = new Map();
-for (const dayKey of allDayKeysSorted) {
+allDayKeysSorted.forEach(dayKey => applyLiveExcitementBonus(matchesByDayKey.get(dayKey)));
+const rotation = computeVarietyRotation(matchesByDayKey);
+allDayKeysSorted.forEach(dayKey => {
   const dayMatches = matchesByDayKey.get(dayKey);
-  applyLiveExcitementBonus(dayMatches);
-  const recentSets = [];
-  for (let back = 1; back <= VARIETY_MAX_FREE_REPEATS; back++) {
-    const priorKeys = matchupKeysByDay.get(allDayKeysSorted[allDayKeysSorted.indexOf(dayKey) - back]);
-    if (!priorKeys) break;
-    recentSets.push(priorKeys);
-  }
-  // Natural pass first - isVarietyExempt needs .alternativeIds, which only
-  // exists once computeDayPlan has actually run once (see that function's
-  // own comment in recommendation.mjs and app.js's dayCandidatesForPlan).
+  applyVarietyRotationPenalties(dayMatches, rotation.get(dayKey));
   computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
-  applyVarietyPenalty(dayMatches, recentSets);
-  computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
-  matchupKeysByDay.set(dayKey, new Set(dayMatches.filter(m => m.recommended).map(matchupKey)));
-}
+});
 
 const dayKeys = allDayKeysSorted.filter(key => (!fromArg || key >= fromArg) && (!toArg || key <= toArg));
 

@@ -55,11 +55,8 @@ import {
   LIVE_EXCITEMENT_MAX_BONUS,
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
-  isVarietyExempt,
-  recommendedMatchupKeys,
-  applyVarietyPenalty,
-  VARIETY_MAX_FREE_REPEATS,
-  VARIETY_REPEAT_PENALTY,
+  computeVarietyRotation,
+  applyVarietyRotationPenalties,
   VARIETY_CLOSE_CALL_GAP
 } from '../public/lib/recommendation.mjs';
 
@@ -1321,138 +1318,125 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
-describe('Back-to-back variety (Round 41/42: bounded, exempt only when there is no real alternative)', () => {
+describe('Back-to-back variety (Round 43: whole-window rotation)', () => {
   function teams(a, b) {
     return [{ name: a }, { name: b }];
   }
+  // Every match in a "day" below shares one start time by default (see
+  // makeMatch's own NOON_UTC default) so they form a single conflict
+  // cluster/`.alternativeIds` set, the same trick the rest of this file
+  // already uses for "these compete for one slot" tests.
+  function day(matches) {
+    return matches;
+  }
 
-  describe('isVarietyExempt', () => {
-    test('exempt when there is no real alternative at all (closestAlternativeGap is null)', () => {
-      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: null })), true);
-      assert.equal(isVarietyExempt(makeMatch({})), true); // never even went through computeDayPlan
-    });
-
-    test('exempt once the margin over the closest real alternative exceeds VARIETY_CLOSE_CALL_GAP (the real Padres @ Dodgers case: 0.75-1.0)', () => {
-      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: VARIETY_CLOSE_CALL_GAP + 0.01 })), true);
-      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: 0.75 })), true);
-    });
-
-    test('NOT exempt when the margin is at or under VARIETY_CLOSE_CALL_GAP (the real Brewers @ Phillies case: 0.15-0.45)', () => {
-      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: VARIETY_CLOSE_CALL_GAP })), false);
-      assert.equal(isVarietyExempt(makeMatch({ closestAlternativeGap: 0.15 })), false);
-    });
-  });
-
-  describe('recommendedMatchupKeys', () => {
-    test('returns every distinct matchup actually recommended that day, not just the first', () => {
-      // Two non-overlapping games, both independently recommended - the
-      // real Round 36/37 "headline pick plus an earlier continuation pick"
-      // shape.
-      const early = makeMatch({ id: 'e', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, competitors: teams('A', 'B'), planningScore: 5 });
-      const late = makeMatch({ id: 'l', startTimeUtc: '2026-09-19T12:00:00.000Z', durationMinutes: 60, competitors: teams('C', 'D'), planningScore: 6 });
-      const keys = recommendedMatchupKeys('2026-09-19', [early, late]);
-      assert.equal(keys.size, 2);
-      assert.ok(keys.has(matchupKey(early)));
-      assert.ok(keys.has(matchupKey(late)));
-    });
-
-    test('empty input is an empty set, not an error', () => {
-      assert.equal(recommendedMatchupKeys('2026-09-19', []).size, 0);
-    });
-  });
-
-  describe('applyVarietyPenalty', () => {
-    test('no penalty at all with fewer than VARIETY_MAX_FREE_REPEATS prior days on record', () => {
-      const match = makeMatch({ closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('A', 'B') });
-      applyVarietyPenalty([match], [new Set([matchupKey(match)])]); // only 1 prior day, need 2
+  describe('applyVarietyRotationPenalties', () => {
+    test('no entry for a match means no penalty at all', () => {
+      const match = makeMatch({ planningScore: 6 });
+      applyVarietyRotationPenalties([match], undefined);
       assert.equal(match.varietyPenalty, 0);
       assert.equal(match.planningScore, 6);
     });
 
-    test('penalizes a close-margin repeat that already won BOTH preceding days (the real Brewers @ Phillies shape, gap 0.15-0.45)', () => {
-      const match = makeMatch({ closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
-      const key = matchupKey(match);
-      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
-      assert.equal(match.varietyPenalty, VARIETY_REPEAT_PENALTY);
-      assert.equal(match.planningScore, 6 - VARIETY_REPEAT_PENALTY);
-    });
-
-    test('a wide-margin repeat (the real Padres @ Dodgers shape, gap 0.75-1.0) is exempt even on its 3rd straight day', () => {
-      const match = makeMatch({ closestAlternativeGap: 0.95, planningScore: 7.1, competitors: teams('San Diego Padres', 'Los Angeles Dodgers') });
-      const key = matchupKey(match);
-      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
-      assert.equal(match.varietyPenalty, 0);
-      assert.equal(match.planningScore, 7.1);
-    });
-
-    test('does not penalize a DIFFERENT matchup than the one that was actually repeating', () => {
-      const match = makeMatch({ id: 'other', closestAlternativeGap: 0.15, planningScore: 6, competitors: teams('E', 'F') });
-      const repeatingKey = 'MLB: A vs B';
-      applyVarietyPenalty([match], [new Set([repeatingKey]), new Set([repeatingKey])]);
-      assert.equal(match.varietyPenalty, 0);
-    });
-
-    test('a pick that never went through computeDayPlan (no .closestAlternativeGap at all) is treated as exempt, not penalized', () => {
-      const match = makeMatch({ planningScore: 6, competitors: teams('A', 'B') });
-      const key = matchupKey(match);
-      applyVarietyPenalty([match], [new Set([key]), new Set([key])]);
-      assert.equal(match.varietyPenalty, 0);
+    test('an entry subtracts exactly that amount from planningScore', () => {
+      const match = makeMatch({ id: 'm', planningScore: 6 });
+      applyVarietyRotationPenalties([match], new Map([['m', 0.3]]));
+      assert.equal(match.varietyPenalty, 0.3);
+      assert.equal(match.planningScore, 5.7);
     });
   });
 
-  test('end-to-end: the natural pass decides exemption correctly - a close-margin repeat loses its 3rd day, a wide-margin repeat (Padres @ Dodgers) keeps winning', () => {
-    // Day 3 candidates for the "Brewers @ Phillies" shape: a genuine,
-    // only-slightly-worse rival exists in the SAME slot every day (this is
-    // exactly what the user pointed out - "the Brewer time they got equal
-    // match ups"), so once it's won its slot 2 days running, variety should
-    // push it aside on the 3rd. Scores chosen to reproduce the real
-    // observed margin (~0.2, comfortably under VARIETY_CLOSE_CALL_GAP).
-    const repeat = makeMatch({
-      id: 'repeat',
-      planningScore: 6,
-      competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies')
+  describe('computeVarietyRotation', () => {
+    test('a matchup that only ever wins ONE day is never touched - a single day is not a repeat', () => {
+      const m = makeMatch({ id: 'm', planningScore: 7, competitors: teams('A', 'B') });
+      const rotation = computeVarietyRotation(new Map([['2026-09-23', day([m])]]));
+      assert.equal(rotation.get('2026-09-23'), undefined);
     });
-    const rival = makeMatch({
-      id: 'rival',
-      planningScore: 5.8,
-      competitors: teams('Cleveland Guardians', 'Boston Red Sox')
-    });
-    const repeatKey = matchupKey(repeat);
-    const recentSets = [new Set([repeatKey]), new Set([repeatKey])];
-    // Natural pass first - this is what actually populates
-    // .closestAlternativeGap, which isVarietyExempt/applyVarietyPenalty
-    // need to see below (see app.js's dayCandidatesForPlan for the real
-    // two-pass call site).
-    computeDayPlan('2026-09-21', [repeat, rival], null, { scoreField: 'planningScore' });
-    assert.ok(repeat.closestAlternativeGap < VARIETY_CLOSE_CALL_GAP); // confirms the natural pass really did see a close rival
-    applyVarietyPenalty([repeat, rival], recentSets);
-    computeDayPlan('2026-09-21', [repeat, rival], null, { scoreField: 'planningScore' });
-    assert.equal(rival.recommended, true);
-    assert.equal(repeat.recommended, false);
 
-    // Same shape, but this time the runner-up is far enough back to
-    // reproduce the real live Padres @ Dodgers margin (~1.0, well over
-    // VARIETY_CLOSE_CALL_GAP but still under ALTERNATIVE_MAX_SCORE_GAP,
-    // i.e. it still shows up as a swipeable `.alternativeIds` entry in the
-    // UI - just not a close enough call for variety to touch). Even after
-    // "winning" its slot 2 days running, nothing is close enough to
-    // meaningfully rotate to, so it MUST keep winning its 3rd day too.
-    const uniqueRepeat = makeMatch({
-      id: 'uniqueRepeat',
-      planningScore: 7,
-      competitors: teams('San Diego Padres', 'Los Angeles Dodgers')
+    test('a wide-margin repeat with no real alternative (the real Padres @ Dodgers shape) is never touched, however many days it repeats', () => {
+      const days = new Map();
+      for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+        const m = makeMatch({ id: `padres-${dayKey}`, planningScore: 7.1, competitors: teams('San Diego Padres', 'Los Angeles Dodgers') });
+        const rival = makeMatch({ id: `astros-${dayKey}`, planningScore: 6.15, competitors: teams('Houston Astros', 'Seattle Mariners') });
+        days.set(dayKey, day([m, rival])); // gap 0.95 - well over VARIETY_CLOSE_CALL_GAP
+      }
+      const rotation = computeVarietyRotation(days);
+      for (const dayKey of days.keys()) assert.equal(rotation.get(dayKey), undefined);
     });
-    const distantRival = makeMatch({
-      id: 'distantRival',
-      planningScore: 6,
-      competitors: teams('Houston Astros', 'Seattle Mariners')
+
+    test('a 2-day run with one close alternative alternates: incumbent keeps day 1, the alternative gets day 2', () => {
+      const days = new Map();
+      for (const dayKey of ['2026-09-23', '2026-09-24']) {
+        const incumbent = makeMatch({ id: `inc-${dayKey}`, planningScore: 7, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+        const rival = makeMatch({ id: `rival-${dayKey}`, planningScore: 6.8, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+        days.set(dayKey, day([incumbent, rival]));
+      }
+      const rotation = computeVarietyRotation(days);
+      assert.equal(rotation.get('2026-09-23'), undefined); // day 1: incumbent's own natural turn, untouched
+      assert.ok(rotation.get('2026-09-24')?.has('inc-2026-09-24')); // day 2: incumbent penalized so the rival gets its turn
     });
-    const uniqueKey = matchupKey(uniqueRepeat);
-    computeDayPlan('2026-09-21', [uniqueRepeat, distantRival], null, { scoreField: 'planningScore' });
-    assert.ok(uniqueRepeat.closestAlternativeGap > VARIETY_CLOSE_CALL_GAP); // confirms the natural pass really did see only a distant rival
-    applyVarietyPenalty([uniqueRepeat, distantRival], [new Set([uniqueKey]), new Set([uniqueKey])]);
-    computeDayPlan('2026-09-21', [uniqueRepeat, distantRival], null, { scoreField: 'planningScore' });
-    assert.equal(uniqueRepeat.recommended, true);
+
+    test('end-to-end: a 3-day run with 3 real close contenders gives each of them exactly one win (the literal case reported)', () => {
+      const days = new Map();
+      for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+        const brewers = makeMatch({ id: `brewers-${dayKey}`, planningScore: 7.2, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+        const guardians = makeMatch({ id: `guardians-${dayKey}`, planningScore: 7.0, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+        const rays = makeMatch({ id: `rays-${dayKey}`, planningScore: 6.9, competitors: teams('Tampa Bay Rays', 'New York Yankees') });
+        days.set(dayKey, day([brewers, guardians, rays]));
+      }
+      const rotation = computeVarietyRotation(days);
+      // Apply the plan for real and see who actually wins each day.
+      const winners = [...days.keys()].map(dayKey => {
+        const dayMatches = days.get(dayKey);
+        applyVarietyRotationPenalties(dayMatches, rotation.get(dayKey));
+        const picks = computeDayPlan(dayKey, dayMatches, null, { scoreField: 'planningScore' });
+        return picks[0].id.replace(/-2026-09-2[345]$/, '');
+      });
+      // Each of the three contenders wins exactly one of the three days -
+      // no repeats, no contender skipped.
+      assert.deepEqual(new Set(winners), new Set(['brewers', 'guardians', 'rays']));
+      assert.equal(new Set(winners).size, 3);
+    });
+
+    test('a real gap day (no matches at all) breaks a run instead of silently joining two separate repeats across it', () => {
+      const before = makeMatch({ id: 'before', planningScore: 7, competitors: teams('A', 'B') });
+      const beforeRival = makeMatch({ id: 'beforeRival', planningScore: 6.8, competitors: teams('C', 'D') });
+      const after = makeMatch({ id: 'after', planningScore: 7, competitors: teams('A', 'B') });
+      const afterRival = makeMatch({ id: 'afterRival', planningScore: 6.8, competitors: teams('C', 'D') });
+      const days = new Map([
+        ['2026-09-23', day([before, beforeRival])],
+        ['2026-09-24', day([])], // a real day with nothing on at all
+        ['2026-09-25', day([after, afterRival])]
+      ]);
+      const rotation = computeVarietyRotation(days);
+      // Each side of the gap is its own 1-day "run" - never long enough to
+      // rotate on its own, so NEITHER day is touched, even though the same
+      // matchupKey "won" both 09-23 and 09-25.
+      assert.equal(rotation.get('2026-09-23'), undefined);
+      assert.equal(rotation.get('2026-09-25'), undefined);
+    });
+
+    test('a viewer\'s own real pin is never overridden by rotation', () => {
+      const days = new Map();
+      const pinnedChoices = new Map();
+      for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+        const incumbent = makeMatch({ id: `inc-${dayKey}`, planningScore: 7, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+        const rival = makeMatch({ id: `rival-${dayKey}`, planningScore: 6.8, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+        days.set(dayKey, day([incumbent, rival]));
+      }
+      // The viewer explicitly pinned day 2 to the RIVAL instead of letting
+      // the incumbent win naturally - this breaks what would otherwise be
+      // a continuous 3-day run into two 1-day runs (see the gap-day test
+      // above for why that means no rotation applies at all), which is the
+      // correct, expected outcome: a real pin already exercised the
+      // viewer's own choice that day, rotation has no business touching
+      // either side of it.
+      pinnedChoices.set('2026-09-24', new Set(['rival-2026-09-24']));
+      const rotation = computeVarietyRotation(days, pinnedChoices);
+      assert.equal(rotation.get('2026-09-23'), undefined);
+      assert.equal(rotation.get('2026-09-24'), undefined);
+      assert.equal(rotation.get('2026-09-25'), undefined);
+    });
   });
 });
 

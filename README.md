@@ -319,7 +319,7 @@ entirely), so it couldn't be checked against real data, but it runs through
 the exact same `computeNbaObjectiveScore`→`bestMatchScore` path with no
 special-casing, so the same behavior applies the moment real games exist.
 
-### Back-to-back variety (Round 41/42) - bounded, exempt only when there's genuinely nothing else close
+### Back-to-back variety (Round 41-43) - whole-window rotation among real close contenders
 
 Direct feedback: the deterministic scheduler's own math will happily
 recommend the exact same matchup three (or more) real calendar days
@@ -340,43 +340,62 @@ because the Brewer time they got equal match ups[,] the dodger one in it's
 time it's the best[,] no alternative." Milwaukee Brewers @ Philadelphia
 Phillies (skill 8) has several genuinely comparable alternatives in its
 own time slot every day it repeats - a skill-based bar wrongly exempted it
-anyway. **Round 42 fixed the criterion**: `isVarietyExempt` now reads
-`.closestAlternativeGap` (a new field `computeDayPlan` sets alongside
-`.alternativeIds` - the score margin over the CLOSEST real rival in the
-same slot, not just whether one exists at all), and is exempt only when
-that margin exceeds `VARIETY_CLOSE_CALL_GAP` (0.5) or there's no
-alternative at all. This is a genuinely different question from "is
-`.alternativeIds` non-empty": `ALTERNATIVE_MAX_SCORE_GAP` (2.5, the "worth
-a swipe" bar) is generous enough that Padres @ Dodgers technically HAS an
-`.alternativeIds` entry every day too - its real margin over that
-alternative (0.75-1.0, live-measured) is just far too wide to call it a
-genuine toss-up, while Brewers @ Phillies's own margin over its closest
-rival (0.15-0.45, same real days) is exactly the "equal match ups" the
-user pointed at. 0.5 sits directly in the gap between those two live
-ranges, not an arbitrary round number.
+anyway. **Round 42** switched the criterion to the real score MARGIN over
+the closest rival (exempt only past `VARIETY_CLOSE_CALL_GAP`, 0.5 - a
+threshold that sits directly between the real, live-measured ranges:
+Brewers @ Phillies's own margin over its closest rival is 0.15-0.45; San
+Diego Padres @ Los Angeles Dodgers's is 0.75-1.0, despite both technically
+having an `.alternativeIds` entry under the wider, UI-facing
+`ALTERNATIVE_MAX_SCORE_GAP`, 2.5).
 
-`app.js`'s `dayCandidatesForPlan` now runs `computeDayPlan` TWICE per
-render: a natural pass first (so `.closestAlternativeGap` actually exists
-to check), then `applyVarietyPenalty`, then the real final pass with the
-now-penalized `planningScore` - safe because `computeDayPlan` resets every
-match's own `.recommended`/`.alternativeIds`/`.closestAlternativeGap` at
-the top of each call (only the LAST call's result is left mutated onto the
-matches, same "call it twice, last one wins" pattern the old Gemini
-override used). `recentMatchupKeySets` (looking back at the two preceding
-real calendar days) still uses each of THOSE days' own natural,
-un-penalized plan - deliberately not recursive into their own variety
-adjustment, to keep this a bounded lookup rather than a chain walking
-arbitrarily far back through the fetched window.
+**Round 43 replaced the whole mechanism.** Rounds 41/42 only ever
+penalized the CURRENT incumbent once it had won twice, handing the very
+next day to whichever single alternative happened to be closest that
+specific day - never giving more than one real alternative an actual
+turn. Direct correction: "it should first determine how many days, then
+see how many alternative[s], if there is [more than one] alternative...
+three day[s] mean each winning once." `computeVarietyRotation`
+(`public/lib/recommendation.mjs`) now works over the WHOLE fetched window
+at once (feasible only because Match Find already has every day's match
+data in hand before any one day renders - unlike Round 25's removed
+cross-day penalty, which only ever looked backward):
 
-Live-verified against the real 2026-09-22 fetch: on 09-23/09-24, Milwaukee
-Brewers @ Philadelphia Phillies and San Diego Padres @ Los Angeles Dodgers
-both repeat (within the 2-free-repeats allowance). On 09-25 - the would-be
-3rd straight day for both - Brewers @ Phillies is correctly varied away to
-Tampa Bay Rays @ New York Yankees (its own close rival, gap 0.15-0.45),
-while Padres @ Dodgers correctly keeps winning its 3rd day unchanged (gap
-0.75-1.0, nothing close enough to rotate to) - exactly the split the user
-described, confirmed by a before/after diff across the whole fetched
-window (exactly 1 day differs, 2026-09-25, exactly as expected).
+1. Find every maximal run of consecutive real calendar days where the SAME
+   matchup naturally wins its own slot.
+2. For a run of 2+ days, build the POOL: that matchup plus every OTHER
+   matchup that was a genuinely close rival (within `VARIETY_CLOSE_CALL_GAP`)
+   on ANY day of the run.
+3. If the pool has more than one member, CYCLE the win through every pool
+   member, one per day, for the length of the run - a 3-day run with 3 real
+   contenders shows each of them exactly once; a run whose pool never
+   exceeds one member (nothing else ever close - the real Padres @ Dodgers
+   case) is left completely untouched, however many days it repeats.
+
+`app.js`'s `getVarietyRotation` computes this once per data refresh/pin
+change (memoized - `invalidateVarietyRotation` is called from
+`applyFreshBuild`/`applyEnabledSportsAndRender`, `pinSlotChoice`, and the
+sport-filter toggle, everywhere the underlying candidate set can change),
+scoped over every day in `state.days`. A real pin is always respected (a
+pinned day can only ever be its own 1-day run, never rotated).
+
+**Live-verified against the real 2026-09-22 fetch**: Milwaukee Brewers @
+Philadelphia Phillies naturally wins 09-23/24/25; its real pool across
+those 3 days actually has 4 members (Cleveland Guardians @ Boston Red Sox,
+Miami Marlins @ Chicago Cubs, and Tampa Bay Rays @ New York Yankees, each
+close on at least one of the 3 days) - more pool members than there are
+days, so a perfect one-each rotation isn't even mathematically possible.
+The algorithm's own honest behavior in that case: 09-23 (Brewers, its
+natural day-1 turn), 09-24 (rotates to Guardians @ Red Sox, close that
+day), 09-25 (the rotation's own next assignee, Miami Marlins @ Chicago
+Cubs, wasn't ACTUALLY close on that specific day, so forcing it in was
+skipped rather than manufacturing a fake close call - Brewers naturally
+wins 09-25 too). San Diego Padres @ Los Angeles Dodgers is untouched all 3
+days (pool size 1, nothing ever close). Separately, Tampa Bay Rays @
+Philadelphia Phillies's own 2-day run (09-26/27) has exactly one real
+alternative (Baltimore Orioles @ New York Yankees) and alternates cleanly:
+Rays keeps 09-26, Orioles/Yankees gets 09-27. A before/after diff across
+the whole fetched window shows exactly these 2 intended days differ
+(2026-09-24, 2026-09-27), zero unintended changes anywhere else.
 
 ## The viewing plan
 

@@ -908,7 +908,6 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
-    match.closestAlternativeGap = null;
     match.isPreferred = false;
     match.slotKey = null;
   });
@@ -1082,19 +1081,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
         isNearTotalOverlap(m, choice) &&
         pickedScore - getScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );
-    if (alternatives.length) {
-      choice.alternativeIds = alternatives.map(m => m.id);
-      // The margin over the CLOSEST of those alternatives specifically -
-      // see applyVarietyPenalty/isVarietyExempt's own comment for why this,
-      // not merely "does .alternativeIds exist at all", is what actually
-      // answers "is this genuinely a toss-up". ALTERNATIVE_MAX_SCORE_GAP
-      // (2.5) is generous on purpose (a real second opinion worth
-      // SWIPING to, see that constant's own comment) - a match sitting
-      // near the far end of that gap is still clearly the best thing on,
-      // not a close call, even though it technically has an
-      // "alternative" by that looser bar.
-      choice.closestAlternativeGap = Math.min(...alternatives.map(m => pickedScore - getScore(m)));
-    }
+    if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
   });
 
   return picks.map(p => p.choice);
@@ -1235,84 +1222,196 @@ export function applyLiveExcitementBonus(dayMatches) {
 // deliberately generous - but real live numbers show its actual margin
 // over that alternative is 0.75-1.0, while Milwaukee Brewers @
 // Philadelphia Phillies's own margin over ITS closest real rival is only
-// 0.15-0.45 on the exact same days. That gap-of-the-gap is precisely
-// "equal match ups" (Brewers) vs. "the best, no [real] alternative"
-// (Dodgers) - a boolean "has an alternativeIds entry at all" collapses
-// that real, live distinction into one bucket; the actual MARGIN is what
-// answers it. `choice.closestAlternativeGap` (set alongside
-// `alternativeIds` above, for exactly this reason) is that margin -
-// `null` when there's no alternative at all. VARIETY_CLOSE_CALL_GAP (0.5)
-// sits in the real, observed gap between the two live cases (Brewers
-// tops out at 0.45; Dodgers bottoms out at 0.75 across five real repeat
-// days, 2026-09-22 through 09-27) - not an arbitrary number, a threshold
-// chosen because a genuine dividing line exists there in this exact data.
+// 0.15-0.45 on the exact same days. VARIETY_CLOSE_CALL_GAP (0.5) sits
+// directly in that real, observed gap (Brewers tops out at 0.45; Dodgers
+// bottoms out at 0.75 across five real repeat days, 2026-09-22 through
+// 09-27) - not an arbitrary number, a threshold chosen because a genuine
+// dividing line exists there in this exact data.
+//
+// Round 43: Round 41/42's model still only ever penalized the incumbent
+// once it had already won twice, handing the NEXT day to whichever single
+// alternative happened to be closest that specific day - it never gave
+// more than one real alternative an actual turn, even when several
+// existed across the whole repeat span. Direct correction: "it should
+// first determine how many days, then see how many alternative, if there
+// is alternative more than one, then three day mean each winning once."
+// This replaces the penalize-the-incumbent model with an explicit
+// ROTATION: find the whole maximal run of consecutive real calendar days
+// a matchup would naturally win, find every OTHER matchup close enough
+// (VARIETY_CLOSE_CALL_GAP) to it on any day of that run, and - once that
+// pool has more than one member - cycle the win through every pool member
+// once per day, for the length of the run (a 3-day run with 3 real
+// contenders shows each of them exactly once, not the same one twice and
+// an alternative once).
+//
+// This is only feasible because Match Find already has the WHOLE fetched
+// window's own match data in hand before any single day renders - unlike
+// Round 25's removed cross-day penalty (which only ever looked backward at
+// history), this looks at the KNOWN, ALREADY-FETCHED remainder of a real
+// multi-game series to plan the whole run's rotation at once, then each
+// individual day's render just looks up its own assignment.
 export const VARIETY_CLOSE_CALL_GAP = 0.5;
 
-export function isVarietyExempt(match) {
-  return !Number.isFinite(match.closestAlternativeGap) || match.closestAlternativeGap > VARIETY_CLOSE_CALL_GAP;
+// Every match in `choice`'s own `.alternativeIds` (already gated by the
+// wider, UI-facing ALTERNATIVE_MAX_SCORE_GAP - "worth a swipe") that is ALSO
+// within VARIETY_CLOSE_CALL_GAP of `choice`'s own score - the tighter set
+// that actually counts as "equal match ups" worth rotating into, not merely
+// "technically swipeable". `byId` is a Map<matchId, match> for the same
+// day `choice` came from.
+function closeAlternativeMatches(choice, byId) {
+  if (!Array.isArray(choice.alternativeIds) || !choice.alternativeIds.length) return [];
+  const score = Number.isFinite(choice.planningScore) ? choice.planningScore : choice.effectiveScore;
+  return choice.alternativeIds
+    .map(id => byId.get(id))
+    .filter(m => m && score - (Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore) <= VARIETY_CLOSE_CALL_GAP);
 }
 
-// How many CONSECUTIVE real calendar days a non-exempt matchup is allowed
-// to win its own slot before the penalty kicks in - 2, matching the user's
-// own framing ("three straight days... I don't like that": days 1 and 2
-// are a normal back-to-back, day 3 is where variety should start pushing
-// back).
-export const VARIETY_MAX_FREE_REPEATS = 2;
+// The one entry point: computes a whole-window rotation PLAN, without
+// mutating anything the caller didn't already hand it to mutate.
+// `matchesByDayKey` is a Map<dayKey, matches> covering the WHOLE relevant
+// window (every calendar day worth considering, even one with zero
+// matches - see this function's own comment below on why a gap day must
+// still be present, as an empty array, rather than simply absent) -
+// already however the caller wants it scored/filtered (sport filter,
+// applyLiveExcitementBonus already run). `pinnedChoices` is
+// state.pinnedChoices as-is (a Map<dayKey, Set<matchId>> or empty) - a
+// viewer's own real pin is respected exactly like computeDayPlan's own
+// `pinnedForDay` everywhere else, so rotation can never override a genuine
+// swipe-to-pin (a pinned day simply can't be a middle day of a rotation
+// run - see the run-detection loop below for why that falls out naturally
+// rather than needing a special case).
+//
+// Mutates every match's own `.recommended`/`.alternativeIds`/etc. via the
+// computeDayPlan passes it runs internally (same "pure scoring, this
+// module mutates its OWN inputs in place" convention as the rest of this
+// file) - but this is explicitly a PLANNING pass, not the real one: the
+// caller is expected to re-run computeDayPlan itself afterward (with
+// `applyVarietyRotationPenalties`'s own adjustment folded into
+// `planningScore`) to get the actual, final result to render. Calling
+// computeDayPlan twice on the same match objects is safe (see its own
+// comment: every call fully resets `.recommended`/`.alternativeIds` at the
+// top) - only the LAST call's result is left mutated onto the matches.
+//
+// Returns Map<dayKey, Map<matchId, penalty>> - `penalty` is how much to
+// subtract from that match's own `planningScore` so a DIFFERENT pool
+// member (that day's own rotation turn) wins its slot instead. A
+// day/match absent from the map needs no adjustment - either no rotation
+// run applies there at all, or that match IS the day's own assigned turn.
+export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map()) {
+  const dayKeys = [...matchesByDayKey.keys()].sort();
+  const byIdByDay = new Map();
+  const naturalPicksByDay = new Map();
 
-// Large enough to flip a genuinely marginal/close call (the exact case this
-// exists for) but never enough to override a real quality gap - see
-// ALTERNATIVE_MAX_SCORE_GAP (2.5) above for this codebase's own settled
-// notion of "close enough to be a real call"; sitting well under it means a
-// decisively-better repeat still wins on merit even past the free-repeat
-// count, only a genuine toss-up actually gets varied away.
-export const VARIETY_REPEAT_PENALTY = 1;
+  dayKeys.forEach(dayKey => {
+    const dayMatches = matchesByDayKey.get(dayKey);
+    computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
+    byIdByDay.set(dayKey, new Map(dayMatches.map(m => [m.id, m])));
+    naturalPicksByDay.set(dayKey, dayMatches.filter(m => m.recommended));
+  });
 
-// `dayMatches` must already have planningScore set (applyLiveExcitementBonus)
-// - runs computeDayPlan itself (mutating `dayMatches` in place, same
-// convention as the rest of this module) purely to read which matchup(s)
-// actually won this day's own slot(s), and whether each pick had a real
-// alternative (see isVarietyExempt above - this is also how
-// applyVarietyPenalty's own caller learns whether TODAY's pick is exempt,
-// since `.alternativeIds` only exists after a computeDayPlan pass has run -
-// see dayCandidatesForPlan's own two-pass comment in app.js). A day can
-// have more than one independently-recommended slot at once (Round 36/37's
-// own scheduling-floor case), so this returns every one of them, not just
-// the first.
-export function recommendedMatchupKeys(dayKey, dayMatches, pinnedForDay = null) {
-  if (!dayMatches || !dayMatches.length) return new Set();
-  const picks = computeDayPlan(dayKey, dayMatches, pinnedForDay, { scoreField: 'planningScore' });
-  return new Set(picks.filter(m => m.recommended).map(matchupKey));
+  // Maximal consecutive runs, per matchupKey - a day genuinely missing from
+  // `matchesByDayKey` entirely (never happens; the caller is expected to
+  // include every day, even an empty array for one with no fixtures at
+  // all - see this function's own top comment) would otherwise silently
+  // stitch two runs across a real gap day together, which is why an empty
+  // day still needs to be present here: its own empty `naturalPicksByDay`
+  // entry correctly closes every active run that day.
+  const completedRuns = [];
+  let active = new Map(); // matchupKey -> { matchupKey, entries: [{dayKey, match}] }
+  dayKeys.forEach(dayKey => {
+    const picks = naturalPicksByDay.get(dayKey);
+    const todaysPickByKey = new Map(picks.map(p => [matchupKey(p), p]));
+    [...active.entries()].forEach(([mk, run]) => {
+      if (!todaysPickByKey.has(mk)) {
+        completedRuns.push(run);
+        active.delete(mk);
+      }
+    });
+    todaysPickByKey.forEach((match, mk) => {
+      if (!active.has(mk)) active.set(mk, { matchupKey: mk, entries: [] });
+      active.get(mk).entries.push({ dayKey, match });
+    });
+  });
+  completedRuns.push(...active.values());
+
+  const result = new Map();
+  function addPenalty(dayKey, matchId, amount) {
+    if (!result.has(dayKey)) result.set(dayKey, new Map());
+    result.get(dayKey).set(matchId, amount);
+  }
+
+  completedRuns.forEach(run => {
+    if (run.entries.length < 2) return; // never even repeated - nothing to rotate
+    // The pool: this run's own matchupKey, plus every OTHER matchupKey
+    // that was a genuinely close alternative on AT LEAST ONE day of the
+    // run - a matchup that was only ever close on day 2 still earns a
+    // pool seat (and therefore a turn), the same as one close every day.
+    const poolKeys = new Set([run.matchupKey]);
+    const closeMatchByDay = new Map(); // dayKey -> Map<matchupKey, match>
+    run.entries.forEach(({ dayKey, match }) => {
+      const byId = byIdByDay.get(dayKey);
+      const map = new Map([[run.matchupKey, match]]);
+      closeAlternativeMatches(match, byId).forEach(alt => {
+        const altKey = matchupKey(alt);
+        poolKeys.add(altKey);
+        map.set(altKey, alt);
+      });
+      closeMatchByDay.set(dayKey, map);
+    });
+    if (poolKeys.size < 2) return; // genuinely nothing else close, on any day - nothing to rotate (the real Padres @ Dodgers case)
+
+    // Deterministic order: the run's own matchupKey goes first (day 1 is
+    // its own natural home ground), the rest sorted alphabetically for
+    // stability across renders/re-fetches (never dependent on Map/Set
+    // iteration order or which day happened to introduce a given
+    // alternative first).
+    const pool = [run.matchupKey, ...[...poolKeys].filter(k => k !== run.matchupKey).sort()];
+
+    run.entries.forEach(({ dayKey }, i) => {
+      const assignedKey = pool[i % pool.length];
+      if (assignedKey === run.matchupKey) return; // today's natural winner IS today's assigned turn
+      const dayPool = closeMatchByDay.get(dayKey); // Map<matchupKey, match> - every pool member close TODAY, run.matchupKey's own match included
+      const assignedMatch = dayPool.get(assignedKey);
+      // The pool member assigned to this day wasn't actually a close
+      // alternative on THIS specific day (it earned its pool seat on a
+      // DIFFERENT day of the run) - rather than force in a match that
+      // isn't genuinely close today, skip forcing entirely and let the
+      // natural pick stand; a slightly uneven rotation is better than
+      // manufacturing a "close call" that isn't real today.
+      if (!assignedMatch) return;
+      const assignedScore = Number.isFinite(assignedMatch.planningScore) ? assignedMatch.planningScore : assignedMatch.effectiveScore;
+      // Penalize EVERY other pool member close today, not just the run's
+      // own natural winner - a 3+-member pool (e.g. Brewers/Guardians/Rays
+      // all close at once) means beating the incumbent alone can still
+      // lose the slot to a THIRD member nobody penalized. Just enough to
+      // flip each one's own ordering against the assigned winner (every
+      // pool member is close by construction - within
+      // VARIETY_CLOSE_CALL_GAP of each other via the incumbent - so this
+      // is always a small nudge, never enough to look like it's
+      // overriding a real quality gap elsewhere on the same day).
+      dayPool.forEach((match, key) => {
+        if (key === assignedKey) return;
+        const score = Number.isFinite(match.planningScore) ? match.planningScore : match.effectiveScore;
+        const penalty = score - assignedScore + 0.01;
+        if (penalty > 0) addPenalty(dayKey, match.id, penalty);
+      });
+    });
+  });
+
+  return result;
 }
 
-// Nudges `.planningScore` down by VARIETY_REPEAT_PENALTY for any candidate
-// that (a) isn't exempt (isVarietyExempt - no real alternative to rotate to)
-// and (b) matches the SAME matchupKey that ALREADY won its slot on every
-// one of the preceding VARIETY_MAX_FREE_REPEATS real calendar days
-// (`recentMatchupKeySets`, most-recent-first, from recommendedMatchupKeys
-// run on those days). Must be called AFTER a computeDayPlan pass has
-// already set `.alternativeIds` on `dayMatches` (see this module's own
-// isVarietyExempt comment) - dayCandidatesForPlan in app.js does exactly
-// that natural pass first. A no-op (every `.varietyPenalty` set to 0)
-// whenever fewer than VARIETY_MAX_FREE_REPEATS prior days are available -
-// a day at the start of the fetched window, or a sport with a gap, never
-// gets an unearned penalty. This only ever moves `.planningScore`, the
-// same nudge point applyLiveExcitementBonus already uses, so the scheduler
-// is free to (and often will, per its own weightedIntervalSchedule) still
-// pick the "penalized" match anyway when nothing comparable exists that
-// day - exactly the same "never buries a genuinely great game with no
-// rival" guarantee Round 9 of this file's own scoring nudges already
-// established, now reinforced directly by isVarietyExempt itself.
-export function applyVarietyPenalty(dayMatches, recentMatchupKeySets = []) {
+// Applies a `computeVarietyRotation` result to one day's own candidates -
+// `penaltyByMatchId` is `computeVarietyRotation(...).get(dayKey)` (a
+// Map<matchId, penalty> or undefined if no rotation touches this day at
+// all). Same nudge point `applyLiveExcitementBonus` already uses.
+export function applyVarietyRotationPenalties(dayMatches, penaltyByMatchId) {
   dayMatches.forEach(match => {
-    const key = matchupKey(match);
-    const repeatedEveryRecentDay =
-      !isVarietyExempt(match) &&
-      recentMatchupKeySets.length >= VARIETY_MAX_FREE_REPEATS &&
-      recentMatchupKeySets.every(set => set.has(key));
-    match.varietyPenalty = repeatedEveryRecentDay ? VARIETY_REPEAT_PENALTY : 0;
-    if (match.varietyPenalty) {
+    const penalty = penaltyByMatchId?.get(match.id) || 0;
+    match.varietyPenalty = penalty;
+    if (penalty) {
       const base = Number.isFinite(match.planningScore) ? match.planningScore : match.effectiveScore;
-      match.planningScore = Math.round((base - match.varietyPenalty) * 1e6) / 1e6;
+      match.planningScore = Math.round((base - penalty) * 1e6) / 1e6;
     }
   });
 }

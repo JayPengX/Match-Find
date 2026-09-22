@@ -4475,3 +4475,108 @@ byte-identical to the no-variety baseline.
 Rewrote the Round 41 unit tests to use `closestAlternativeGap` directly
 (the real live numbers above, not synthetic skill values) rather than
 `alternativeIds` presence or skill. Full suite **386/386**.
+
+## Round 43 (2026-09-22): back-to-back variety redesigned as a whole-window rotation
+
+Direct correction, same day as Round 42: "No it should first determine how
+many days, then see how many alternative, if there is alternative more
+than one, then three day mean each winning once."
+
+**What was wrong.** Rounds 41/42 only ever penalized the CURRENT
+incumbent once it had already won its slot twice in a row, handing the
+very next day to whichever single alternative happened to be closest that
+specific day. On a real 3-day run with two or more genuinely close
+alternatives, this never gave more than one of them an actual turn - the
+incumbent still won 2 of the 3 days, an alternative got the 3rd, and any
+OTHER real alternative never appeared at all.
+
+**Two clarifying questions asked before implementing** (a real design
+fork, not something inferable from the request alone): (1) whether
+rotation should look at the whole known span at once (since every day's
+match data is already fetched, unlike a live system that only ever learns
+about "tomorrow" when it arrives) or decide day-by-day looking only
+backward; the user chose the whole-span option. (2) which alternatives
+count as real rotation contenders - only genuinely close ones (within
+`VARIETY_CLOSE_CALL_GAP`) or any swipeable one (the wider
+`ALTERNATIVE_MAX_SCORE_GAP`); the user chose the tighter, close-only pool.
+
+**Implementation** (`public/lib/recommendation.mjs`):
+
+- `computeVarietyRotation(matchesByDayKey, pinnedChoices)` - the one new
+  entry point. Runs a natural `computeDayPlan` pass over EVERY day in the
+  window first (respecting real pins), then detects maximal consecutive
+  runs per `matchupKey` (walking chronologically; a day genuinely absent
+  from the window, or present with zero matches, correctly closes any
+  active run rather than letting it silently bridge across a real gap -
+  a viewer's own pin to a DIFFERENT matchup has exactly the same
+  run-breaking effect, so a pin can never be overridden by rotation:
+  it just never becomes part of a run in the first place).
+- For each run of 2+ days, builds the POOL: the run's own matchupKey plus
+  every OTHER matchupKey that was a real close alternative (per
+  `closeAlternativeMatches`, gated by `VARIETY_CLOSE_CALL_GAP`) on ANY
+  day of the run - not just the specific day being decided.
+- If the pool has more than one member, cycles a deterministic rotation
+  order (`[runMatchupKey, ...otherPoolKeysSortedAlphabetically]`) across
+  the run's own days, `pool[i % pool.length]` for day index `i`. If the
+  day `i`'s assigned pool member ISN'T actually a close alternative on
+  that SPECIFIC day (it only earned its pool seat on a different day of
+  the run), forcing is skipped entirely for that day rather than
+  manufacturing a close call that isn't real - the natural pick stands.
+- To force a non-incumbent day, EVERY other pool member close that day
+  (not just the incumbent) gets penalized enough to lose to the assigned
+  winner - a real bug caught before shipping: an early version only
+  penalized the incumbent, which correctly stopped the incumbent from
+  winning but then let a THIRD pool member (present but unpenalized) win
+  by accident instead of the intended assignee, confirmed with a debug
+  script against exactly this 3-contender shape before it ever reached
+  the real dataset.
+- `applyVarietyRotationPenalties(dayMatches, penaltyByMatchId)` applies
+  one day's own slice of the whole-window plan.
+
+`app.js`'s `dayCandidatesForPlan` no longer does its own two-pass dance -
+`getVarietyRotation()` memoizes the whole-window plan (invalidated by
+`invalidateVarietyRotation()`, called from `applyEnabledSportsAndRender`
+- covering both a fresh data build and an enabled-sports toggle -
+`pinSlotChoice`, and the sport-filter chip's own click handler, every real
+place the underlying candidate set can change) so a routine render just
+looks up its own day's slice rather than recomputing the whole window
+every time. `scripts/dump-day-plan.mjs` was updated to mirror the same
+two-step shape (one whole-window `computeVarietyRotation` call, then each
+day's own final `computeDayPlan`).
+
+**Live-verified against the real 2026-09-22 fetch**: Milwaukee Brewers @
+Philadelphia Phillies's own 3-day run (09-23/24/25) has a REAL pool of 4
+members (itself plus Cleveland Guardians @ Boston Red Sox, Miami Marlins @
+Chicago Cubs, and Tampa Bay Rays @ New York Yankees, each close on at
+least one of the 3 days) - more contenders than days, so a perfect
+one-each rotation isn't mathematically achievable regardless of algorithm.
+Actual result: 09-23 Brewers (day 1, its own natural turn), 09-24 rotates
+correctly to Guardians @ Red Sox (close that day), 09-25 the rotation's
+own next assignee (Marlins @ Cubs) wasn't actually close that specific
+day, so forcing was correctly skipped and Brewers naturally won again -
+the algorithm's own honest, non-fabricating behavior rather than a bug.
+San Diego Padres @ Los Angeles Dodgers stayed untouched across all 3 days
+(pool size 1 - nothing ever genuinely close). Separately, Tampa Bay Rays @
+Philadelphia Phillies's own 2-day run (09-26/27) has exactly one real
+alternative (Baltimore Orioles @ New York Yankees) and rotates cleanly:
+Rays keeps day 1, Orioles/Yankees gets day 2. A before/after diff across
+the whole fetched window confirms exactly these 2 days differ
+(2026-09-24, 2026-09-27) - zero unintended changes anywhere else,
+including every non-MLB sport.
+
+Rewrote the Round 41/42 unit tests entirely around `computeVarietyRotation`/
+`applyVarietyRotationPenalties` - a single-day "run" (never touched), the
+real wide-margin Padres @ Dodgers shape (never touched regardless of
+repeat count), a 2-day run with one real alternative (alternates), an
+end-to-end 3-day/3-contender case (each of the three wins exactly once,
+the literal case reported), a real gap day correctly breaking what would
+otherwise look like a continuous run, and a viewer's own pin never being
+overridden. Full suite **383/383** (net -3 from Round 42's 386: the
+9-test Round 41/42 describe block was replaced with a smaller, more
+end-to-end-focused set).
+
+Also verified end-to-end in a real browser (Playwright, seeded from a
+real fetched-data localStorage snapshot per this doc's own established
+zero-cost pattern): zero `pageerror`s loading the page and navigating
+across multiple day tabs, confirming `getVarietyRotation`'s memoization/
+invalidation wiring doesn't crash or throw across real render cycles.

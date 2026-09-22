@@ -73,9 +73,8 @@ import {
   estimatedDurationMinutes,
   estimateLiveDurationMinutes,
   computeDayPlan,
-  applyVarietyPenalty,
-  recommendedMatchupKeys,
-  VARIETY_MAX_FREE_REPEATS
+  computeVarietyRotation,
+  applyVarietyRotationPenalties
 } from './lib/recommendation.mjs';
 import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
 import {
@@ -1139,61 +1138,51 @@ function dayLabelFor(date, { short = false } = {}) {
 
 // ---- Back-to-back variety (bounded, elite-exempt) --------------------------
 //
-// See ./lib/recommendation.mjs's own "Back-to-back variety" section for the
-// scoring mechanics (applyVarietyPenalty/isVarietyExempt/matchupKey) - this
-// part just supplies the one thing that logic needs and can't compute
-// itself: which matchups actually WON their own slot on the real preceding
-// calendar day(s), which requires walking state.days backward and running
-// the exact same (unpenalized) scoring pass those days would get on their
-// own first real render. Deliberately NOT recursive (each lookback day's
-// own streak isn't itself variety-adjusted here) - see this function's own
-// git history/docs/recommendation-engine-audit.md Round 41 entry for why
-// that simplification was chosen over chasing an already-varied answer
-// arbitrarily far back through the whole fetched window.
+// See ./lib/recommendation.mjs's own "Back-to-back variety" section
+// (Round 43) for the actual planning logic (computeVarietyRotation) - this
+// part just supplies the WHOLE fetched window's own candidate matches that
+// planning pass needs (every day in state.days, sport-filtered/scored the
+// same way a real render would), and caches the resulting plan so a
+// render doesn't re-derive it from scratch on every single call.
 function baseDayCandidates(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
   applyLiveExcitementBonus(dayCandidates);
   return dayCandidates;
 }
 
-function recentMatchupKeySets(dayKey) {
-  const idx = state.days.findIndex(d => d.key === dayKey);
-  if (idx === -1) return [];
-  const sets = [];
-  for (let back = 1; back <= VARIETY_MAX_FREE_REPEATS; back++) {
-    const priorDay = state.days[idx - back];
-    if (!priorDay) break;
-    const priorCandidates = baseDayCandidates(priorDay.key);
-    if (!priorCandidates.length) break;
-    sets.push(recommendedMatchupKeys(priorDay.key, priorCandidates, state.pinnedChoices.get(priorDay.key)));
-  }
-  return sets;
+// Memoized until something that could change the plan happens
+// (invalidateVarietyRotation, called from applyFreshBuild/pinSlotChoice/
+// preferMatch/the sport-filter toggle below) - computeVarietyRotation runs
+// computeDayPlan once per day across the WHOLE window, which is cheap
+// (matches scripts/dump-day-plan.mjs's own real-world timing for the same
+// computation) but still real work worth not repeating on every routine
+// live-poll re-render in between.
+let varietyRotationCache = null;
+function invalidateVarietyRotation() {
+  varietyRotationCache = null;
+}
+function getVarietyRotation() {
+  if (varietyRotationCache) return varietyRotationCache;
+  const matchesByDayKey = new Map();
+  // Every day in state.days, even one with zero candidates for the
+  // current sport filter - computeVarietyRotation's own comment explains
+  // why an empty day still has to be PRESENT (as an empty array) rather
+  // than simply missing, so a real gap day correctly breaks a run instead
+  // of silently stitching two separate repeats together across it.
+  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
+  varietyRotationCache = computeVarietyRotation(matchesByDayKey, state.pinnedChoices);
+  return varietyRotationCache;
 }
 
-// The exact same day-candidate + variety-penalty preparation
+// The exact same day-candidate + variety-rotation preparation
 // renderRecommendedSection needs to build today's plan - factored out so
 // pinSlotChoice below can ask "what would the algorithm pick here on its
 // own" (see naturalSlotChoice) against the IDENTICAL candidate set/scores
 // the actual rendered plan uses, rather than a second, slightly different
 // computation that could disagree with what's on screen.
-//
-// Two computeDayPlan passes, deliberately: applyVarietyPenalty's own
-// isVarietyExempt (recommendation.mjs) decides whether TODAY's pick is
-// exempt by reading its real `.alternativeIds` - a real alternative to
-// rotate to means variety should apply; no alternative (the pick is simply
-// the best thing on) means it's exempt, whatever its score. That field
-// only exists once computeDayPlan has actually run once, so a first,
-// natural pass (today's REAL pins already respected, no variety penalty
-// yet) has to happen before applyVarietyPenalty can even ask the question.
-// The caller's own subsequent computeDayPlan call (with the now-penalized
-// planningScore) is what actually decides what renders - computeDayPlan
-// resets every match's own `.recommended`/`.alternativeIds` at the top of
-// each call (see its own comment), so running it twice here is safe: only
-// the LAST call's result is left mutated onto the matches.
 function dayCandidatesForPlan(dayKey) {
   const dayCandidates = baseDayCandidates(dayKey);
-  computeDayPlan(dayKey, dayCandidates, state.pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
-  applyVarietyPenalty(dayCandidates, recentMatchupKeySets(dayKey));
+  applyVarietyRotationPenalties(dayCandidates, getVarietyRotation().get(dayKey));
   return dayCandidates;
 }
 
@@ -1223,6 +1212,10 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   });
   state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, naturalMatchId);
   savePinnedChoices();
+  // A pin can change which matchup naturally wins a day, which can change
+  // a rotation run's own shape (see computeVarietyRotation) - the cached
+  // plan has to be thrown away, not just this one day's own candidates.
+  invalidateVarietyRotation();
   renderSections();
 }
 
@@ -1778,6 +1771,10 @@ function renderFilters() {
       btn.setAttribute('aria-pressed', String(sport === state.activeSport));
       btn.addEventListener('click', () => {
         state.activeSport = sport;
+        // baseDayCandidates (and therefore the cached rotation plan) is
+        // scoped to the active sport filter - a filter change means every
+        // day's own candidate set just changed, so the cache is stale.
+        invalidateVarietyRotation();
         ensureSelectedDayHasActiveSport();
         renderDayScroller();
         renderDayLabels();
@@ -2520,6 +2517,12 @@ function applyEnabledSportsAndRender() {
   state.rawMatches = rawMatches;
   state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
   state.days = buildDayList(state.matches);
+  // state.days/state.matches (and therefore every day's own candidate set
+  // baseDayCandidates reads) just changed - the cached rotation plan (see
+  // getVarietyRotation) is stale regardless of which of this function's
+  // two real call sites (a fresh data build, an enabled-sports toggle)
+  // brought us here.
+  invalidateVarietyRotation();
   // A sport filter that no longer exists at all (its sport just got
   // disabled in Settings) would otherwise leave the filter chips all
   // showing unselected (none of them is this stale sport anymore) while
