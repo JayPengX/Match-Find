@@ -2369,6 +2369,29 @@ function mergeFreshMatches(freshMatches) {
     if (previous?.live && !m.isFinished) {
       m.live = previous.live;
       m.durationMinutes = previous.durationMinutes;
+    } else if (m.isFinished && previous && (previous.isFinished || previous.live)) {
+      // FREEZE a finished match's own durationMinutes at whatever it was
+      // the FIRST time this browser ever saw it finished, rather than
+      // trusting buildMatches()'s own fresh finishedDurationMinutes
+      // (match-builder.mjs) every single refresh. That function computes
+      // "now minus start time" - a fine estimate the moment a fixture
+      // ends, but this app has no scheduled rebuild anymore (see that
+      // function's own now-stale "15-minute cron" comment - it runs live,
+      // in the browser, on every 60s/5min poll), so "now" keeps advancing
+      // for as long as the viewer's tab stays open or they revisit later,
+      // and the SAME finished match's duration kept growing toward its own
+      // per-sport cap (MLB's own 360 minutes) purely from elapsed VIEWING
+      // time, not anything about the real broadcast - live-reported as
+      // "today's and yesterday's finished MLB matches" showing a
+      // suspiciously long duration next to upcoming ones' flat estimate.
+      // `previous.durationMinutes` already holds the best real number
+      // available: either pollLiveMatches' own last live-tracked value
+      // (frozen the instant it stopped correcting, right when `isFinished`
+      // first flipped true - see that function's own `!update.isFinished`
+      // guard) if this match was ever tracked live in this session, or
+      // whatever finishedDurationMinutes's own first honest guess was on
+      // the very first refresh that caught it already finished.
+      m.durationMinutes = previous.durationMinutes;
     }
     byId.set(m.id, m);
   });

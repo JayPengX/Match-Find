@@ -477,15 +477,32 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   longer counts as a real gap. **The overrun buffer only ever applies
   before a match is over.** Once ESPN's own status confirms a fixture is
   finished, `durationMinutes` (see `public/lib/match-builder.mjs`'s
-  `finishedDurationMinutes`) stops being a pre-game guess and becomes the
-  REAL elapsed broadcast time as of that fetch, and
-  `schedulingDurationMinutes` stops padding it any further - there's no
-  forward uncertainty left to hedge once the real length is already known.
-  This is the direct fix for a reported bug: a finished MLB game that
-  genuinely ran 30-60 minutes SHORTER than its own pre-game prediction
-  still had another 25% padded on top of that longer, now-known-wrong
-  guess, which kept blocking a next match that could obviously,
-  actually follow it.
+  `finishedDurationMinutes`) stops being a pre-game guess and becomes an
+  elapsed-time-since-kickoff estimate instead, and `schedulingDurationMinutes`
+  stops padding it any further - there's no forward uncertainty left to
+  hedge once the real length is already known. This is the direct fix for
+  a reported bug: a finished MLB game that genuinely ran 30-60 minutes
+  SHORTER than its own pre-game prediction still had another 25% padded on
+  top of that longer, now-known-wrong guess, which kept blocking a next
+  match that could obviously, actually follow it.
+  **Round 45: that "elapsed time" is only accurate the instant the fixture
+  ends - `finishedDurationMinutes` computes `now - startTimeUtc` fresh on
+  EVERY refresh, and this app has no scheduled rebuild anymore (it runs
+  live in the browser, on both the 60s near-term and 5min full-window
+  polls - see "Live match data" below), so a finished match kept staying
+  in the fetched window (today + one day back) had its own reported
+  duration keep growing toward its per-sport cap (MLB's own 360 minutes)
+  purely from how long the viewer's tab stayed open or how late they
+  reopened it - direct report: "today's and yesterday's finished MLB
+  match['s] duration weirdly long compared to upcoming matches" (real,
+  live-confirmed case: a match finished ~7 hours before a fetch sat at
+  exactly the 360-minute cap, right next to an upcoming match's flat
+  190-minute estimate). Fixed in `app.js`'s `mergeFreshMatches`: a match's
+  own `durationMinutes` is now FROZEN the first time this browser ever
+  sees it finished (preferring `pollLiveMatches`'s own last live-tracked
+  value from the moment it actually ended, when one exists) and carried
+  forward unchanged on every later merge, rather than recomputed fresh
+  each time.
 - **The endurance-based shrink can't claim a no-clock sport's game is
   basically over just because it isn't tense (Round 36).** Live-reported:
   a real 2026-09-27 slate scheduled a next MLB pick only ~2h25m after the

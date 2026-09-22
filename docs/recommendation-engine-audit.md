@@ -4683,3 +4683,95 @@ candidate steals the slot" live bug (proving the hard-force fix), the
 false throughout), and a new dedicated test for the 3-way-tie-over-2-days
 shape confirming the incumbent still wins at least one of its own days.
 Full suite **389/389**.
+
+## Round 45 (2026-09-22): finished match durations stop growing across refreshes
+
+Direct question: "Why today's finished MLB match and yesterday finished
+MLB match's duration weirdly long compared to upcoming matches."
+
+**Root cause.** `finishedDurationMinutes` (`public/lib/match-builder.mjs`)
+computes a finished fixture's own duration as `now - startTimeUtc`,
+clamped to a per-sport cap (`FINISHED_DURATION_CAP_MINUTES_BY_SPORT`,
+MLB = 360 minutes). Its own doc comment explicitly assumed this ran ONCE,
+shortly after the match ended, on the app's old 15-minute GitHub Actions
+cron - a stale assumption: `scripts/build-data.mjs`'s own top comment
+confirms there is no scheduled rebuild anymore. `buildMatches()` runs
+live, in the browser, on BOTH `refreshNearTerm` (60s) and
+`refreshFullWindow` (5min) - meaning `finishedDurationMinutes` recomputes
+`now - start` fresh on every single one of those polls, for as long as the
+match stays in the fetched window (today + 1 day back). "Now" keeps
+advancing for as long as a tab stays open or a viewer revisits later, so
+the SAME finished match's own reported duration kept growing toward its
+360-minute cap purely from elapsed VIEWING time, nothing about the real
+broadcast.
+
+`app.js`'s `mergeFreshMatches` already had a carry-forward mechanism for
+exactly this class of problem (Round 29's own live-duration-flicker fix),
+but its condition (`previous?.live && !m.isFinished`) only protected a
+match WHILE it was still live - the instant `isFinished` flips true, that
+protection stops and every subsequent refresh's fresh
+`finishedDurationMinutes` call overwrites it again, unprotected, forever.
+
+**Live-confirmed against the real fetch** (rebuilt live, 2026-09-22
+~13:47 Taiwan time): "Toronto Blue Jays @ Baltimore Orioles" and
+"Washington Nationals @ Detroit Tigers" (both finished the day before,
+2026-09-21) sat at exactly `durationMinutes: 360` - the MLB cap, hit
+because both finished roughly 7+ hours before this exact fetch. "Minnesota
+Twins @ San Francisco Giants" (finished earlier the SAME day) sat at 243 -
+already inflated, just not yet capped. An upcoming MLB fixture's own flat
+pre-game estimate is 190 minutes (`LEAGUES.mlb.durationMinutes`,
+match-builder.mjs) - both numbers read as "weirdly long" right next to it,
+exactly as reported, and `buildMatchCard`'s own displayed end time
+(`start + durationMinutes`, app.js) shows this directly on the card, not
+just internally.
+
+**Fix**: extended `mergeFreshMatches`'s own carry-forward condition
+(`public/app.js`) - once a match was EITHER already finished OR being
+live-tracked on the previous merge, and the fresh build ALSO reports it
+finished, `durationMinutes` is now carried forward (frozen) from
+`previous` instead of accepting the fresh, wall-clock-inflated
+recomputation:
+
+```js
+if (previous?.live && !m.isFinished) {
+  m.live = previous.live;
+  m.durationMinutes = previous.durationMinutes;
+} else if (m.isFinished && previous && (previous.isFinished || previous.live)) {
+  m.durationMinutes = previous.durationMinutes;
+}
+```
+
+This freezes a finished match's duration at the BEST available real
+number the first time this browser ever saw it finished: if it was
+tracked live right up to the final whistle, that's `pollLiveMatches`'s own
+last live-corrected `estimateLiveDurationMinutes` value (frozen the
+instant that function's own `!update.isFinished` guard stops updating it,
+right when `isFinished` first flips true) - a real, progress-based
+estimate, not a wall-clock guess. Otherwise (a fixture first ever seen
+already finished, e.g. after a browser restart past the live window) it
+freezes at `finishedDurationMinutes`'s own first honest `now - start`
+guess, which then never grows further no matter how much later the
+viewer keeps looking at it. `finishedDurationMinutes` itself is
+unchanged - the freeze lives one layer up, at the merge point, exactly
+where the previous live-duration-flicker fix already lived.
+
+**Verified end-to-end in a real browser** (Playwright, real network - no
+mocking): seeded the exact real finished match above
+(`durationMinutes: 243`, displayed end time `上午5:48`), let the real
+initial fetch complete (unchanged), then advanced the page's own fake
+clock by 3 hours and forced a real manual refresh (`refreshFullWindow` via
+the "立即重新整理" button) - the SAME match's displayed end time stayed
+`上午5:48`, byte-identical, instead of growing toward the 360-minute cap
+as the old code would have. Zero page errors.
+
+Also updated `MIN_FINISHED_DURATION_MINUTES`'s and
+`FINISHED_DURATION_CAP_MINUTES_BY_SPORT`'s own comments in
+match-builder.mjs, which still described the now-nonexistent 15-minute
+cron, to point at this fix and explain the real, current polling
+architecture instead.
+
+Full suite **389/389** (no library-level test changes - the fix is
+entirely in app.js's DOM/state glue layer, verified via the real-browser
+Playwright check above rather than a node:test unit, matching this
+codebase's own established split between public/lib/'s unit-tested pure
+functions and app.js's Playwright-verified integration behavior).

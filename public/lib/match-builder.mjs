@@ -167,30 +167,50 @@ export function computeDurationMinutes(league, away, home, venue, broadcast, odd
 }
 
 // Once ESPN itself confirms a fixture is over (isFinished), its real
-// length is simply how long ago it started, as of this fetch - exact
-// modulo this workflow's own 15-minute cron cadence, and categorically
-// better than the PRE-GAME estimate computeDurationMinutes above returns
-// for a fixture that hasn't started yet. This is the direct fix for a
-// reported bug: a finished MLB game whose broadcast genuinely ran 30-60
-// minutes SHORTER than its own pre-game prediction still reserved a
-// schedule block sized to that longer, now-known-wrong guess (see
-// recommendation.mjs's schedulingDurationMinutes, which also stops adding
-// its own overrun buffer once isFinished is true - there's no forward
-// uncertainty left to hedge once the real length is already known), which
-// kept blocking a next match that could obviously, actually follow it.
-// Floored well below any realistic finished-game length so a data glitch
-// (ESPN marking a fixture 'post' almost immediately, e.g. a postponement)
-// can't produce a laughably tiny reserved block.
+// length is simply how long ago it started, as of this fetch - and
+// categorically better than the PRE-GAME estimate computeDurationMinutes
+// above returns for a fixture that hasn't started yet. This is the direct
+// fix for a reported bug: a finished MLB game whose broadcast genuinely
+// ran 30-60 minutes SHORTER than its own pre-game prediction still
+// reserved a schedule block sized to that longer, now-known-wrong guess
+// (see recommendation.mjs's schedulingDurationMinutes, which also stops
+// adding its own overrun buffer once isFinished is true - there's no
+// forward uncertainty left to hedge once the real length is already
+// known), which kept blocking a next match that could obviously, actually
+// follow it. Floored well below any realistic finished-game length so a
+// data glitch (ESPN marking a fixture 'post' almost immediately, e.g. a
+// postponement) can't produce a laughably tiny reserved block.
+//
+// "As of this fetch" used to mean "shortly after the fixture ends", back
+// when this whole app rebuilt matches.json on a 15-minute GitHub Actions
+// cron. That's stale now - this app has no scheduled rebuild at all
+// anymore (see scripts/build-data.mjs's own top comment); buildMatches
+// runs live, in every viewer's own browser, on both the 60s near-term and
+// 5min full-window polls (app.js). Calling this function fresh on EVERY
+// one of those polls means "now" keeps advancing for as long as a tab
+// stays open or a viewer revisits later, so THIS function alone would
+// make an already-finished match's own reported duration keep growing
+// toward its per-sport cap purely from elapsed VIEWING time - live-
+// reported as "today's and yesterday's finished MLB matches" showing a
+// suspiciously long duration next to upcoming ones' flat pre-game
+// estimate. The actual fix lives one layer up, in app.js's
+// mergeFreshMatches: once a match is first seen finished, its
+// durationMinutes is FROZEN (carried forward on every later merge)
+// instead of being recomputed via this function again - this function
+// itself still only ever returns a fresh, unfrozen "elapsed since start"
+// number, exactly as it always has.
 export const MIN_FINISHED_DURATION_MINUTES = 30;
 // Ceilinged well ABOVE any realistic finished-game length, per sport, for
 // the opposite reason: "how long ago did this start" is only a good proxy
 // for "how long did it actually run" when this fetch happens shortly after
-// the fixture ends. This workflow runs on a 15-minute cron reading a WHOLE
-// day's schedule at once, so a match that finished hours before the run
-// that catches it (a lunchtime EPL kickoff checked again in the evening,
-// same as any run whose previous cycle was delayed or skipped) had its
-// "duration" computed as elapsed-time-to-NOW, not elapsed-time-to-the-
-// actual-final-whistle - live-reported as a finished, genuinely great,
+// the fixture ends. Originally written against a 15-minute cron reading a
+// WHOLE day's schedule at once (now stale - see MIN_FINISHED_DURATION_MINUTES'
+// own comment for how this app actually runs today), so a match that
+// finished hours before the run that caught it (a lunchtime EPL kickoff
+// checked again in the evening, same as any run whose previous cycle was
+// delayed or skipped) had its "duration" computed as elapsed-time-to-NOW,
+// not elapsed-time-to-the-actual-final-whistle - live-reported as a
+// finished, genuinely great,
 // high-endurance match (Crystal Palace 0-0 recorded as `durationMinutes:
 // 290`, an EPL match kicked off 13:00 UTC, fetched again at 17:41 UTC)
 // reserving a 4h50m schedule block against a normal ~115-minute league
