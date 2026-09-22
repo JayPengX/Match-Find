@@ -4095,3 +4095,87 @@ own client code.
 Full Match Find suite unaffected by this round (**391/391**, no
 `recommendation.mjs` changes) - every change this round lives in
 Shared-Proxy's `worker.js`/README and this repo's own README/docs.
+
+## Round 39 (2026-09-22): a background re-render was tearing the DOM out from under an active swipe
+
+**Report.** "The team logo is flashing weirdly also swipe get a bit weird or
+unable to use after some time, could be Gemini messing? Gemini load should
+be applied before it finishes loading." Also (separately, same message):
+"maybe your prompt is bad... I know it's close but this ain't right" - the
+Guardians/Red Sox pick, addressed on its own merits in this file's own
+Round 37/38 entries; this section is the UI bug half of that message.
+
+**Root cause, confirmed by direct code inspection then live-verified with
+Playwright.** `maybeRequestGeminiTieBreak`'s async fetch can resolve
+anywhere from milliseconds to `AbortSignal.timeout(30_000)` later -
+completely asynchronous to whatever the viewer is doing right now - and,
+until this round, unconditionally called `renderSections()` the instant a
+`pickId` came back, which rebuilds `recommendedListEl`'s entire child list
+from scratch (every `<img>` team-logo element recreated, not reused).
+`buildMatchStack`'s own swipe-drag state (`activePointerId`,
+`setPointerCapture`) lives in a closure bound to ONE specific card DOM
+node - if that exact node gets removed mid-drag (a `renderSections()`
+firing while `pointerdown` has already fired but `pointerup` hasn't), the
+browser has nowhere left to deliver the rest of that gesture's move/up
+events, exactly matching "swipe get a bit weird or unable to use" (the
+finger is still down, but the gesture it started can no longer complete).
+The team-logo flash is the same mechanism's more visible half: a fresh
+`<img>` element forces a repaint even when the underlying data is
+unchanged.
+
+**Live-tested twice this session already, unknowingly - Gemini's answer
+agreed with the deterministic pick BOTH times** (Round 37, Round 38 with
+grounding) - meaning both of Round 38's own real, billed API calls forced
+a full section rebuild for **zero visible change**, the worst case of this
+bug: paying the flash/gesture-breaking cost with no benefit at all.
+
+**Fix, two parts:**
+1. `renderSections()` itself now defers while any card is mid-drag
+   (`activeSwipeCount`, incremented in `buildMatchStack`'s own pointerdown,
+   decremented via `resetDrag` - which every one of `endDrag`/
+   `pointercancel`/`lostpointercapture` already funnels through) - the
+   moment the gesture ends, the deferred render flushes for real via
+   `stopTrackingSwipe`. Deferred, never dropped.
+2. `maybeRequestGeminiTieBreak` now skips the render call entirely when
+   Gemini's pick doesn't actually change anything on screen
+   (`pickId !== close[0].id` - `close[0]` is already the natural top pick,
+   see `selectGeminiTieBreakCandidates`), and when the viewer has since
+   navigated off that day. This directly fixes the "zero-benefit rebuild"
+   case both of this session's real Gemini calls hit.
+
+**Important scope finding:** this bug was NOT exclusive to Gemini. The
+app's own pre-existing live-score/odds poll (`pollLiveMatches` →
+`recomputeAndRender` → `renderSections()`, running independently of
+Gemini since well before Round 32) goes through the exact same
+`renderSections()` function and was equally capable of interrupting a
+swipe - confirmed directly with an isolated Playwright test (blocking
+every network call except a mocked Gemini response still lost a DOM
+marker on an unrelated poll tick; blocking EVERY network call including
+that poll, with only the Gemini mock live, correctly preserved it). Fixing
+the guard inside `renderSections()` itself, rather than only at the
+Gemini call site, covers both sources with one change.
+
+**Verification.** No unit-test coverage exists for `app.js` (browser-only
+UI code, verified via Playwright per this repo's established convention -
+see README). Three real, end-to-end Playwright scenarios, each seeding a
+real `matchfind-match-snapshot` from live-fetched data so real swipeable
+stacks render without needing network access in this sandbox:
+1. A real `pointerdown`→`pointermove` drag held open while a mocked (zero-
+   cost, `page.route`-intercepted) `/match-recommend` response - forcing a
+   DIFFERENT pick than the natural default - resolves mid-drag: the
+   dragged card stays in the DOM, untouched, for the whole gesture; ending
+   the drag completes normally with no exception.
+2. Same setup, but the drag is released BELOW the commit threshold (a
+   snap-back, no user-driven pin) - the forced Gemini pick still correctly
+   applies afterward (the stack's active dot moves to the new pick),
+   proving the deferred render is flushed, never silently lost.
+3. Isolated the "skip when unchanged" optimization specifically: with every
+   non-Gemini network call blocked, a Gemini response that agrees with the
+   natural pick causes NO re-render at all (a test marker set on the
+   live-DOM `<img>` node survives); with the pre-existing live-poll left
+   unblocked, the same marker is lost on its own separate tick - confirming
+   both the fix's correctness and the pre-existing poll's own equal
+   exposure to this bug before this round's `renderSections()`-level guard.
+
+Full suite: **391/391** (no `recommendation.mjs`/scoring changes this
+round - this is purely `public/app.js`'s render/gesture plumbing).

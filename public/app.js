@@ -1265,11 +1265,21 @@ async function maybeRequestGeminiTieBreak(dayKey, close) {
   }
   cache[dayKey] = { candidateKey, pickId, reason, fetchedAt: Date.now() };
   saveGeminiTieBreakCache(cache);
-  // Only a genuinely NEW pick needs a fresh render - the next
-  // computeDayPlanWithGeminiTieBreak call picks it up and forces it in. A
-  // cached failure needs no re-render at all: nothing about the
-  // already-rendered plan changes.
-  if (pickId) renderSections();
+  // A cached failure needs no re-render at all: nothing about the
+  // already-rendered plan changes. Nor does a pick that AGREES with the
+  // natural default already on screen - `close[0]` is that default (see
+  // selectGeminiTieBreakCandidates), so `pickId === close[0].id` means
+  // Gemini's answer changes nothing visible. Both of Round 38's own live
+  // test calls landed exactly here (Gemini agreed with the deterministic
+  // pick both times) - forcing a full renderSections() anyway would have
+  // been a pure-cost, zero-benefit DOM teardown/rebuild every single time,
+  // real contributor to the reported logo-flash/swipe-breaks-mid-drag bug
+  // (renderSections' own activeSwipeCount guard fixes the mechanism; this
+  // fixes the frequency by not firing it at all when nothing changed). Also
+  // skip if the viewer has since navigated off this day entirely - the next
+  // real visit to it re-reads this same cache fresh, nothing to show right
+  // now either way.
+  if (pickId && pickId !== close[0].id && dayKey === state.selectedDayKey) renderSections();
 }
 
 // The exact same day-candidate + cross-day-repeat-penalty preparation
@@ -1909,6 +1919,35 @@ function renderFilters() {
 // "one swipe reused an old stale visual state forever" (a `.is-muted` class
 // that patchStackSelectionTags never got around to clearing being the
 // concrete case reported).
+// Tracks whether a card is currently mid-drag, ACROSS every rendered stack
+// (a plain counter, not a single boolean, since it's shared module state
+// and simplest to just never go negative rather than assume only one
+// stack can ever be dragged at a time). renderSections (below) defers
+// itself while this is nonzero instead of tearing the DOM out from under
+// an active gesture - see that function's own comment for the two real,
+// reported bugs this fixes: a team-logo flash on every background-
+// triggered re-render (the Gemini tie-break's async answer, or a routine
+// live-data poll, arriving mid-interaction) and a swipe silently breaking
+// mid-drag (the dragged card's own DOM node, and its pointer capture, gets
+// removed out from under an active pointerdown, so the browser has
+// nowhere left to deliver the rest of that gesture's move/up events).
+let activeSwipeCount = 0;
+let rerenderPendingAfterSwipe = false;
+
+function startTrackingSwipe() {
+  activeSwipeCount += 1;
+}
+
+// Idempotent per gesture - buildMatchStack's own endDrag/pointercancel/
+// lostpointercapture handlers all funnel through resetDrag, which calls
+// this once per gesture regardless of which of those three actually ended
+// it, guarded by `isTrackingSwipe` there so a gesture that never really
+// started (e.g. a vertical drag let go early) never double-decrements.
+function stopTrackingSwipe() {
+  activeSwipeCount = Math.max(0, activeSwipeCount - 1);
+  if (activeSwipeCount === 0 && rerenderPendingAfterSwipe) renderSections();
+}
+
 function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // The CLUSTER's own key (every near-total-overlapping member, set by
   // computeDayPlan on the recommended pick - see that field's own comment
@@ -1995,6 +2034,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   let dragStartY = 0;
   let dragDx = 0;
   let isHorizontalDrag = false;
+  // Guards startTrackingSwipe/stopTrackingSwipe so a gesture that never
+  // really started (pointerdown fired, then immediately reset without ever
+  // setting activePointerId - can't currently happen here, but keeps this
+  // pairing safe against a future early-return) never double-decrements
+  // the shared activeSwipeCount.
+  let isTrackingSwipe = false;
 
   function setDragTransform(dx) {
     card.style.transition = 'none';
@@ -2007,6 +2052,10 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     dragDx = 0;
     card.style.transition = 'transform 180ms ease';
     card.style.transform = '';
+    if (isTrackingSwipe) {
+      isTrackingSwipe = false;
+      stopTrackingSwipe();
+    }
   }
 
   // A card contains real <img> team-logo elements, and starting a mouse
@@ -2029,6 +2078,8 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     dragStartY = event.clientY;
     dragDx = 0;
     isHorizontalDrag = false;
+    isTrackingSwipe = true;
+    startTrackingSwipe();
     // setPointerCapture is what keeps this whole gesture pinned to `card`
     // even if the finger wanders outside its box mid-drag - a plain
     // touchmove/touchend pair has no equivalent, and losing that tracking
@@ -2279,6 +2330,17 @@ function renderAllMatchesSection() {
 }
 
 function renderSections() {
+  // Never tear down/rebuild the card stack while a swipe is actively
+  // mid-drag - see activeSwipeCount's own comment for the two real,
+  // reported bugs this fixes (a team-logo flash, and a swipe silently
+  // breaking because its dragged card's own DOM node - and pointer
+  // capture - gets removed out from under it). Deferred, not dropped:
+  // stopTrackingSwipe runs this for real the moment the gesture ends.
+  if (activeSwipeCount > 0) {
+    rerenderPendingAfterSwipe = true;
+    return;
+  }
+  rerenderPendingAfterSwipe = false;
   renderRecommendedSection();
   renderAllMatchesSection();
 }
