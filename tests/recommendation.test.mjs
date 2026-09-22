@@ -10,7 +10,7 @@
 // deploy workflow always running on UTC-default GitHub-hosted runners.
 process.env.TZ = 'UTC';
 
-import { test, describe } from 'node:test';
+import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   bestMatchScore,
@@ -53,6 +53,7 @@ import {
   slotKeyFromMembers,
   liveExcitementBonus,
   LIVE_EXCITEMENT_MAX_BONUS,
+  LIVE_PICK_STICKY_BONUS,
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
   computeVarietyRotation,
@@ -1531,3 +1532,55 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
   });
 });
 
+
+describe('live-pick stickiness', () => {
+  // applyLiveExcitementBonus reads the clock itself - pinned to an hour
+  // after NOON_UTC so these fixtures are always mid-game and never land in
+  // quiet hours, whenever the suite runs.
+  beforeEach(() => mock.timers.enable({ apis: ['Date'], now: Date.parse(NOON_UTC) + 60 * 60_000 }));
+  afterEach(() => mock.timers.reset());
+  const liveStart = () => NOON_UTC;
+
+  test('a sticky pick gets the bonus only while it is underway', () => {
+    const live = makeMatch({ id: 'live', startTimeUtc: liveStart(), effectiveScore: 6 });
+    const upcoming = makeMatch({ id: 'up', startTimeUtc: '2026-09-19T16:00:00.000Z', effectiveScore: 6 });
+    const done = makeMatch({ id: 'done', startTimeUtc: liveStart(), effectiveScore: 6, isFinished: true });
+    applyLiveExcitementBonus([live, upcoming, done], new Set(['live', 'up', 'done']));
+    assert.equal(live.liveStickyBonus, LIVE_PICK_STICKY_BONUS);
+    assert.equal(live.planningScore, 6 + LIVE_PICK_STICKY_BONUS);
+    assert.equal(upcoming.liveStickyBonus, 0);
+    assert.equal(done.liveStickyBonus, 0);
+  });
+
+  test('outweighs any live-excitement swing, but not a viewer pin', () => {
+    const start = liveStart();
+    const sticky = makeMatch({ id: 'sticky', startTimeUtc: start, durationMinutes: 190, effectiveScore: 6 });
+    // A tied game deep in its run earns close to the full excitement bonus.
+    const rival = makeMatch({
+      id: 'rival',
+      startTimeUtc: start,
+      durationMinutes: 70,
+      effectiveScore: 6.5,
+      competitors: [{ score: '3' }, { score: '3' }]
+    });
+    const day = [sticky, rival];
+    applyLiveExcitementBonus(day, new Set(['sticky']));
+    assert.ok(rival.liveExcitementBonus > 0);
+    const dayKey = start.slice(0, 10);
+    computeDayPlan(dayKey, day, null, { scoreField: 'planningScore' });
+    assert.equal(sticky.recommended, true);
+    assert.equal(rival.recommended, false);
+    computeDayPlan(dayKey, day, new Set(['rival']), { scoreField: 'planningScore' });
+    assert.equal(rival.recommended, true);
+  });
+
+  test('stickiness does not push close alternatives out of the swipe stack', () => {
+    const start = liveStart();
+    const sticky = makeMatch({ id: 'sticky', startTimeUtc: start, durationMinutes: 190, effectiveScore: 6 });
+    const alt = makeMatch({ id: 'alt', startTimeUtc: start, durationMinutes: 190, effectiveScore: 5 });
+    const day = [sticky, alt];
+    applyLiveExcitementBonus(day, new Set(['sticky']));
+    computeDayPlan(start.slice(0, 10), day, null, { scoreField: 'planningScore' });
+    assert.deepEqual(sticky.alternativeIds, ['alt']);
+  });
+});

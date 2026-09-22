@@ -1073,7 +1073,10 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     const cluster = clusterByMatchId.get(choice.id);
     if (!cluster || cluster.members.length < 2) return;
     choice.slotKey = slotKeyFromMembers(cluster.members);
-    const pickedScore = getScore(choice);
+    // Excluding any live-pick stickiness (see applyLiveExcitementBonus) -
+    // that's a "don't switch away mid-game" nudge, not a real quality gap.
+    const gapScore = m => getScore(m) - (m.liveStickyBonus || 0);
+    const pickedScore = gapScore(choice);
     const alternatives = cluster.members.filter(
       m =>
         m.id !== choice.id &&
@@ -1085,7 +1088,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
         // out of the plan with no way to swipe back.
         (choice.isFinished || !m.isFinished) &&
         isNearTotalOverlap(m, choice) &&
-        pickedScore - getScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
+        pickedScore - gapScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );
     if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
   });
@@ -1175,14 +1178,36 @@ export function computeSportConcentration(picks) {
 // recommendation-engine-audit.md Invariant 4 - a nudge like this can move
 // the scheduler's own pick, never corrupt the viewer's true, un-nudged
 // judgment of the match).
-export function applyLiveExcitementBonus(dayMatches) {
+//
+// `stickyIds` (optional Set<matchId>) - live picks the plan already
+// recommended once they were underway (see app.js's own
+// state.liveStickyIds). Each still-live one gets LIVE_PICK_STICKY_BONUS on
+// top, so a close game elsewhere can bump what's COMING UP next, but can't
+// pull the game a viewer is already watching out of its slot mid-game.
+export function applyLiveExcitementBonus(dayMatches, stickyIds = null) {
   dayMatches.forEach(match => {
     // Recomputed fresh every call (never accumulated) from match's own
     // CURRENT competitor scores - see liveExcitementBonus's own comment.
     const liveBonus = liveExcitementBonus(match);
     match.liveExcitementBonus = liveBonus;
-    match.planningScore = Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) + liveBonus) * 1e6) / 1e6;
+    match.liveStickyBonus = stickyIds && stickyIds.has(match.id) && isUnderway(match) ? LIVE_PICK_STICKY_BONUS : 0;
+    match.planningScore =
+      Math.round(((Number.isFinite(match.effectiveScore) ? match.effectiveScore : 0) + liveBonus + match.liveStickyBonus) * 1e6) / 1e6;
   });
+}
+
+// Twice the largest swing live excitement alone can cause (0 to
+// LIVE_EXCITEMENT_MAX_BONUS on either side of a comparison), so no amount of
+// live-score movement can flip a sticky live pick - only a viewer's own
+// swipe (a hard pin) can. Never counted toward the stack's "is this
+// alternative close enough to show" gap (see computeDayPlan), so a sticky
+// pick's swipe stack keeps every alternative it had.
+export const LIVE_PICK_STICKY_BONUS = LIVE_EXCITEMENT_MAX_BONUS * 2;
+
+export function isUnderway(match, now = Date.now()) {
+  if (match.isFinished) return false;
+  const state = matchLifecycleState(match, now);
+  return state === LIFECYCLE_STATES.LIVE || state === LIFECYCLE_STATES.ENDING_SOON;
 }
 
 // ---- Back-to-back variety (bounded, elite-exempt) --------------------------

@@ -67,6 +67,7 @@ import {
   slotKeyFromMembers,
   groupIntoSlots,
   isQuietHours,
+  isUnderway,
   computeOverlapRange,
   isNearTotalOverlap,
   applyLiveExcitementBonus,
@@ -740,6 +741,39 @@ function savePinnedChoices() {
 // STORAGE_KEY's own TDZ), same pattern as state.priorityOrder's assignment
 // right after loadPriorityOrder above.
 state.pinnedChoices = loadPinnedChoices();
+
+// Live picks the plan itself recommended once they were underway - see
+// recommendation.mjs's applyLiveExcitementBonus/LIVE_PICK_STICKY_BONUS.
+// Persisted so a reload mid-game doesn't let a close game elsewhere swap
+// out what the viewer is already watching. Stored as a plain id list;
+// entries for fixtures that are finished or no longer fetched are dropped
+// by pruneLiveStickyIds.
+const LIVE_STICKY_STORAGE_KEY = 'matchfind-live-sticky-ids';
+function loadLiveStickyIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(LIVE_STICKY_STORAGE_KEY));
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveLiveStickyIds() {
+  try {
+    localStorage.setItem(LIVE_STICKY_STORAGE_KEY, JSON.stringify([...state.liveStickyIds]));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+state.liveStickyIds = loadLiveStickyIds();
+function pruneLiveStickyIds() {
+  if (!state.allRawMatches.length) return;
+  const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
+  const kept = new Set([...state.liveStickyIds].filter(id => byId.has(id) && !byId.get(id).isFinished));
+  if (kept.size !== state.liveStickyIds.size) {
+    state.liveStickyIds = kept;
+    saveLiveStickyIds();
+  }
+}
 // Called on every applyEnabledSportsAndRender (a fresh data load, or a
 // sport toggle) - state.days moves forward with the fetched window, and a
 // pin for a day that's fallen off the back of it, or simply passed, can
@@ -774,6 +808,7 @@ function prunePinnedChoices() {
   const { pinnedChoices, changed } = pruneStalePinnedChoices(state.pinnedChoices, localDateKey(new Date()));
   state.pinnedChoices = pinnedChoices;
   const droppedFinished = dropPinsOnFinishedMatchesOnce();
+  pruneLiveStickyIds();
   if (changed || droppedFinished) savePinnedChoices();
 }
 
@@ -1342,7 +1377,7 @@ function dayLabelFor(date, { short = false } = {}) {
 // render doesn't re-derive it from scratch on every single call.
 function baseDayCandidates(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyLiveExcitementBonus(dayCandidates);
+  applyLiveExcitementBonus(dayCandidates, state.liveStickyIds);
   return dayCandidates;
 }
 
@@ -2655,6 +2690,24 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   return wrapper;
 }
 
+// Marks every underway pick the plan chose ON ITS OWN (not a viewer's
+// 偏好 pin - that's already a hard pin, and making it sticky would bias
+// what "the natural pick" means for pinSlotChoice's swipe-back check) as
+// sticky - see state.liveStickyIds. Raising an already-chosen pick's score
+// never changes the plan it was chosen in, so this render stays as it is;
+// it only stops later renders from swapping that pick out.
+function stickLivePicks(dayPlan) {
+  let changed = false;
+  dayPlan.forEach(match => {
+    if (match.isPreferred || state.liveStickyIds.has(match.id) || !isUnderway(match)) return;
+    state.liveStickyIds.add(match.id);
+    changed = true;
+  });
+  if (!changed) return;
+  saveLiveStickyIds();
+  invalidateVarietyRotation();
+}
+
 function renderRecommendedSection() {
   const dayKey = state.selectedDayKey;
   // A day with no data yet at all (see isDayPending) gets an honest
@@ -2684,6 +2737,7 @@ function renderRecommendedSection() {
   // label back on anything ONLY rotation forced in, never touching an id
   // that's ALSO a real pin.
   clearRotationIsPreferred(dayCandidates, getVarietyRotation().get(dayKey), state.pinnedChoices.get(dayKey));
+  stickLivePicks(dayPlan);
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {
@@ -3111,6 +3165,20 @@ function loadMatchSnapshot() {
   }
 }
 
+// Which in-progress fixtures a build should look up the pre-game line for
+// (see match-builder.mjs's espnCoreOddsUrl) - only ones this browser has no
+// pre-game line for yet (never seen, or first seen already underway), and
+// only once per fixture per page load, so a game that genuinely never had a
+// line posted doesn't cost an extra request on every 60s refresh.
+const pregameOddsLookedUp = new Set();
+function needsPregameOdds(id) {
+  if (pregameOddsLookedUp.has(id)) return false;
+  const previous = state.allRawMatches.find(m => m.id === id);
+  if (previous && (previous.oddsSpread != null || previous.oddsOverUnder != null)) return false;
+  pregameOddsLookedUp.add(id);
+  return true;
+}
+
 // Applies a freshly-built match list to the page - called by both refresh
 // tiers below (and the initial load, which is just the full-window tier's
 // own first run), so "how a fresh batch of matches turns into what's on
@@ -3287,7 +3355,8 @@ async function refreshNearTerm() {
       daysAhead: NEAR_TERM_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
-      enrichOdds: false
+      enrichOdds: false,
+      needsPregameOdds
     });
     // Set BEFORE applyFreshBuild, not after - applyFreshBuild's own render
     // reads this (via isDayPending) to decide whether today/tomorrow are
@@ -3448,7 +3517,8 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
       daysAhead: DEFAULT_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
-      enrichOdds: false
+      enrichOdds: false,
+      needsPregameOdds
     });
     // Set BEFORE applyFreshBuild, not after - see refreshNearTerm's own
     // comment on state.nearTermLoaded for why the render this triggers

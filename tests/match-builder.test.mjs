@@ -18,7 +18,8 @@ import {
   computeMatchObjectiveScore,
   describeFactorsZh,
   buildObjectiveReasonZh,
-  freezeStartedMatchScoring
+  freezeStartedMatchScoring,
+  parsePregameCoreOdds
 } from '../public/lib/match-builder.mjs';
 
 describe('isTimeTbd', () => {
@@ -406,5 +407,35 @@ describe('freezeStartedMatchScoring', () => {
     const result = freezeStartedMatchScoring(fresh, pregame(), now);
     assert.equal(result.score, 7.5);
     assert.equal(result.durationMinutes, 201);
+  });
+});
+
+describe('parsePregameCoreOdds', () => {
+  test('takes the pre-game provider line, skipping the live in-game one', () => {
+    const json = {
+      items: [
+        { provider: { name: 'DraftKings - Live Odds' }, spread: -2.5, overUnder: 5.5 },
+        { provider: { name: 'DraftKings' }, spread: -1.5, overUnder: 7 }
+      ]
+    };
+    assert.deepEqual(parsePregameCoreOdds(json), { spread: -1.5, overUnder: 7 });
+  });
+  test('returns null when only a live line (or nothing) is posted', () => {
+    assert.equal(parsePregameCoreOdds({ items: [{ provider: { name: 'ESPN BET - Live Odds' }, spread: 1.5 }] }), null);
+    assert.equal(parsePregameCoreOdds({}), null);
+    assert.equal(parsePregameCoreOdds(null), null);
+  });
+});
+
+describe('freezeStartedMatchScoring with a backfilled pre-game line', () => {
+  test('a fresh build that recovered the pre-game line replaces a no-line frozen score', () => {
+    const start = '2026-09-22T10:00:00Z';
+    const now = Date.parse('2026-09-22T11:00:00Z');
+    const previous = { startTimeUtc: start, score: 5.5, oddsSpread: null, oddsOverUnder: null, durationMinutes: 190 };
+    const fresh = { startTimeUtc: start, score: 7.5, oddsSpread: -1.5, oddsOverUnder: 7, durationMinutes: 180, isFinished: false };
+    const result = freezeStartedMatchScoring(fresh, previous, now);
+    assert.equal(result.score, 7.5);
+    assert.equal(result.oddsSpread, -1.5);
+    assert.equal(result.durationMinutes, 180);
   });
 });
