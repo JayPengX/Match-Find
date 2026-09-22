@@ -2222,19 +2222,31 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     choose(targetIndex);
     // Setting a transform/opacity on `card` and then, in the same tick,
     // having choose() above tear its whole DOM subtree out from under it
-    // (pinSlotChoice -> renderSections) can leave Safari's own compositor
-    // holding onto a stale, already-rasterized layer for the just-removed
-    // card - visible as a ghost of the swiped-away card sitting in the
-    // background until something forces a full repaint, live-reported on
-    // iPad specifically (a bigger screen means more compositor real
-    // estate for the stale layer to sit in, and matches "scrolling down
-    // and back up makes it disappear" exactly - a scroll is exactly the
-    // kind of forced repaint that clears this). A synchronous layout read
-    // forces the browser to reconcile its render tree against the DOM as
-    // it now stands (card's own node already gone) rather than waiting on
-    // the next scroll to do it - same fix, without needing the viewer to
-    // actually scroll.
-    void document.body.offsetHeight;
+    // (pinSlotChoice -> renderSections -> recommendedListEl.replaceChildren)
+    // can leave Safari's own compositor holding onto a stale,
+    // already-rasterized layer for the just-removed card - visible as a
+    // ghost of the swiped-away card sitting in the background until
+    // something forces a full repaint, live-reported on iPad specifically
+    // (a bigger screen means more compositor real estate for the stale
+    // layer to sit in, and matches "scrolling down and back up makes it
+    // disappear" exactly - a scroll is exactly the kind of forced repaint
+    // that clears this).
+    //
+    // A plain forced-layout read (`void el.offsetHeight`, this function's
+    // own first attempt at this) didn't hold up live - transform/opacity
+    // are deliberately GPU/compositor-only properties that never
+    // invalidate LAYOUT at all (that's the whole reason they're used for
+    // animation instead of, say, left/top), so forcing a layout flush
+    // never actually touched the stale COMPOSITING layer this leaves
+    // behind. Toggling `display` on the container that used to hold the
+    // swiped card genuinely tears that render subtree down and rebuilds
+    // it from scratch - nothing stale can survive that - and since both
+    // toggles happen synchronously in this same tick, before the browser
+    // ever gets to actually paint a frame, there's nothing to visibly
+    // flash either.
+    recommendedListEl.style.display = 'none';
+    void recommendedListEl.offsetHeight;
+    recommendedListEl.style.display = '';
   }
 
   card.addEventListener('pointerup', endDrag);
@@ -2970,6 +2982,70 @@ async function checkForNewAppVersion() {
   return !!liveBuildId && liveBuildId !== APP_BUILD_ID;
 }
 
+// A real reload, not just re-fetching data - the whole point is to get this
+// tab off whatever OLD app.js it's still running. A bare
+// window.location.reload() is NOT guaranteed to do that: index.html itself
+// is served with cache-control: max-age=600 (confirmed live via curl), so
+// an ordinary reload made within 10 minutes of this tab's own last load can
+// be satisfied entirely from THIS BROWSER's own local HTTP cache without
+// ever reaching the network - reloading the exact same stale index.html
+// (and the old app.js?v=<sha> it references) this tab already had.
+//
+// A browser's own local cache is keyed on the full URL including its query
+// string (unlike GitHub Pages' CDN, which was confirmed to ignore query
+// strings for ITS cache key) - so navigating to a cache-busted URL forces a
+// genuine network request this browser can't shortcut from disk. Shared by
+// the manual refresh button and the automatic background check below, so
+// there's exactly one place this reload actually happens.
+function reloadOntoNewAppVersion() {
+  const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
+  window.location.replace(bustedUrl);
+}
+
+// ---- Automatic update check ------------------------------------------------
+//
+// checkForNewAppVersion above used to only ever run from the manual
+// "立即重新整理" button's own click handler - a viewer who never happens to
+// tap that could sit on an old deploy indefinitely, since this is a live,
+// frequently-iterated static site with no other update mechanism at all (no
+// service worker, no app-store update prompt - see this file's own top
+// comment). Live-reported directly: wanting the app to "always keep itself
+// up to date" rather than relying on that manual tap.
+//
+// Checks periodically in the background and, the moment a new deploy is
+// found, reloads automatically - but only while nobody is actually looking
+// at the tab, the same way every other background refresh tier here already
+// defers disruptive work rather than yanking an active viewer off whatever
+// they're doing (mid-swipe, mid-read). A tab that's already hidden at check
+// time reloads immediately (nothing to interrupt); a tab that's visible
+// just gets an unobtrusive note in Settings, applied automatically the
+// moment the viewer backgrounds the tab at all (even briefly - see the
+// `visibilitychange` listener below) rather than left for them to notice
+// and tap the button themselves.
+const APP_VERSION_CHECK_INTERVAL_MS = 10 * 60_000;
+let appVersionCheckTimer = null;
+let newAppVersionPending = false;
+
+async function checkForAppVersionUpdate() {
+  if (newAppVersionPending) return; // already found, just waiting for a safe moment to apply
+  const hasNewVersion = await checkForNewAppVersion().catch(() => false);
+  if (!hasNewVersion) return;
+  if (document.visibilityState === 'hidden') {
+    reloadOntoNewAppVersion();
+    return;
+  }
+  newAppVersionPending = true;
+  updateStatusText.textContent = '有新版本可用，將在你離開此頁籤時自動更新，或點擊「立即重新整理」立即更新。';
+}
+
+function scheduleAppVersionCheck() {
+  if (appVersionCheckTimer) clearTimeout(appVersionCheckTimer);
+  appVersionCheckTimer = setTimeout(async () => {
+    await checkForAppVersionUpdate();
+    scheduleAppVersionCheck();
+  }, APP_VERSION_CHECK_INTERVAL_MS);
+}
+
 // `silent` keeps the background timer from fighting with a viewer who just
 // tapped "立即重新整理" for status text either one might want to set.
 async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
@@ -3040,22 +3116,7 @@ refreshDataBtn.addEventListener('click', async () => {
   updateStatusText.textContent = '檢查版本中…';
   const hasNewVersion = await checkForNewAppVersion().catch(() => false);
   if (hasNewVersion) {
-    // A real reload, not just re-fetching data - the whole point is to get
-    // this tab off whatever OLD app.js it's still running. A bare
-    // window.location.reload() is NOT guaranteed to do that: index.html
-    // itself is served with cache-control: max-age=600 (confirmed live via
-    // curl), so an ordinary reload made within 10 minutes of this tab's own
-    // last load can be satisfied entirely from THIS BROWSER's own local HTTP
-    // cache without ever reaching the network - reloading the exact same
-    // stale index.html (and the old app.js?v=<sha> it references) this tab
-    // already had.
-    //
-    // A browser's own local cache is keyed on the full URL including its
-    // query string (unlike GitHub Pages' CDN, which was confirmed to ignore
-    // query strings for ITS cache key) - so navigating to a cache-busted URL
-    // forces a genuine network request this browser can't shortcut from disk.
-    const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
-    window.location.replace(bustedUrl);
+    reloadOntoNewAppVersion();
     return;
   }
   await refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
@@ -3351,10 +3412,27 @@ async function handleForegroundReturn(awayMs) {
     await refreshFullWindow({ silent: true }).catch(() => {});
     scheduleFullRefresh();
   }
+  // Same "don't wait up to APP_VERSION_CHECK_INTERVAL_MS more minutes"
+  // reasoning as the two tiers above - a tab back from being away doesn't
+  // need to wait on the periodic timer's own next tick to find out a new
+  // deploy went out while it was gone. Runs after the tab is already
+  // visible again (this function only ever runs from that transition), so
+  // it always takes checkForAppVersionUpdate's "visible" branch - never a
+  // disruptive reload the instant someone returns, just the same
+  // unobtrusive Settings note as any other daytime check.
+  await checkForAppVersionUpdate();
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
+    // A version update already found while this tab was visible (see
+    // checkForAppVersionUpdate) - apply it right now, the instant nobody's
+    // looking anymore, rather than waiting on whatever this tab's own next
+    // foreground-return happens to be.
+    if (newAppVersionPending) {
+      reloadOntoNewAppVersion();
+      return;
+    }
     hiddenSinceAt = Date.now();
     return;
   }
@@ -3486,6 +3564,7 @@ async function init() {
   // own periodic timer for ongoing freshness from here, not a second
   // redundant call.
   scheduleFullRefresh();
+  scheduleAppVersionCheck();
 }
 
 init();
