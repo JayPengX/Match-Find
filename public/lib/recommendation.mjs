@@ -406,35 +406,73 @@ export const DURATION_OVERRUN_BUFFER_BY_RELIABILITY = { high: 0, medium: 0.1, lo
 // goal is closing that one gap, not making scheduling broadly conservative.
 export const TRANSITION_BUFFER_MINUTES = 10;
 
+// How far BELOW its own nominal `durationMinutes` a match's SCHEDULING
+// window is ever allowed to shrink, regardless of how low its own
+// enduranceScore-based value judgment is - keyed by durationReliability,
+// same shape as DURATION_OVERRUN_BUFFER_BY_RELIABILITY. Round 36
+// (2026-09-27, live-reported "it overlap"): a no-clock sport doesn't
+// actually finish meaningfully faster just because the SCORE turned into a
+// laugher - MLB's own 9 innings take roughly the same real clock time
+// regardless of how close the final margin is (fewer mound visits/pitching
+// changes trims a LITTLE off a lopsided game, not the 30-60% effectiveDuration-
+// Minutes' own ENDURANCE_DURATION_FLOOR of 0.4 could shrink it to). Live
+// case: Tampa Bay Rays @ Philadelphia Phillies (enduranceScore 5,
+// effectiveDurationMinutes ~111 of its own 159min nominal) freed its
+// scheduling slot with 48 real minutes still left on its own predicted
+// length, waving in Houston Astros @ Athletics / Los Angeles Angels @
+// Seattle Mariners at a start time the game was, in real life, still very
+// plausibly being played through - a genuine overlap a viewer actually
+// experiences, not the false conflict DURATION_OVERRUN_BUFFER_BY_RELIABILITY's
+// own Round 14 history was built to avoid (that fix targets the OPPOSITE
+// failure mode - padding a slot back OUT after a real early finish - and
+// stays exactly as tuned; this is a separate axis). A high/medium-
+// reliability sport's own real end time is already clock-bound regardless
+// of score margin (a lopsided soccer match still plays the full 90+
+// stoppage), so those get no floor at all - the existing endurance-based
+// shrink already applies to them in full, unchanged. 0.85, not 1.0 (no
+// floor at all) or higher: a genuinely one-sided MLB game can still finish
+// a little faster in real life, this only stops the shrink from claiming
+// nearly HALF the game is already over purely because it wasn't close.
+export const SCHEDULING_DURATION_FLOOR_BY_RELIABILITY = { high: 0, medium: 0, low: 0.85 };
+
 // How much of a match's schedule block a LATER pick actually has to wait
 // out. Starts from effectiveDurationMinutes (the endurance-based "still
 // worth watching" judgment - a genuine blowout can still free the slot up
-// sooner, that's unchanged and unrelated to the fix below) and then PADS
-// it, never shrinks it further, by this sport's own real-clock overrun
+// sooner, that's unchanged and unrelated to the fixes below), raised back
+// up to this sport's own SCHEDULING_DURATION_FLOOR_BY_RELIABILITY floor if
+// the endurance-based shrink alone would have gone below it, and then
+// PADDED, never shrunk further, by this sport's own real-clock overrun
 // risk (see DURATION_OVERRUN_BUFFER_BY_RELIABILITY) - the scheduling
-// number can never end up SMALLER than the value judgment that produced it
-// in the first place, only equal (high-reliability sports) or larger
-// (a no-clock sport padded for its own real overrun risk). This is
-// deliberately the ONLY duration figure the scheduler itself ever reads
-// (see schedulingInterval) - there is no second, separately-tuned notion
-// of "how long is this event" anywhere else in the planner.
+// number can never end up SMALLER than either of those two floors, only
+// equal or larger. This is deliberately the ONLY duration figure the
+// scheduler itself ever reads (see schedulingInterval) - there is no
+// second, separately-tuned notion of "how long is this event" anywhere
+// else in the planner.
 export function schedulingDurationMinutes(match) {
   // A FINISHED match's own durationMinutes (see build-data.mjs's
   // finishedDurationMinutes) is already the real observed elapsed time as
   // of the last fetch, not a pre-game guess - there is no forward
   // uncertainty left to hedge once ESPN itself confirms the fixture is
-  // over, so the overrun buffer below only ever applies to a match that
-  // HASN'T finished yet. Without this, a no-clock sport's game that
+  // over, so neither the overrun buffer nor the floor below apply to a
+  // match that HAS finished. Without this, a no-clock sport's game that
   // genuinely ran SHORT (the reported "obvious continuation" bug: a game
-  // that dropped 30-60 minutes off its own predicted length) still got its
-  // already-real, already-short duration padded by another 25% on top,
-  // reserving time for overrun risk that had already definitively NOT
-  // happened - exactly what kept blocking a next match that could clearly,
-  // obviously follow it in real life.
-  const overrun = match.isFinished
-    ? 0
-    : DURATION_OVERRUN_BUFFER_BY_RELIABILITY[resolveSportTiming(match.sport).durationReliability] ?? 0;
-  return effectiveDurationMinutes(match) * (1 + overrun);
+  // that dropped 30-60 minutes off its own predicted length) would still
+  // get its already-real, already-short duration padded/floored back up,
+  // reserving time for a game that had already definitively already ended -
+  // exactly what kept blocking a next match that could clearly, obviously
+  // follow it in real life. Returning match.durationMinutes directly here
+  // (not effectiveDurationMinutes(match)) also matters on its own: a
+  // low-enduranceScore match's own shrink would otherwise still apply even
+  // to a FINISHED game's already-real, already-known length - a latent gap
+  // this round's own new low-enduranceScore test coverage caught (every
+  // pre-existing test here happened to use a high enduranceScore, where
+  // that shrink is a no-op, masking it).
+  if (match.isFinished) return match.durationMinutes;
+  const timing = resolveSportTiming(match.sport);
+  const overrun = DURATION_OVERRUN_BUFFER_BY_RELIABILITY[timing.durationReliability] ?? 0;
+  const floorFraction = SCHEDULING_DURATION_FLOOR_BY_RELIABILITY[timing.durationReliability] ?? 0;
+  const floored = Math.max(effectiveDurationMinutes(match), match.durationMinutes * floorFraction);
+  return floored * (1 + overrun);
 }
 
 // The canonical scheduling representation every planner operation below

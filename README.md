@@ -360,6 +360,26 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   still had another 25% padded on top of that longer, now-known-wrong
   guess, which kept blocking a next match that could obviously,
   actually follow it.
+- **The endurance-based shrink can't claim a no-clock sport's game is
+  basically over just because it isn't tense (Round 36).** Live-reported:
+  a real 2026-09-27 slate scheduled a next MLB pick only ~2h25m after the
+  first one started, and the overlap was real - the first game's own low
+  `enduranceScore` had shrunk its reserved block (`effectiveDurationMinutes`)
+  down toward `ENDURANCE_DURATION_FLOOR` (40% of nominal), even though a
+  "not that tense" MLB game still plays all 9 innings in roughly the same
+  real clock time as a close one (fewer mound visits/pitching changes trims
+  a LITTLE off a lopsided game, not 30-60%). `SCHEDULING_DURATION_FLOOR_BY_
+  RELIABILITY` (`public/lib/recommendation.mjs`) now floors a no-clock
+  sport's SCHEDULING duration at 85% of its own nominal length, regardless
+  of how low its endurance-based value judgment goes - the same shrink
+  still fully applies to the SCORE (`enduranceScore`'s own weight in
+  `bestMatchScore`), this floor only stops it from also claiming the
+  broadcast itself is nearly half over. High/medium-reliability sports (a
+  real game clock) get no floor - their own real end time is already
+  clock-bound regardless of score margin, so the existing endurance-based
+  shrink already applies to them in full, unchanged. A FINISHED match is
+  still never floored (or padded) either way - its own `durationMinutes`
+  is already the real observed length once ESPN confirms the fixture over.
 - **The same matchup CAN win every day of a series, and the same sport CAN
   dominate the plan - there is no "variety" penalty anymore.** An earlier
   version of `computeWindowPlan` applied a small, decaying cross-day

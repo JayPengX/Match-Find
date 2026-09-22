@@ -3830,3 +3830,104 @@ far wider than the old, removed 0.5 margin - still flips UNCONDITIONALLY,
 the direct proof this round's whole fix works; an explicit human pin still
 overrides the cached Gemini pick). Full suite: **384/384**. Committed and
 pushed to both `Match-Find` and `Shared-Proxy`.
+
+## Round 36 (2026-09-27 TW time): a low-endurance MLB game claimed to be nearly over well before it realistically was
+
+Live report: "9/27 is not purely Rays vs Phillies but with a continual,
+don't let it continue (it overlap, or at least choose Angel vs Mariners)."
+Real slate that day: Tampa Bay Rays @ Philadelphia Phillies at 07:15
+(picked), Houston Astros @ Athletics at 09:40 (picked as a "continuation"),
+Los Angeles Angels @ Seattle Mariners also at 09:40 (the same slot's own
+runner-up, losing to Astros/Athletics by a narrow 0.25).
+
+**Root cause.** `schedulingDurationMinutes` (the ONE duration figure
+`canWatchSequentially`/the whole scheduler reads) was built entirely from
+`effectiveDurationMinutes` - the `enduranceScore`-based value judgment
+("is this game still worth watching") - then padded by MLB's own real-
+clock overrun risk. Real numbers: Rays/Phillies had `durationMinutes` 159
+and `enduranceScore` 5, giving `effectiveDurationMinutes` = 159 * (0.4 +
+0.6*0.5) = 111.3 - already less than 70% of its own nominal length before
+any padding. Padded by MLB's 12% overrun and the 10-minute transition
+buffer, its scheduling window ended only ~2h14.7m after its own 07:15
+start - reading Astros/Athletics's 09:40 start (a 2h25m real gap) as a
+safe, sequential continuation. In real life, an MLB game plays all 9
+innings in roughly the same real clock time whether or not the SCORE stays
+close - a standard game averages ~2h40m of playing time alone (this file's
+own Round 14 already documents this) regardless of competitiveness -  so a
+"not that tense" game does NOT actually free its broadcast slot early the
+way `effectiveDurationMinutes`'s own 40%-of-nominal floor (`ENDURANCE_
+DURATION_FLOOR`) was letting the scheduler assume. The overlap the user
+reported was real, not a UI/labeling issue.
+
+**Why this isn't Round 14's bug reappearing.** Round 14 tuned
+`DURATION_OVERRUN_BUFFER_BY_RELIABILITY` (the PADDING added on top of
+`effectiveDurationMinutes`) down from 25% to 12% because that padding
+alone was blocking an obviously-fine continuation by ~15 minutes. This
+round's fix touches a different, previously-untuned axis entirely - how
+far the endurance-based shrink is allowed to go BEFORE any padding is even
+applied - so it doesn't undo Round 14's own fix or reopen that same false-
+conflict case (verified: every other already-validated MLB-to-MLB
+continuation this window, 9/23-9/26, has a real ~3+ hour gap, comfortably
+clearing the new floor - confirmed by re-running the live pipeline after
+the fix, see below).
+
+**Fix.** Added `SCHEDULING_DURATION_FLOOR_BY_RELIABILITY = { high: 0,
+medium: 0, low: 0.85 }` (`public/lib/recommendation.mjs`), keyed by
+`durationReliability` the same way `DURATION_OVERRUN_BUFFER_BY_RELIABILITY`
+already is. `schedulingDurationMinutes` now takes
+`Math.max(effectiveDurationMinutes(match), match.durationMinutes *
+floorFraction)` as its base before applying the overrun pad - a no-clock
+sport's SCHEDULING duration can never read as less than 85% of its own
+nominal length, regardless of how low its enduranceScore goes, while
+`effectiveDurationMinutes` itself (and thus `enduranceScore`'s own
+contribution to the actual recommendation SCORE via `bestMatchScore`) is
+completely untouched - a genuinely low-endurance game still scores lower,
+it just can't claim to be nearly over on top of that. High/medium-
+reliability sports get `0` (no floor at all) - their own real end time is
+already clock-bound by a game clock regardless of score margin (a lopsided
+soccer match still plays the full 90+ stoppage), so the existing shrink
+already applies to them in full, unchanged.
+
+**A second, latent bug found and fixed along the way.** Writing a test for
+a FINISHED, low-`enduranceScore` MLB match (`durationMinutes: 150,
+enduranceScore: 1, isFinished: true`) exposed that `schedulingDurationMinutes`
+was STILL running the finished match's own real, already-known duration
+through `effectiveDurationMinutes`'s endurance shrink (150 -> 69) before
+this round - every pre-existing test for the "a finished match isn't
+padded further" behavior happened to use a high `enduranceScore` (where
+the shrink factor is 1, a no-op), which is exactly why this had never been
+caught. `schedulingDurationMinutes` now returns `match.durationMinutes`
+directly and immediately for a finished match, bypassing the endurance
+shrink entirely, not just skipping the overrun pad on top of it.
+
+**Re-verified against the real live 9/27 slate after the fix.** Rays/
+Phillies's own scheduling window now ends ~2h41.4m after its 07:15 start
+(159 * 0.85 * 1.12 + 10min transition) - Astros/Athletics's 09:40 start no
+longer clears it, so no continuation is offered there anymore. The day's
+own best SINGLE game also changed as a direct, correct consequence: with
+Rays/Phillies + Astros/Athletics's combined value (13.45) no longer a
+legal sequence, Rays/Phillies alone (6.85) now loses to Chicago Cubs @
+Boston Red Sox alone (7.05, unaffected - it has no continuation
+opportunity either way) - which happens to be a SECOND of the three
+options the user's own Round 33 human-validated list accepted for 9/27
+("Tampa Bay Rays @ Philadelphia Phillies OR Baltimore Orioles @ New York
+Yankees OR Chicago Cubs @ Boston Red Sox"), so this still lands inside
+the validated answer set. Re-ran the whole 9/22-9/27 window: every other
+day's own two-game continuation (9/22 Blue Jays/Orioles+Twins/Giants; 9/23-
+25 Guardians/Red Sox+Padres/Dodgers; 9/26 Cubs/Red Sox+Dodgers/Giants) is
+completely unchanged - all of those have real ~3+ hour gaps, nowhere near
+the new floor.
+
+**Tests.** Added a `Test 5b (Round 36)` describe block to
+`recommendation.test.mjs`: the floor lifting `schedulingDurationMinutes`
+back up when `effectiveDurationMinutes` alone would go lower (with the
+overrun buffer still applied ON TOP of the floor); the exact live bug
+reproduced at the same gap size and confirmed fixed
+(`canWatchSequentially` now false, `computeDayPlan` no longer offers the
+continuation); a wider, ~3-hour gap still correctly clears the new,
+floored end (the floor isn't unconditionally conservative); a finished
+low-endurance match is still never floored (guards the latent bug found
+above); and high/medium-reliability sports get no floor at all. Full
+suite: **389/389**. Committed and pushed to `Match-Find` - this fix is
+entirely local to `public/lib/recommendation.mjs`, no `Shared-Proxy`
+change needed this round.

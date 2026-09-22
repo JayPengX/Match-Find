@@ -756,6 +756,58 @@ describe('Test 5 - MLB continuation respects the real overrun-padded end, not ju
   });
 });
 
+describe('Test 5b (Round 36) - a LOW-enduranceScore MLB game still can\'t free its slot below the reliability floor', () => {
+  test('SCHEDULING_DURATION_FLOOR_BY_RELIABILITY floors MLB at 85% of nominal even when effectiveDurationMinutes would go lower', () => {
+    // enduranceScore 5 -> effectiveDurationMinutes = 159 * 0.7 = 111.3, well
+    // under 159 * 0.85 = 135.15 - the floor must win.
+    const game = mlbMatch({ durationMinutes: 159, enduranceScore: 5 });
+    assert.ok(schedulingDurationMinutes(game) >= 159 * 0.85);
+    // ...and the overrun buffer still applies ON TOP of the floor, not
+    // instead of it.
+    assert.ok(Math.abs(schedulingDurationMinutes(game) - 159 * 0.85 * 1.12) < 1e-6);
+  });
+
+  test('the exact live-reported bug: a later match canNOT immediately follow a LOW-endurance MLB game at a gap that used to read as safe', () => {
+    // Live case (2026-09-27 TW time): Tampa Bay Rays @ Philadelphia
+    // Phillies (durationMinutes 159, enduranceScore 5) at 07:15, Houston
+    // Astros @ Athletics / Los Angeles Angels @ Seattle Mariners at 09:40 -
+    // a 2h25m gap. Before this round's floor, effectiveDurationMinutes's
+    // own 111.3min (plus the 12% overrun and 10min transition) ended
+    // ~2h14.66m after start, reading as a safe, non-overlapping
+    // continuation - "it overlap" was the direct live report this
+    // reproduces and fixes. schedulingInterval(game).end with the new
+    // floor is 159*0.85*1.12 + 10min transition =~ 2h41.4m after start, so
+    // the SAME 2h25m real gap now correctly reads as a genuine conflict.
+    const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 159, enduranceScore: 5, effectiveScore: 7 });
+    const next = mlbMatch({ id: 'next', startTimeUtc: '2026-09-19T20:25:00.000Z', effectiveScore: 6 });
+    assert.ok(!canWatchSequentially(game, next));
+    const plan = computeDayPlan('2026-09-19', [game, next], null, { scoreField: 'effectiveScore' });
+    assert.deepEqual(plan.map(m => m.id), ['mlb']);
+    assert.equal(next.recommended, false);
+  });
+
+  test('a later match CAN still follow once the gap clears the new, floored end (the floor is not unconditionally conservative)', () => {
+    const game = mlbMatch({ id: 'mlb', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 159, enduranceScore: 5, effectiveScore: 7 });
+    // schedulingInterval(game).end =~ 2h41.4m after start (see test above) -
+    // a 3-hour gap is comfortably past that, same shape as this file's own
+    // already-validated MLB-to-MLB continuations (~3+ hour real gaps).
+    const next = mlbMatch({ id: 'next', startTimeUtc: '2026-09-19T21:00:00.000Z', effectiveScore: 6 });
+    assert.ok(canWatchSequentially(game, next));
+  });
+
+  test('a FINISHED low-endurance MLB game is never floored either - its own real length already stands (no regression of the earlier "obvious continuation" fix)', () => {
+    const finished = mlbMatch({ durationMinutes: 150, enduranceScore: 1, isFinished: true });
+    assert.equal(schedulingDurationMinutes(finished), 150);
+  });
+
+  test('high/medium-reliability sports get no floor at all - unchanged from before this round', () => {
+    const lowEndurance = footballMatch({ durationMinutes: 90, enduranceScore: 1 });
+    // 90 * ENDURANCE_DURATION_FLOOR(0.4) = 36 - the floor must NOT lift this
+    // back up for a high-reliability sport.
+    assert.ok(schedulingDurationMinutes(lowEndurance) < 90 * 0.85);
+  });
+});
+
 describe('Test 6 - football/F1 keep their tighter timing (no blanket permissiveness)', () => {
   test('the same gap that works after an MLB game is still a genuine conflict between two football matches', () => {
     const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', effectiveScore: 7 });
