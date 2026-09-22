@@ -3199,24 +3199,35 @@ async function init() {
       console.error('failed to paint cached snapshot', error);
     }
   }
-  // Near-term first, for a fast initial paint (a handful of requests -
-  // today/tomorrow's own fixtures) - the full window follows right behind
-  // it, unblocked, so the day-scroller's far-future pills fill in shortly
-  // after rather than the viewer waiting on all ~50+ requests before
-  // seeing anything at all.
+  // The WHOLE window, awaited, before anything else about the fetch cycle
+  // starts. An earlier version awaited only the near-term (2-day) tier
+  // here and fired the full 14-day window unblocked right after, on
+  // purpose, for a faster first paint - but that traded a genuinely
+  // FINISHED first paint for a visible mid-load jump: the day-scroller
+  // would settle on just today/tomorrow, then a few seconds later visibly
+  // expand as the far-future pills filled in. Live-reported directly: "it
+  // only load the surrounding few days then after showing the UI a few
+  // seconds it finish building everything, building should be all
+  // finished by loading". Going straight to the full window also drops
+  // one whole serial network round trip from cold load - the near-term
+  // tier's own fetch used to have to finish before the full one even
+  // started; now there's only ever one await here. refreshNearTerm still
+  // exists exactly as before, just no longer called from here - it's still
+  // what scheduleNearTermRefresh below uses for the PERIODIC 60s freshness
+  // tier once the page is already up.
   try {
-    await refreshNearTerm();
+    await refreshFullWindow({ silent: true });
   } catch (error) {
     console.error(error);
   }
   if (!state.allRawMatches.length && !state.tbdMatches.length) {
-    // Nothing loaded at all yet (the near-term fetch itself failed
-    // outright, e.g. the proxy is unreachable) - say so rather than
-    // leaving a silently empty page; refreshFullWindow below and the
-    // scheduled retries can still recover this once network/the proxy
-    // comes back. applyFreshBuild (which would otherwise hide the loading
-    // spinner) never ran in this branch, so it's still up - swap it for
-    // the explicit error message instead of leaving both up at once.
+    // Nothing loaded at all yet (the fetch itself failed outright, e.g.
+    // the proxy is unreachable) - say so rather than leaving a silently
+    // empty page; the scheduled retries below can still recover this once
+    // network/the proxy comes back. applyFreshBuild (which would otherwise
+    // hide the loading spinner) never ran in this branch, so it's still up
+    // - swap it for the explicit error message instead of leaving both up
+    // at once.
     if (loadingStateEl) loadingStateEl.hidden = true;
     errorState.hidden = false;
   }
@@ -3230,13 +3241,11 @@ async function init() {
   // match's diamond/flag/pulsing-dot widget appear sooner than that -
   // reported directly as "quite a few seconds after loading" before the
   // live states show up, live-measured at up to ~30s. Unblocked (not
-  // awaited), same reasoning as refreshFullWindow's own call right below -
-  // this shouldn't delay that kickoff either.
+  // awaited) - this shouldn't delay first paint either.
   if (document.visibilityState !== 'hidden') {
     pollLiveMatches().catch(error => console.error('initial live poll failed', error));
   }
   scheduleLivePoll();
-  refreshFullWindow({ silent: true });
   scheduleFullRefresh();
 }
 
