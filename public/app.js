@@ -2107,10 +2107,23 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   //     that disambiguation wrong.
   //   - The decision to advance is made directly in the pointerup handler,
   //     synchronously, from the pointer's own final position - never from
-  //     a transition/animation callback. Any fly-off animation on commit
-  //     is purely decorative: it's started and then immediately abandoned
-  //     as choose() tears down this exact card node, so nothing downstream
-  //     ever waits on it to finish.
+  //     a transition/animation callback. A commit does NOT set a fly-off
+  //     transform/opacity on the card before choose() replaces it - an
+  //     earlier version did, purely decorative, on the reasoning that
+  //     nothing downstream waited on it to finish - but setting a
+  //     transform/opacity (which promotes the card to its own GPU-composited
+  //     layer) and then, in the very same tick, having choose() tear that
+  //     exact DOM node out from under it turned out to be exactly the same
+  //     "removed mid-transition" pattern this comment already warns about
+  //     above, just manifesting differently: Safari can leave that
+  //     already-rasterized layer visually stuck on screen - a ghost of the
+  //     swiped-away card - until something forces it to reconcile the
+  //     compositor, which nothing here ever reliably does. Live-reported on
+  //     iPad, with a screenshot showing exactly that: faded, rotated ghost
+  //     cards left over from earlier swipes. The card now just disappears
+  //     the instant choose() replaces it - less flourish, but no layer ever
+  //     gets promoted in the first place, so there's nothing left to
+  //     orphan.
   //   - pointerup, pointercancel AND lostpointercapture all route through
   //     the same resetDrag(), so however the gesture ends (a normal
   //     release, the OS taking the gesture back for its own use, a second
@@ -2214,39 +2227,11 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
     const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
     if (!target || target.id === primary.id) return;
-    // Purely decorative fly-off - choose() below replaces this card
-    // outright, so nothing ever waits on this transition to complete.
-    card.style.transition = 'transform 150ms ease, opacity 150ms ease';
-    card.style.transform = `translateX(${committedDx > 0 ? 100 : -100}%) rotate(${committedDx / 12}deg)`;
-    card.style.opacity = '0';
+    // No fly-off transform/opacity here - see this function's own top
+    // comment on the swipe gesture for why setting one right before
+    // choose() below tears this exact card out of the DOM was live-reported
+    // as leaving a stuck ghost card on iPad Safari.
     choose(targetIndex);
-    // Setting a transform/opacity on `card` and then, in the same tick,
-    // having choose() above tear its whole DOM subtree out from under it
-    // (pinSlotChoice -> renderSections -> recommendedListEl.replaceChildren)
-    // can leave Safari's own compositor holding onto a stale,
-    // already-rasterized layer for the just-removed card - visible as a
-    // ghost of the swiped-away card sitting in the background until
-    // something forces a full repaint, live-reported on iPad specifically
-    // (a bigger screen means more compositor real estate for the stale
-    // layer to sit in, and matches "scrolling down and back up makes it
-    // disappear" exactly - a scroll is exactly the kind of forced repaint
-    // that clears this).
-    //
-    // A plain forced-layout read (`void el.offsetHeight`, this function's
-    // own first attempt at this) didn't hold up live - transform/opacity
-    // are deliberately GPU/compositor-only properties that never
-    // invalidate LAYOUT at all (that's the whole reason they're used for
-    // animation instead of, say, left/top), so forcing a layout flush
-    // never actually touched the stale COMPOSITING layer this leaves
-    // behind. Toggling `display` on the container that used to hold the
-    // swiped card genuinely tears that render subtree down and rebuilds
-    // it from scratch - nothing stale can survive that - and since both
-    // toggles happen synchronously in this same tick, before the browser
-    // ever gets to actually paint a frame, there's nothing to visibly
-    // flash either.
-    recommendedListEl.style.display = 'none';
-    void recommendedListEl.offsetHeight;
-    recommendedListEl.style.display = '';
   }
 
   card.addEventListener('pointerup', endDrag);
