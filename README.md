@@ -337,9 +337,10 @@ its own guardrail against one bonus swamping the whole score:
 
 **MLB's rivalry bonus and the marquee-credit cliff.** MLB's own rivalry
 bonus additionally scales by `marqueeCreditFraction(competitiveness)` — MLB
-only, since NBA/EPL have no standings-API integration deep enough yet to
-distinguish a low competitiveness score caused by real lopsidedness from
-one caused by early-season sampling noise (see [Known
+only. This isn't a standings-API depth gap (NBA's own standings
+integration above already matches MLB's own); it's a deliberate choice to
+keep protecting NBA/EPL's name-based bonuses from early-season sampling
+noise a full-season MLB-style gate would wrongly silence (see [Known
 Limitations](#known-limitations)). This replaced a hard gate,
 `MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS` (6): a real, live Dodgers (96-60) @
 Giants (64-92) pairing scored competitiveness 5, one point under that old
@@ -1629,10 +1630,14 @@ doesn't break anything: the site just shows that team's English name only.
   `competitor.statistics` field has come back empty on every real race
   weekend checked, so it's read defensively rather than relied on.
 - **MLB's marquee-credit ramp (`marqueeCreditFraction`) is MLB-only** —
-  NBA and EPL default to full rivalry-bonus credit unconditionally, since
-  neither sport's standings integration is deep enough yet to distinguish
-  a low competitiveness score caused by real lopsidedness from one caused
-  by early-season sampling noise.
+  NBA and EPL default to full rivalry-bonus credit unconditionally. This
+  isn't a standings-depth gap (NBA's own standings integration now matches
+  MLB's — seed-cutoff gaps, last-10 record, streak — see
+  `computeNbaObjectiveScore`); it's a deliberate choice to keep protecting
+  NBA/EPL's name-based bonuses (rivalry, derby, big-club, national
+  broadcast) from early-season sampling noise a full-season MLB-style gate
+  would wrongly silence — the real case (Liverpool @ AFC Bournemouth, an
+  early-season noisy 0.2/0.6 split) that bonus was written to survive.
 - **The published `checksums.txt`-style reproducibility concerns from
   this org's other repos don't apply here** — Match Find has no compiled
   build artifact; what's deployed is the same static JavaScript reviewed
