@@ -1221,15 +1221,39 @@ export const GEMINI_TIE_BREAK_MAX_CANDIDATES = 4;
 // Returns null when there's nothing to ask about: no recommended pick, or
 // no alternatives at all (a day where the algorithm's own top pick has no
 // real rival needs no second opinion).
+// Round 37: a day can have MORE THAN ONE recommended slot at once (a
+// headline pick plus an earlier, non-overlapping "continuation" pick - see
+// Round 36's own scheduling-floor fix) - `dayMatches.find(m => m.recommended)`
+// used to just grab whichever recommended slot happened to sort first
+// chronologically, which on a live 2026-09-23/24/25 slate was almost always
+// an early, low-stakes slot with NO real alternatives, silently starving the
+// genuinely contested evening headline slot (the one this whole feature
+// exists for) of ever being asked about at all. Fixed by scanning EVERY
+// recommended slot that day and picking whichever one's own top-vs-runner-up
+// gap is smallest - the slot the deterministic engine itself is least
+// confident about, regardless of what time it airs.
+function scoreOf(match, scoreField) {
+  return Number.isFinite(match[scoreField]) ? match[scoreField] : match.effectiveScore;
+}
+
 export function selectGeminiTieBreakCandidates(dayMatches, { scoreField = 'planningScore' } = {}) {
-  const top = dayMatches.find(m => m.recommended);
-  if (!top || !Array.isArray(top.alternativeIds) || !top.alternativeIds.length) return null;
   const byId = new Map(dayMatches.map(m => [m.id, m]));
-  const close = [top, ...top.alternativeIds.map(id => byId.get(id)).filter(Boolean)]
-    .filter(m => Number.isFinite(m[scoreField]) || Number.isFinite(m.effectiveScore))
-    .sort((a, b) => (b[scoreField] ?? b.effectiveScore) - (a[scoreField] ?? a.effectiveScore))
-    .slice(0, GEMINI_TIE_BREAK_MAX_CANDIDATES);
-  return close.length >= 2 ? close : null;
+  let best = null;
+  let bestGap = Infinity;
+  for (const top of dayMatches) {
+    if (!top.recommended || !Array.isArray(top.alternativeIds) || !top.alternativeIds.length) continue;
+    const close = [top, ...top.alternativeIds.map(id => byId.get(id)).filter(Boolean)]
+      .filter(m => Number.isFinite(scoreOf(m, scoreField)))
+      .sort((a, b) => scoreOf(b, scoreField) - scoreOf(a, scoreField))
+      .slice(0, GEMINI_TIE_BREAK_MAX_CANDIDATES);
+    if (close.length < 2) continue;
+    const gap = scoreOf(close[0], scoreField) - scoreOf(close[1], scoreField);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = close;
+    }
+  }
+  return best;
 }
 
 // Stable regardless of candidate order - a cache entry must be looked up

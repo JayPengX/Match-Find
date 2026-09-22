@@ -1348,6 +1348,44 @@ describe('Gemini bounded daily tie-break (Round 35: a hard pin, not a score nudg
       const close = selectGeminiTieBreakCandidates(day);
       assert.equal(close.length, GEMINI_TIE_BREAK_MAX_CANDIDATES);
     });
+
+    // Round 37: live-verified bug (2026-09-23/24/25) - a day can have MORE
+    // THAN ONE recommended slot at once (an early, non-overlapping
+    // "continuation" pick alongside the evening headline pick - see Round
+    // 36's own scheduling-floor fix). The old `dayMatches.find(m =>
+    // m.recommended)` just grabbed whichever recommended slot sorted first
+    // chronologically - on the real slate this was always the early,
+    // low-stakes slot with NO alternatives, so the genuinely contested
+    // evening headline slot (the one this whole feature exists for) was
+    // NEVER offered to Gemini at all, silently, every single day.
+    test('scans EVERY recommended slot, not just whichever one airs first, and picks the one with a real tie', () => {
+      const early = makeMatch({ id: 'early', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 8 });
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.3 });
+      const day = planFor([early, a, b]);
+      // Both the early slot and the noon slot are independently recommended
+      // (they don't overlap) - the bug this guards against is exactly this
+      // shape: more than one `recommended` match on the same day.
+      assert.deepEqual(day.filter(m => m.recommended).map(m => m.id).sort(), ['a', 'early']);
+      const close = selectGeminiTieBreakCandidates(day);
+      assert.ok(close, 'must find the noon slot\'s real tie, not bail out because the early slot has none');
+      assert.deepEqual(close.map(c => c.id).sort(), ['a', 'b']);
+    });
+
+    test('when multiple recommended slots each have alternatives, picks whichever has the SMALLEST top-vs-runner-up gap', () => {
+      // Slot 1 (early): a clear win with only a distant alternative - a real
+      // tie exists (within ALTERNATIVE_MAX_SCORE_GAP) but it's a wide 1.5
+      // gap, not a genuine toss-up.
+      const early1 = makeMatch({ id: 'early1', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 8 });
+      const early2 = makeMatch({ id: 'early2', startTimeUtc: '2026-09-19T06:00:00.000Z', durationMinutes: 60, effectiveScore: 6.5 });
+      // Slot 2 (noon): a genuine near-tie, 0.1 apart.
+      const a = makeMatch({ id: 'a', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 8 });
+      const b = makeMatch({ id: 'b', startTimeUtc: NOON_UTC, durationMinutes: 190, effectiveScore: 7.9 });
+      const day = planFor([early1, early2, a, b]);
+      assert.deepEqual(day.filter(m => m.recommended).map(m => m.id).sort(), ['a', 'early1']);
+      const close = selectGeminiTieBreakCandidates(day);
+      assert.deepEqual(close.map(c => c.id).sort(), ['a', 'b']);
+    });
   });
 
   describe('tieBreakCandidateKey', () => {

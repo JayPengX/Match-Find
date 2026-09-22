@@ -3931,3 +3931,99 @@ above); and high/medium-reliability sports get no floor at all. Full
 suite: **389/389**. Committed and pushed to `Match-Find` - this fix is
 entirely local to `public/lib/recommendation.mjs`, no `Shared-Proxy`
 change needed this round.
+
+## Round 37 (2026-09-22): the Gemini tie-break was never actually being asked about the right game - and, once fixed, live-proven that even a working call doesn't guarantee the human-validated answer
+
+**Report.** User: 9/23, 9/24, 9/25 all still recommend Cleveland Guardians
+@ Boston Red Sox / Chicago Cubs @ Boston Red Sox instead of their own
+human-validated "Milwaukee Brewers @ Philadelphia Phillies OR Tampa Bay
+Rays @ New York Yankees OR San Diego Padres @ Los Angeles Dodgers" -
+despite Round 35's hard-pin mechanism, which was specifically built to
+GUARANTEE this. Instructed: fix the recommendation system to fit the
+expected result, or remove Gemini entirely unless it can be proven to
+actually work.
+
+**First finding: `MATCH_RECOMMEND_PROXY_URL` was empty this whole time.**
+Checked `public/app.js` and the deploy pipeline (`.github/workflows/
+deploy.yml`) - nothing has ever injected a real URL into that constant.
+Gemini has never once been called on the live deployed site. Every report
+of "Gemini picking the wrong game" was necessarily the plain deterministic
+engine, unrelated to any AI call succeeding or failing.
+
+**Second finding, the real bug: `selectGeminiTieBreakCandidates` only ever
+looked at the FIRST recommended match, not the right one.** Re-ran the
+live pipeline (`build-data.mjs` + `dump-day-plan.mjs`) against real current
+data for 9/23-25 and found each of those three days has TWO independently
+recommended slots at once - an early, non-overlapping "continuation" pick
+(see Round 36) alongside the evening headline pick. `dayMatches.find(m =>
+m.recommended)` grabbed whichever one sorted first chronologically, which
+on all three real days was the early, low-stakes slot with no real
+alternative (`alternativeIds: []`) - so `selectGeminiTieBreakCandidates`
+returned `null`/the wrong candidate set every day, and the evening headline
+slot's real, genuine tie (Guardians/Red Sox vs. Brewers/Phillies, tied
+7.05=7.05 on 9/24) was NEVER offered to Gemini at all, with or without a
+working API call. Fixed by scanning every recommended slot that day and
+picking whichever one's own top-vs-runner-up score gap is smallest (the
+slot the deterministic engine is genuinely least confident about) instead
+of whichever airs first. Re-verified against live 9/23/24/25 data: the
+corrected candidate sets now correctly center on Guardians/Red Sox vs.
+Brewers/Phillies vs. Rays/Yankees (9/23-24) and Cubs/Red Sox vs. its own
+real alternatives (9/25). Added two regression tests (`Round 37` sub-block
+under `selectGeminiTieBreakCandidates`) reproducing this exact multi-slot
+shape.
+
+**Third finding: Google Search grounding is hard-blocked by a 429 quota
+wall on this account, live-verified just now.** With the bug fixed and a
+real `orbit-workers-proxy` deployment already live (confirmed via
+`PROXY_URL` in `app.js` and this repo's own `wrangler.toml`/CI deploy
+workflow), sent a real POST to `/match-recommend` with the real, corrected
+9/23 candidate set. Two grounded requests ~15s apart both returned a hard
+`{"error":{"message":"Gemini API error 429"}}` - the exact
+`RESOURCE_EXHAUSTED` signature Round 9 already documented for grounded
+calls, despite Round 35's reasoning that this route's low, cached call
+volume would keep it clear of that wall. A control request to `/vocab-ai`
+(same API key, same `gemini-3.7-flash` model, no grounding) returned an
+unrelated transient `503 "high demand"` instead - proof the 429 is
+specific to this account's Google Search grounding quota, a separate and
+apparently very low bucket that Match Find's own call frequency doesn't
+affect either way. Reverted `/match-recommend` to the pre-Round-35 shape:
+`gemini-3.5-flash-lite`, no grounding, `response_schema`-enforced JSON
+(committed/pushed to `Shared-Proxy`, auto-deployed by its own CI).
+
+**Live-tested the reverted shape - it works, and that's an important,
+slightly uncomfortable result.** Retried the real POST against the
+redeployed Worker: HTTP 200, `{"pickId":"mlb-401817046","reason":"..."}`-
+a genuine, valid response. `mlb-401817046` is Cleveland Guardians @ Boston
+Red Sox - **the same pick the deterministic engine already made**, not the
+human-validated Brewers/Phillies. Gemini's own stated reasoning (translated):
+Cleveland's real 5-game win streak makes tonight's matchup against Boston
+worth watching. This is Gemini's own independent judgment agreeing with
+the deterministic formula, not a mechanism failure - the hard-pin design
+guarantees that WHATEVER Gemini answers wins its slot unconditionally, it
+was never a guarantee that Gemini's answer matches any specific viewer's
+own judgment. Per Round 33's already-exhaustive, real grid-search proof
+that no linear reweighting of the deterministic engine's five axes can
+satisfy the 9/23-25 case without breaking the already-correct 9/26 case
+(same statistical shape, opposite correct answer) - re-litigating the
+formula weights again here would repeat already-disproven work. The
+genuinely new information this round adds is that a second, independent
+judge (a real Gemini call, now confirmed working) reached the same
+"Guardians/Red Sox" conclusion the formula did, on real facts (a hot
+streak, a tight wildcard race, national broadcast) that are all real and
+defensible - not proof the human's own preference is wrong, just proof
+that "ask a generically-prompted AI" doesn't automatically encode one
+specific person's own research/preference either.
+
+**Outcome.** `MATCH_RECOMMEND_PROXY_URL` now points at the real, live-
+verified `orbit-workers-proxy` deployment (previously empty this whole
+project). The Gemini tie-break is live for the first time. Full suite:
+**391/391** (2 new regression tests for the multi-slot selection bug).
+Committed and pushed to both `Match-Find` (recommendation.mjs fix +
+regression tests + the URL + docs) and `Shared-Proxy` (grounding revert).
+Reported back to the user rather than claiming "fixed" - the underlying
+disagreement (their own research-based preference vs. every automated
+signal tried, deterministic and AI alike) is still open, and the honest
+next step is either (a) learning what specific reasoning/source informed
+their 9/23-25 picks so it can be encoded explicitly, or (b) using the
+app's own existing manual swipe-to-pin (which unconditionally overrides
+everything else, deterministic or Gemini) for cases like this one.

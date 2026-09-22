@@ -1111,7 +1111,7 @@ Worker. If you fork this repo and deploy your own shared-proxy Worker,
 update that constant to your own Worker's base URL (**no path suffix**);
 there's no environment variable to set instead.
 
-### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32/35)
+### `MATCH_RECOMMEND_PROXY_URL` (optional - the Gemini tie-break, Round 32/35/37)
 
 As of `docs/recommendation-engine-audit.md`'s Round 11, Match Find's
 deterministic engine was the sole source of truth for every fixture's score
@@ -1123,24 +1123,43 @@ day's headline slot the deterministic engine's own top pick has a real
 alternative for - see `./lib/recommendation.mjs`'s "Gemini bounded daily
 tie-break" section for the concrete trace that led to this and why it's a
 fundamentally different, much narrower shape than the per-fixture
-validation call Round 11 removed. Round 35 (live-reported: the deterministic
-pick was still winning over the user's own validated expectation) hardened
-this twice: the answer is now FORCED IN via `computeDayPlan`'s own pin
-mechanism (the exact one a viewer's own swipe-to-pin already uses) rather
-than a score nudge that could fail to overcome a wide-enough gap, and
-Google Search grounding is back on for this one call (per direct
-instruction, since its cached, at-most-once-a-day volume makes the quota
-concern that killed Round 9's PER-FIXTURE grounded calls a non-issue here).
+validation call Round 11 removed. Round 35 hardened this twice: the answer
+is now FORCED IN via `computeDayPlan`'s own pin mechanism (the exact one a
+viewer's own swipe-to-pin already uses) rather than a score nudge that
+could fail to overcome a wide-enough gap, and Google Search grounding was
+turned on for this one call.
 
-This is entirely optional: `MATCH_RECOMMEND_PROXY_URL` in `public/app.js`
-is empty by default, and every call site (`maybeRequestGeminiTieBreak`)
-no-ops immediately when it's unset - the deterministic pick renders exactly
-as it always has. To enable it: deploy shared-proxy's updated `worker.js`
-(or confirm an existing `orbit-workers-proxy` deployment already has the
-`/match-recommend` route and a configured `GEMINI_API_KEY` - see that
-repo's README), then set the constant to `<that Worker's base URL>/match-recommend`.
-A failed/timed-out/rate-limited call degrades the exact same way an unset
-URL does: the already-rendered deterministic pick simply stands.
+Round 37 found and fixed a real bug in the FIRST of those two hardenings,
+live-verified against real 2026-09-23/24/25 data: a day can have more than
+one recommended slot at once (an earlier, non-overlapping "continuation"
+pick alongside the evening headline pick - see Round 36), and the old
+candidate-selection code only ever looked at whichever recommended slot
+sorted first chronologically - almost always the early, low-stakes one
+with no real alternative, so the genuinely contested evening slot (the
+whole reason this feature exists) was silently never offered to Gemini at
+all, on any of those three days. Fixed to scan every recommended slot and
+pick whichever one has the smallest top-vs-runner-up score gap. Round 37
+also live-tested Google Search grounding directly against the deployed
+Worker and found it hard-blocked by a 429 quota wall on this account (the
+exact RESOURCE_EXHAUSTED signature Round 9 already hit) despite Round 35's
+reasoning that low call volume would avoid it - reverted grounding, back to
+`gemini-3.5-flash-lite` with `response_schema`-enforced JSON, and
+confirmed that shape does return a real, valid pick live. That live pick
+independently agreed with the deterministic engine rather than the
+human-validated expectation this feature is meant to guarantee - worth
+knowing before assuming "the mechanism works" means "the mechanism always
+picks what I'd pick": it guarantees Gemini's own answer wins its slot, not
+that Gemini's answer matches any one viewer's personal judgment.
+
+`MATCH_RECOMMEND_PROXY_URL` in `public/app.js` points at the real,
+live-verified `orbit-workers-proxy` deployment
+(`https://orbit-workers-proxy.pengzjay.workers.dev/match-recommend`) as of
+Round 37. Every call site (`maybeRequestGeminiTieBreak`) still no-ops
+immediately if this is ever unset or the call fails/times out/is rate-
+limited - the deterministic pick simply renders as it always has, with no
+visible error. If you fork this repo and deploy your own shared-proxy
+Worker (own `GEMINI_API_KEY`, own `/match-recommend` route), update this to
+your own Worker's base URL.
 
 ## Local dev tooling
 

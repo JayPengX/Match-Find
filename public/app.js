@@ -144,7 +144,15 @@ const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 // "unset = feature unavailable, everything else works normally" contract
 // PROXY_URL itself would have if this app had no shared-proxy deployment
 // at all.
-const MATCH_RECOMMEND_PROXY_URL = '';
+//
+// Round 37 (2026-09-22): live-verified against the real deployed Worker
+// (same one PROXY_URL below points at) with a real 2026-09-23 candidate
+// set - returns a genuine 200 with a valid pick (see docs/recommendation-
+// engine-audit.md's own Round 37 entry for the exact response and what it
+// means, including a real, uncomfortable finding: Gemini's own independent
+// judgment agreed with the deterministic engine's pick, not the human-
+// validated one this whole feature exists to guarantee).
+const MATCH_RECOMMEND_PROXY_URL = 'https://orbit-workers-proxy.pengzjay.workers.dev/match-recommend';
 
 // Every host buildMatches needs (ESPN, Polymarket, the MLB Stats API,
 // Jolpica) sends no CORS headers, so a browser can't fetch any of them
