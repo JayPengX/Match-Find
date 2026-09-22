@@ -2220,6 +2220,21 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     card.style.transform = `translateX(${committedDx > 0 ? 100 : -100}%) rotate(${committedDx / 12}deg)`;
     card.style.opacity = '0';
     choose(targetIndex);
+    // Setting a transform/opacity on `card` and then, in the same tick,
+    // having choose() above tear its whole DOM subtree out from under it
+    // (pinSlotChoice -> renderSections) can leave Safari's own compositor
+    // holding onto a stale, already-rasterized layer for the just-removed
+    // card - visible as a ghost of the swiped-away card sitting in the
+    // background until something forces a full repaint, live-reported on
+    // iPad specifically (a bigger screen means more compositor real
+    // estate for the stale layer to sit in, and matches "scrolling down
+    // and back up makes it disappear" exactly - a scroll is exactly the
+    // kind of forced repaint that clears this). A synchronous layout read
+    // forces the browser to reconcile its render tree against the DOM as
+    // it now stands (card's own node already gone) rather than waiting on
+    // the next scroll to do it - same fix, without needing the viewer to
+    // actually scroll.
+    void document.body.offsetHeight;
   }
 
   card.addEventListener('pointerup', endDrag);
