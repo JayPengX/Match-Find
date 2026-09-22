@@ -200,48 +200,67 @@ export function computeDurationMinutes(league, away, home, venue, broadcast, odd
 // itself still only ever returns a fresh, unfrozen "elapsed since start"
 // number, exactly as it always has.
 export const MIN_FINISHED_DURATION_MINUTES = 30;
-// Ceilinged well ABOVE any realistic finished-game length, per sport, for
-// the opposite reason: "how long ago did this start" is only a good proxy
-// for "how long did it actually run" when this fetch happens shortly after
-// the fixture ends. Originally written against a 15-minute cron reading a
-// WHOLE day's schedule at once (now stale - see MIN_FINISHED_DURATION_MINUTES'
-// own comment for how this app actually runs today), so a match that
-// finished hours before the run that caught it (a lunchtime EPL kickoff
-// checked again in the evening, same as any run whose previous cycle was
-// delayed or skipped) had its "duration" computed as elapsed-time-to-NOW,
-// not elapsed-time-to-the-actual-final-whistle - live-reported as a
-// finished, genuinely great,
-// high-endurance match (Crystal Palace 0-0 recorded as `durationMinutes:
-// 290`, an EPL match kicked off 13:00 UTC, fetched again at 17:41 UTC)
-// reserving a 4h50m schedule block against a normal ~115-minute league
-// fixture, which then blocked the day planner from ALSO recommending
-// whatever else could have followed it - the exact mechanism behind
-// several live reports of "the best match of the day didn't win" that
-// traced back to nothing being wrong with the match's own score at all.
-// Set well above genuine worst-case overruns (extra innings/rain delays
-// for MLB, OT for NBA) so a fetch that DOES land soon after the real final
-// whistle is completely unaffected - this only clips the case where the
-// naive elapsed-to-now number is already implausible for the sport.
+// Ceilinged at a genuinely REALISTIC worst-case broadcast length, per
+// sport - not "how high can a stale fetch's elapsed-to-now number get
+// before it looks obviously wrong" (Round 45's own live-reported failure:
+// MLB's old cap, 360 minutes/6 hours, was picked as "well above genuine
+// worst-case overruns" and then itself became the displayed number for
+// EVERY finished MLB match sitting in the fetched window more than 6
+// hours after kickoff - which is the NORMAL case now, not a rare cron
+// hiccup, since this app polls continuously and retains a match through
+// the rest of today plus one day back. A real MLB game, even with extra
+// innings, essentially never runs 6 hours - this cap is now what a
+// genuinely long broadcast could plausibly be, and once the naive
+// elapsed-to-now number exceeds it, `finishedDurationMinutes` below no
+// longer trusts "elapsed since start" as a length signal AT ALL (see its
+// own comment) rather than clamping at, and displaying, this ceiling as
+// if it meant something real.
 // Premier League's own 140 (not just "a bit above" the 108-125 pre-game
 // estimate range in sport-duration.mjs) is deliberately picked so that two
 // back-to-back league fixtures scheduled the real-world-standard 2h30m
-// apart (e.g. two 13:00 UTC kickoffs vs. a 15:30 UTC one, exactly this
-// bug's own live-reported case) never fall on the wrong side of the
-// TRANSITION_BUFFER_MINUTES boundary in recommendation.mjs's scheduler
-// purely because a late fetch inflated one of them - 140 + 10 minutes of
-// transition buffer lands exactly at 2h30m, matching that real broadcast
-// gap instead of quietly eating into it.
+// apart (e.g. two 13:00 UTC kickoffs vs. a 15:30 UTC one, a live-reported
+// case from before this cap existed at all) never fall on the wrong side
+// of the TRANSITION_BUFFER_MINUTES boundary in recommendation.mjs's
+// scheduler purely because a late fetch inflated one of them - 140 + 10
+// minutes of transition buffer lands exactly at 2h30m, matching that real
+// broadcast gap instead of quietly eating into it.
 export const FINISHED_DURATION_CAP_MINUTES_BY_SPORT = {
   'Premier League': 140,
   NBA: 180,
-  MLB: 360,
+  // Round 45: was 360 (6 hours) - live-reported as itself becoming the
+  // displayed duration for every finished MLB match viewed more than 6
+  // hours after its own kickoff, which this app's own continuous polling
+  // (no more "shortly after the fixture ends" cron) makes the norm, not
+  // an edge case. 280 (4h40m) still comfortably covers a genuine extra-
+  // innings marathon - MLB's real all-time longest games run 6-8 hours,
+  // but those are historically rare enough (a handful of times per
+  // decade, league-wide) that this cap exists to bound the COMMON case
+  // (a normal game, viewed hours or a day late), not the record book.
+  MLB: 280,
   F1: 180
 };
 const DEFAULT_FINISHED_DURATION_CAP_MINUTES = 240;
-export function finishedDurationMinutes(startTimeUtc, now, sport) {
+// `pregameEstimateMinutes` is the SAME per-fixture prediction an upcoming
+// match already shows (computeDurationMinutes's own real team/venue/odds-
+// informed estimate, not just the league's flat average) - passed in by
+// every call site below regardless of isFinished, specifically so this
+// function has a real, sport-and-fixture-aware fallback the moment
+// "elapsed since start" stops being trustworthy (see
+// FINISHED_DURATION_CAP_MINUTES_BY_SPORT's own comment for why that's the
+// COMMON case now, not rare): once the observation is clearly happening
+// well after the real final whistle, guessing "the average/predicted
+// fixture length" is honest about what this app actually knows, where
+// clamping at an arbitrary ceiling and showing THAT instead just
+// substitutes one wrong number for a differently-wrong one.
+export function finishedDurationMinutes(startTimeUtc, now, sport, pregameEstimateMinutes) {
   const elapsedMinutes = Math.round((now.getTime() - Date.parse(startTimeUtc)) / 60_000);
   const cap = FINISHED_DURATION_CAP_MINUTES_BY_SPORT[sport] ?? DEFAULT_FINISHED_DURATION_CAP_MINUTES;
-  return Math.max(MIN_FINISHED_DURATION_MINUTES, Math.min(cap, elapsedMinutes));
+  if (elapsedMinutes > cap) {
+    return Number.isFinite(pregameEstimateMinutes)
+      ? Math.max(MIN_FINISHED_DURATION_MINUTES, pregameEstimateMinutes)
+      : cap;
+  }
+  return Math.max(MIN_FINISHED_DURATION_MINUTES, elapsedMinutes);
 }
 
 // ---- Taiwan broadcast source (a hardcoded rule, not an AI guess) --------
@@ -508,16 +527,19 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         oddsWinPctHome: null,
         oddsWinPctDraw: null,
         oddsFavorites: null,
-        durationMinutes: isFinished
-          ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label)
-          : computeDurationMinutes(
-              league,
-              away,
-              home,
-              competition.venue?.fullName || '',
-              broadcast || '',
-              oddsSignal.overUnder
-            ),
+        durationMinutes: (() => {
+          const pregameEstimateMinutes = computeDurationMinutes(
+            league,
+            away,
+            home,
+            competition.venue?.fullName || '',
+            broadcast || '',
+            oddsSignal.overUnder
+          );
+          return isFinished
+            ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label, pregameEstimateMinutes)
+            : pregameEstimateMinutes;
+        })(),
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
@@ -582,11 +604,12 @@ async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
       // Only the main Race gets a circuit-specific prediction - see
       // sport-duration.mjs's own comment for why Qualifying/Sprint keep
       // their flat session.durationMinutes instead.
+      const pregameEstimateMinutes = sessionType.abbreviation === 'Race'
+        ? predictF1RaceDurationMinutes(venue)
+        : sessionType.durationMinutes;
       const durationMinutes = isFinished
-        ? finishedDurationMinutes(new Date(startMs).toISOString(), now, 'F1')
-        : sessionType.abbreviation === 'Race'
-          ? predictF1RaceDurationMinutes(venue)
-          : sessionType.durationMinutes;
+        ? finishedDurationMinutes(new Date(startMs).toISOString(), now, 'F1', pregameEstimateMinutes)
+        : pregameEstimateMinutes;
 
       matches.push({
         id: `f1-${event.id}-${sessionType.abbreviation.toLowerCase()}`,

@@ -503,6 +503,28 @@ plan for the day**, built by `computeDayPlan` in `public/lib/recommendation.mjs`
   value from the moment it actually ended, when one exists) and carried
   forward unchanged on every later merge, rather than recomputed fresh
   each time.
+  **Round 45 follow-up: freezing only stops it from GROWING further** -
+  it does nothing for a match whose very FIRST observation already happens
+  long after the final out, which the same "no scheduled rebuild, continuous
+  polling" architecture above makes the common case, not rare. Live-reported
+  after the freeze fix shipped: "Still broke, spanning across 6 hours so
+  ridiculous" - a match's first-ever fetch was already ~2000+ minutes past
+  kickoff, so `finishedDurationMinutes` clamped it at MLB's then-360-minute
+  cap on that very first observation, then froze it there. Fixed with two
+  changes in `match-builder.mjs`: (1) each sport's cap in
+  `FINISHED_DURATION_CAP_MINUTES_BY_SPORT` is now a genuinely realistic
+  worst-case broadcast length (MLB lowered 360 → 280) rather than "high
+  enough that a stale cron fetch looks obviously wrong," since a fetch this
+  late is now the norm; (2) once elapsed-since-kickoff exceeds that cap,
+  `finishedDurationMinutes` no longer trusts "elapsed since start" as a
+  length signal at all - it falls back to `pregameEstimateMinutes`, the
+  SAME real per-fixture prediction (`computeDurationMinutes`) an upcoming
+  match already shows, passed in by every call site regardless of
+  `isFinished`. A late-observed finished match now displays an honest,
+  fixture-aware estimate instead of the arbitrary cap value itself.
+  Live-verified: every finished MLB match observed hours-to-a-day late now
+  shows ~155-175 minutes (matching real per-team/venue predictions) instead
+  of a flat 280/360-minute cap.
 - **The endurance-based shrink can't claim a no-clock sport's game is
   basically over just because it isn't tense (Round 36).** Live-reported:
   a real 2026-09-27 slate scheduled a next MLB pick only ~2h25m after the

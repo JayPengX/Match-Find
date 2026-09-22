@@ -293,6 +293,46 @@ describe('finishedDurationMinutes', () => {
     assert.equal(finishedDurationMinutes(start, now, 'Premier League'), 115);
   });
 
+  // Live-reported follow-up: freezing durationMinutes after first sighting
+  // (app.js's mergeFreshMatches) only stops it from GROWING further - it
+  // does nothing for a match whose very FIRST observation already happens
+  // long after the final out (this app has no scheduled rebuild anymore,
+  // so "viewed hours or a day late" is the common case, not rare). Without
+  // a real fallback, that first observation clamped at the sport's cap and
+  // then FROZE there, so every finished MLB match sitting in the window
+  // more than ~4h40m after kickoff displayed a flat ~280-minute duration -
+  // "spanning across 6 hours" even after the cap itself was lowered.
+  // Passing the same pre-game estimate an upcoming match already shows
+  // (computeDurationMinutes) gives this function an honest, fixture-aware
+  // number to fall back to instead of the arbitrary cap itself.
+  test('falls back to the real pre-game estimate once elapsed time exceeds the cap, instead of displaying the cap itself', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-21T13:00:00.000Z'); // a full day later
+    const pregameEstimateMinutes = 165;
+    assert.equal(
+      finishedDurationMinutes(start, now, 'MLB', pregameEstimateMinutes),
+      pregameEstimateMinutes
+    );
+  });
+
+  test('still falls back to the cap when no pre-game estimate is available', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-21T13:00:00.000Z'); // a full day later
+    assert.equal(
+      finishedDurationMinutes(start, now, 'MLB'),
+      FINISHED_DURATION_CAP_MINUTES_BY_SPORT.MLB
+    );
+  });
+
+  test('a pre-game estimate below MIN_FINISHED_DURATION_MINUTES is still floored', () => {
+    const start = '2026-09-20T13:00:00.000Z';
+    const now = new Date('2026-09-21T13:00:00.000Z'); // a full day later
+    assert.equal(
+      finishedDurationMinutes(start, now, 'MLB', 5),
+      MIN_FINISHED_DURATION_MINUTES
+    );
+  });
+
   test('an unrecognized/missing sport falls back to a generous default cap, never Infinity', () => {
     const start = '2026-09-20T13:00:00.000Z';
     const now = new Date('2026-09-21T13:00:00.000Z'); // a full day later

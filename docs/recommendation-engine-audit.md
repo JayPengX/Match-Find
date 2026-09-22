@@ -4775,3 +4775,88 @@ entirely in app.js's DOM/state glue layer, verified via the real-browser
 Playwright check above rather than a node:test unit, matching this
 codebase's own established split between public/lib/'s unit-tested pure
 functions and app.js's Playwright-verified integration behavior).
+
+## Round 45 follow-up (2026-09-22): freezing wasn't enough - first observation was already stale
+
+Direct follow-up after the fix above shipped: "Still broke, spanning
+across 6 hours so ridiculous."
+
+**Root cause.** The freeze fix above only stops a finished match's
+`durationMinutes` from GROWING after this browser's first sighting of it
+finished. It does nothing for the much more common case this app's own
+architecture now creates: the FIRST-ever observation of a match already
+happens long after the real final out (no scheduled rebuild, continuous
+in-browser polling, 1-day retention - see the root cause above). On that
+first observation, `finishedDurationMinutes` still computed
+`now - startTimeUtc`, found it far past MLB's then-360-minute cap, clamped
+at exactly 360, and the freeze then locked that clamped-but-wrong number in
+forever. Live-confirmed by rebuilding `matches.json` live: every MLB match
+finished the day before (2026-09-21) or earlier sat at flat `360`, right
+next to same-day matches finished a few hours ago sitting anywhere from
+150-260 depending on real elapsed time - "spanning across 6 hours," exactly
+as reported, because 360 minutes = 6 hours was itself the number on
+screen.
+
+**The deeper problem**: once a fetch happens this late, "elapsed time since
+kickoff" simply isn't a duration signal anymore - it's dominated by how
+long ago the tab was opened, not by how long the game ran. Clamping that
+number at a cap and displaying the cap doesn't fix this - it just replaces
+one wrong number (a huge elapsed-time reading) with a different wrong
+number (an arbitrary ceiling), and freezes THAT in instead.
+
+**Fix** (`public/lib/match-builder.mjs`):
+
+1. Lowered each sport's own cap in `FINISHED_DURATION_CAP_MINUTES_BY_SPORT`
+   to a genuinely realistic worst-case broadcast length rather than "high
+   enough that a stale fetch looks obviously wrong" (MLB: 360 → 280, i.e.
+   4h40m - still comfortably covers a real extra-innings marathon; MLB's
+   actual all-time longest games run 6-8 hours, but those are rare enough,
+   league-wide, across a whole decade, that this cap exists to bound the
+   COMMON case of a normal game viewed hours or a day late, not the record
+   book).
+2. Gave `finishedDurationMinutes` a new 4th parameter,
+   `pregameEstimateMinutes` - the SAME real per-fixture prediction
+   (`computeDurationMinutes`, team/venue/broadcast/odds-informed) an
+   upcoming match already shows. Every call site now computes this value
+   unconditionally (regardless of `isFinished`) and passes it through. Once
+   `elapsed minutes > cap`, the function no longer trusts "elapsed since
+   start" as a length signal AT ALL - it returns the pre-game estimate
+   instead of the cap itself:
+
+   ```js
+   export function finishedDurationMinutes(startTimeUtc, now, sport, pregameEstimateMinutes) {
+     const elapsedMinutes = Math.round((now.getTime() - Date.parse(startTimeUtc)) / 60_000);
+     const cap = FINISHED_DURATION_CAP_MINUTES_BY_SPORT[sport] ?? DEFAULT_FINISHED_DURATION_CAP_MINUTES;
+     if (elapsedMinutes > cap) {
+       return Number.isFinite(pregameEstimateMinutes)
+         ? Math.max(MIN_FINISHED_DURATION_MINUTES, pregameEstimateMinutes)
+         : cap;
+     }
+     return Math.max(MIN_FINISHED_DURATION_MINUTES, elapsedMinutes);
+   }
+   ```
+
+   Both real call sites (`fetchTeamLeagueMatches`'s MLB/NBA/EPL branch and
+   the F1 session loop) were restructured to compute their own pre-game
+   estimate (`computeDurationMinutes(...)` / `predictF1RaceDurationMinutes`
+   or `sessionType.durationMinutes`) once, unconditionally, and pass it as
+   this 4th argument.
+
+This composes with the Round 45 freeze fix rather than replacing it: the
+freeze still stops the number from drifting further on later refreshes:
+now it freezes onto an honest, fixture-aware estimate on the FIRST
+observation too, instead of onto a clamped cap value.
+
+**Live-verified** (rebuilt `matches.json` live, 2026-09-22): every finished
+MLB match in the fetched window, including ones finished a full day and
+~35 hours earlier, now shows 158-173 minutes - matching real per-team/venue
+pre-game predictions - instead of a flat 280/360-minute cap. Finished EPL
+matches (some ~41 hours old) now show a flat 113 minutes, EPL's own
+realistic pre-game estimate, instead of the old 140-minute cap.
+
+Added 3 new unit tests to `tests/match-builder.test.mjs`'s existing
+`finishedDurationMinutes` suite: falls back to the real pre-game estimate
+once elapsed time exceeds the cap; still falls back to the cap itself when
+no pre-game estimate is available (defensive - every real call site always
+provides one); a pre-game estimate below `MIN_FINISHED_DURATION_MINUTES` is
+still floored. Full suite **392/392**.
