@@ -401,6 +401,7 @@ function buildSportIcon(sport) {
     const img = document.createElement('img');
     img.src = LEAGUE_LOGOS[sport];
     img.alt = '';
+    img.decoding = 'sync';
     // Deliberately no loading="lazy" - these are tiny (16-22px) icons, so
     // there's nothing meaningful to save by deferring them, and native lazy
     // loading has a real, confirmed bug inside the Settings panel
@@ -1383,22 +1384,64 @@ function preferMatch(match) {
 
 // ---- Rendering ------------------------------------------------------------
 
-function buildTeamRow({ logo, name, nameZh, homeAway, score, showScore }) {
-  const node = teamRowTemplate.content.firstElementChild.cloneNode(true);
+function createTeamRowNode() {
+  return teamRowTemplate.content.firstElementChild.cloneNode(true);
+}
+
+// Populates a team-row node - either a brand new one (right after
+// createTeamRowNode above) or an EXISTING one being patched in place by a
+// card render that's reusing its whole match-card node (see
+// updateMatchCard's own teams-section comment) - so this never assumes it's
+// starting from the template's own blank defaults the way a fresh clone
+// would.
+function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore }) {
   const img = node.querySelector('.team-logo');
+  // Bound exactly ONCE per DOM node, ever - not per render - so reusing this
+  // same row across many renders (a routine score/odds poll patching an
+  // already-on-screen card) never piles up a fresh 'error' listener on top
+  // of every earlier one. Left permanently attached rather than
+  // `{ once: true }`, since it has to keep working across every future
+  // `src` reassignment below too, not just the first one.
+  if (!img.dataset.errorBound) {
+    img.dataset.errorBound = '1';
+    img.addEventListener('error', () => {
+      img.dataset.loadFailed = '1';
+      img.hidden = true;
+    });
+  }
   if (logo) {
-    img.src = logo;
+    // Only touches `src` when the URL actually changed - this IS the fix
+    // for the reported team-logo flash: an unconditional `img.src = logo`
+    // every render (even to the exact same URL a reused node already has
+    // loaded and painted) still restarts that image's decode, which
+    // visibly blanks it for a frame on every routine background refresh.
+    if (img.getAttribute('src') !== logo) {
+      img.src = logo;
+      // A new URL deserves a fresh chance - most relevant for a service
+      // logo whose fallback state (see updateMatchCard's watch-badge
+      // section) can genuinely change source over a match's lifetime, but
+      // kept here too since nothing guarantees a team's own logo URL can
+      // never change.
+      delete img.dataset.loadFailed;
+    }
     img.alt = name;
-    img.addEventListener('error', () => { img.hidden = true; }, { once: true });
+    // Never force it back visible while a real load failure is still in
+    // effect for the CURRENT src - a reused row that already gave up on a
+    // broken logo must stay hidden, not flash the broken-image box back in
+    // on every subsequent render.
+    img.hidden = img.dataset.loadFailed === '1';
   } else {
     img.hidden = true;
   }
   const sideEl = node.querySelector('.team-side');
   if (homeAway === 'home' || homeAway === 'away') {
+    sideEl.hidden = false;
     sideEl.textContent = homeAway === 'home' ? '主' : '客';
-    sideEl.classList.add(homeAway === 'home' ? 'is-home' : 'is-away');
+    sideEl.classList.toggle('is-home', homeAway === 'home');
+    sideEl.classList.toggle('is-away', homeAway === 'away');
   } else {
     sideEl.hidden = true;
+    sideEl.classList.remove('is-home', 'is-away');
   }
   node.querySelector('.team-name-en').textContent = name;
   node.querySelector('.team-name-zh').textContent = nameZh || '';
@@ -1441,12 +1484,27 @@ function teamOddsColor(competitor, sport) {
   return fallbackVar ? `var(${fallbackVar})` : 'var(--accent)';
 }
 
-function buildMatchCard(match) {
-  const node = cardTemplate.content.firstElementChild.cloneNode(true);
+function createMatchCardNode() {
+  return cardTemplate.content.firstElementChild.cloneNode(true);
+}
+
+// Populates a match-card node - either a brand new one (buildMatchCard
+// below) or an EXISTING, already-on-screen one being patched in place (see
+// getOrBuildMatchCard's own comment for why: reusing the same node across a
+// routine background refresh is what actually stops its team-logo <img>
+// elements from visibly flashing on every 30s/60s poll, which recreating
+// them from the template fresh every time - the old, single `buildMatchCard`
+// behavior - could not avoid). Every branch below that only ever SET a
+// hidden/class/text state and never had a matching reset (fine for a fresh
+// clone, which already starts from the template's own blank defaults) had
+// to gain one, since a reused node can walk in already carrying whatever the
+// PREVIOUS render for this same match id left behind.
+function updateMatchCard(node, match) {
   // Lets a later render find and patch THIS exact card by id without
-  // rebuilding it from scratch - see buildMatchStack's own reuse mechanism,
-  // which relies on this to update just the recommended-tag/is-pinned state
-  // on an already-correctly-scrolled stack instead of tearing it down.
+  // rebuilding it from scratch - see getOrBuildMatchCard's own reuse
+  // mechanism, which relies on this to look an already-mounted card up
+  // again next render instead of tearing it down and losing its already-
+  // decoded team-logo images.
   node.dataset.matchId = match.id;
   // Computed once, up front, and reused everywhere below (team-row score
   // visibility, the live-status widget, the .is-live/.is-finished class) -
@@ -1496,8 +1554,15 @@ function buildMatchCard(match) {
   }
 
   const badge = node.querySelector('.sport-badge');
+  // A match's own sport never changes across its lifetime, so a reused node
+  // (see this function's own top comment) that already has the right icon
+  // never needs it rebuilt - `badge.dataset.sport` (read BEFORE being
+  // overwritten just below) is what a fresh clone never has set yet, so this
+  // still runs exactly once for a brand new card too.
+  if (badge.dataset.sport !== match.sport) {
+    node.querySelector('.sport-icon').replaceWith(buildSportIcon(match.sport));
+  }
   badge.dataset.sport = match.sport;
-  node.querySelector('.sport-icon').replaceWith(buildSportIcon(match.sport));
   node.querySelector('.sport-badge-text').textContent = SPORT_LABELS_ZH[match.sport] || match.sport;
 
   // Only shown once there's an actual score worth showing - a pre-game
@@ -1511,17 +1576,44 @@ function buildMatchCard(match) {
   // owns the in-progress DETAIL neither team's own score line could show.
   const showScore = isCurrentlyLive || match.isFinished;
 
+  // Reuses this card's EXISTING team-row nodes (and therefore their already-
+  // decoded <img> logos - see updateTeamRow's own src-unchanged guard) when
+  // the shape already matches, instead of always tearing teamsEl down and
+  // rebuilding fresh rows from the template - the other half of this
+  // function's own top-comment fix, since a match's own competitor shape
+  // (two teams vs. a single F1-style entry) never changes across its
+  // lifetime, so this only ever really takes the "rebuild" path once, the
+  // very first time this match id is rendered at all.
   const teamsEl = node.querySelector('[data-teams]');
+  const existingRows = Array.from(teamsEl.querySelectorAll(':scope > .team-row'));
+  const existingAt = teamsEl.querySelector(':scope > .team-at');
   if (match.competitors && match.competitors.length === 2) {
     const [away, home] = match.competitors;
-    teamsEl.appendChild(buildTeamRow({ ...away, showScore }));
-    const at = document.createElement('span');
-    at.className = 'team-at';
-    at.textContent = 'vs';
-    teamsEl.appendChild(at);
-    teamsEl.appendChild(buildTeamRow({ ...home, showScore }));
+    let awayRow, atSpan, homeRow;
+    if (existingRows.length === 2 && existingAt) {
+      [awayRow, homeRow] = existingRows;
+      atSpan = existingAt;
+    } else {
+      teamsEl.replaceChildren();
+      awayRow = createTeamRowNode();
+      atSpan = document.createElement('span');
+      atSpan.className = 'team-at';
+      atSpan.textContent = 'vs';
+      homeRow = createTeamRowNode();
+      teamsEl.append(awayRow, atSpan, homeRow);
+    }
+    updateTeamRow(awayRow, { ...away, showScore });
+    updateTeamRow(homeRow, { ...home, showScore });
   } else {
-    teamsEl.appendChild(buildTeamRow({ logo: match.logo, name: match.name, nameZh: match.nameZh }));
+    let soloRow;
+    if (existingRows.length === 1 && !existingAt) {
+      soloRow = existingRows[0];
+    } else {
+      teamsEl.replaceChildren();
+      soloRow = createTeamRowNode();
+      teamsEl.appendChild(soloRow);
+    }
+    updateTeamRow(soloRow, { logo: match.logo, name: match.name, nameZh: match.nameZh });
   }
 
   // Sport-specific live in-progress widget (see buildLiveStatusNode above) -
@@ -1577,6 +1669,11 @@ function buildMatchCard(match) {
         ? `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，和局 ${Math.round(match.oddsWinPctDraw)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
         : `獲勝機率：${away.name} ${Math.round(match.oddsWinPctAway)}%，${home.name} ${Math.round(match.oddsWinPctHome)}%`
     );
+  } else {
+    // Explicit reset, not just "leave it as the template default" - this
+    // node may be a REUSED one (see this function's own top comment) that
+    // already had the bar showing from an earlier render.
+    oddsEl.hidden = true;
   }
 
   // F1's own real Polymarket odds - an outright winner market across the
@@ -1602,6 +1699,8 @@ function buildMatchCard(match) {
       'aria-label',
       `${outrightLabel}：${match.oddsFavorites.map(f => `${f.name} ${Math.round(f.pct)}%`).join('，')}`
     );
+  } else {
+    outrightEl.hidden = true; // see the odds bar's own reset comment just above
   }
 
   // The race's own current running order (see f1LeaderboardNode above) -
@@ -1627,29 +1726,61 @@ function buildMatchCard(match) {
     if (service && service.logo) {
       badge.hidden = false;
       badge.style.background = service.logoBg || '#fff';
-      badgeLogo.src = service.logo;
+      // Same src-unchanged guard as updateTeamRow's own logo handling, and
+      // for the same reason - a reused card (see this function's own top
+      // comment) whose service logo hasn't actually changed shouldn't have
+      // its already-decoded <img> restarted on every routine render.
+      if (badgeLogo.getAttribute('src') !== service.logo) {
+        badgeLogo.src = service.logo;
+        delete badgeLogo.dataset.loadFailed;
+      }
       badgeLogo.alt = service.label;
-      badgeLogo.hidden = false;
-      badgeText.hidden = true;
-      // Same defensive fallback as team logos (buildTeamRow) - an
+      // Refreshed every render (unlike the listener below) so the fallback
+      // it applies always matches the CURRENT service, even in the
+      // (unlikely) case this match's resolved service changes without its
+      // logo URL also changing.
+      badgeLogo._fallbackService = service;
+      // Same defensive fallback as team logos (updateTeamRow) - an
       // external Commons hotlink can fail for reasons with nothing to do
       // with this page (rate limiting, an outage, the file being moved),
       // and the plain colored-initial badge is a fine fallback rather
-      // than an empty box.
-      badgeLogo.addEventListener(
-        'error',
-        () => {
+      // than an empty box. Bound once per node, ever (see updateTeamRow's
+      // own comment on why `{ once: true }` alone isn't enough for a node
+      // that can be reused across many future `src` reassignments) - reads
+      // `_fallbackService` above at FIRE time, not at bind time, so it
+      // never acts on a stale service from whenever this listener happened
+      // to first attach.
+      if (!badgeLogo.dataset.errorBound) {
+        badgeLogo.dataset.errorBound = '1';
+        badgeLogo.addEventListener('error', () => {
+          badgeLogo.dataset.loadFailed = '1';
           badgeLogo.hidden = true;
-          if (service.badge) {
+          const fallback = badgeLogo._fallbackService;
+          if (fallback && fallback.badge) {
             badgeText.hidden = false;
-            badgeText.textContent = service.badge;
-            badge.style.background = service.color;
+            badgeText.textContent = fallback.badge;
+            badge.style.background = fallback.color;
           } else {
             badge.hidden = true;
           }
-        },
-        { once: true }
-      );
+        });
+      }
+      // Re-derives the full display state from `loadFailed` every render
+      // (rather than trusting whatever the listener above last left behind)
+      // so a reused node always reflects the CURRENT service correctly.
+      if (badgeLogo.dataset.loadFailed === '1') {
+        badgeLogo.hidden = true;
+        if (service.badge) {
+          badgeText.hidden = false;
+          badgeText.textContent = service.badge;
+          badge.style.background = service.color;
+        } else {
+          badge.hidden = true;
+        }
+      } else {
+        badgeLogo.hidden = false;
+        badgeText.hidden = true;
+      }
     } else if (service && service.badge) {
       badge.hidden = false;
       badgeLogo.hidden = true;
@@ -1659,6 +1790,8 @@ function buildMatchCard(match) {
     } else {
       badge.hidden = true;
     }
+  } else {
+    watchEl.hidden = true; // reset for a reused node - see this function's own top comment
   }
 
   // "推薦" is the SYSTEM's own judgment (computeDayPlan's scheduling
@@ -1673,6 +1806,15 @@ function buildMatchCard(match) {
     recommendedTag.classList.add('is-preferred');
   } else if (match.recommended) {
     recommendedTag.hidden = false;
+    // Explicit "推薦"/no-is-preferred reset, not just the template's own
+    // baked-in default text - a reused node (see this function's own top
+    // comment) that showed "偏好" on an earlier render, before a pin got
+    // released, would otherwise keep reading "偏好" forever.
+    recommendedTag.textContent = '推薦';
+    recommendedTag.classList.remove('is-preferred');
+  } else {
+    recommendedTag.hidden = true;
+    recommendedTag.classList.remove('is-preferred');
   }
 
   // The generic factor-label reason line ("依雙方戰績、近期戰況...計算。" -
@@ -1716,6 +1858,12 @@ function buildMatchCard(match) {
   // neighboring match - noise, not information, on every multi-member
   // stack's own alternates.
   const conflictNote = node.querySelector('.conflict-note');
+  // Reset up front, not just set-when-true below - a reused node (see this
+  // function's own top comment) that showed a conflict/mute/recommended
+  // state on an earlier render must not keep it once the underlying
+  // condition stops holding (a rotation swap, a pin, a slate reshuffle).
+  conflictNote.classList.remove('is-info');
+  node.classList.remove('is-muted', 'is-recommended');
   const earlierOverlaps = state.matches
     .filter(
       m =>
@@ -1743,6 +1891,9 @@ function buildMatchCard(match) {
     // both worth full attention, so neither gets muted just for that.
     if (!match.recommended) node.classList.add('is-muted');
     else conflictNote.classList.add('is-info');
+  } else {
+    conflictNote.hidden = true;
+    conflictNote.textContent = '';
   }
   if (match.recommended) node.classList.add('is-recommended');
 
@@ -1756,7 +1907,18 @@ function buildMatchCard(match) {
   const preferBtn = node.querySelector('.match-prefer-btn');
   if (!match.isFinished && !match.recommended && !isQuietHours(match)) {
     preferBtn.hidden = false;
-    preferBtn.addEventListener('click', () => preferMatch(match));
+    // `_match` is refreshed every render; the click listener itself is
+    // bound exactly once per node, ever (see updateTeamRow's own comment on
+    // why a reused node needs this) and always reads the CURRENT match off
+    // it at click time, rather than a new render adding another listener
+    // closed over an increasingly stale `match` on top of every earlier one.
+    preferBtn._match = match;
+    if (!preferBtn.dataset.bound) {
+      preferBtn.dataset.bound = '1';
+      preferBtn.addEventListener('click', () => preferMatch(preferBtn._match));
+    }
+  } else {
+    preferBtn.hidden = true;
   }
 
   // Same single source of truth as relativeLabel/the live-status line above
@@ -1765,6 +1927,7 @@ function buildMatchCard(match) {
   // read as "still live" for styling purposes; a match already underway
   // that's simply run past its estimated end (see estimatedDurationMinutes)
   // stays styled live rather than falling back to plain/upcoming.
+  node.classList.remove('is-finished', 'is-live');
   if (lifecycle === LIFECYCLE_STATES.ENDED) {
     node.classList.add('is-finished');
   } else if (isCurrentlyLive) {
@@ -1772,6 +1935,37 @@ function buildMatchCard(match) {
   }
 
   return node;
+}
+
+function buildMatchCard(match) {
+  return updateMatchCard(createMatchCardNode(), match);
+}
+
+// Looks up an already-mounted card for this match id within `container`
+// (scoped per-container - see this function's own call sites, since the
+// SAME match can be showing simultaneously as its own separate card in both
+// the Recommended and All-matches sections) and patches it in place instead
+// of tearing it down and rebuilding a fresh one from the template - the fix
+// for the team-logo flash a routine background poll (live score, near-term
+// refresh, background odds enrichment) caused on every one of these cards,
+// not just the ones that actually changed.
+function getOrBuildMatchCard(match, existingCardsById) {
+  const existing = existingCardsById && existingCardsById.get(match.id);
+  if (existing) return updateMatchCard(existing, match);
+  return buildMatchCard(match);
+}
+
+// Direct children of `container` already carrying a `data-match-id` - i.e.
+// plain (non-stacked) cards from a PREVIOUS render of this same container,
+// available for getOrBuildMatchCard above to reuse. Deliberately `:scope >`
+// (direct children only): a `.match-stack`'s own inner card is nested two
+// levels deep and never a direct child, so a stack's swipeable card is never
+// accidentally pulled out from under its own drag handlers by this (see
+// buildMatchStack's own comment on why that card is always freshly built).
+function collectExistingCardsById(container) {
+  const map = new Map();
+  container.querySelectorAll(':scope > [data-match-id]').forEach(el => map.set(el.dataset.matchId, el));
+  return map;
 }
 
 // Whichever match is currently live, or (failing that) the soonest one yet
@@ -2385,6 +2579,10 @@ function renderRecommendedSection() {
   // swiping the second stack flipped between games with zero real time
   // conflict with what was actually in that slot.
   const stackOccurrenceBySlotKey = new Map();
+  // Existing plain cards from this SAME container's previous render, up for
+  // reuse below (see getOrBuildMatchCard's own comment) - captured once,
+  // up front, before this render starts moving any of them into `fragment`.
+  const existingCardsById = collectExistingCardsById(recommendedListEl);
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
     // A FINISHED match is kept in 推薦賽事 purely as viewing HISTORY (see
@@ -2398,8 +2596,8 @@ function renderRecommendedSection() {
     // regardless of alternatives - reported directly: a finished match
     // should never be swipeable.
     if (match.isFinished) {
-      const card = buildMatchCard(match);
-      if (index === 0) card.classList.add('is-pinned');
+      const card = getOrBuildMatchCard(match, existingCardsById);
+      card.classList.toggle('is-pinned', index === 0);
       fragment.appendChild(card);
       return;
     }
@@ -2432,8 +2630,8 @@ function renderRecommendedSection() {
         dayMembership.set(freezeKey, new Set(members.map(m => m.id)));
       }
       if (!alternatives.length) {
-        const card = buildMatchCard(match);
-        if (index === 0) card.classList.add('is-pinned');
+        const card = getOrBuildMatchCard(match, existingCardsById);
+        card.classList.toggle('is-pinned', index === 0);
         fragment.appendChild(card);
         return;
       }
@@ -2444,8 +2642,8 @@ function renderRecommendedSection() {
       // DOM-node-reuse mechanism a drag-based stack once required here.
       fragment.appendChild(buildMatchStack(dayKey, members, match, isTopOfDay));
     } else {
-      const card = buildMatchCard(match);
-      if (index === 0) card.classList.add('is-pinned');
+      const card = getOrBuildMatchCard(match, existingCardsById);
+      card.classList.toggle('is-pinned', index === 0);
       fragment.appendChild(card);
     }
   });
@@ -2471,8 +2669,14 @@ function renderAllMatchesSection() {
     return;
   }
   allEmptyEl.hidden = true;
+  // See renderRecommendedSection's own comment on why this reuses already-
+  // mounted cards by id instead of always rebuilding fresh ones - this
+  // section in particular re-renders in full on every 30s live-score poll,
+  // so without reuse EVERY card's team logos (not just the one match whose
+  // score actually moved) would flash on every tick.
+  const existingCardsById = collectExistingCardsById(allMatchListEl);
   const fragment = document.createDocumentFragment();
-  dayMatches.forEach(match => fragment.appendChild(buildMatchCard(match)));
+  dayMatches.forEach(match => fragment.appendChild(getOrBuildMatchCard(match, existingCardsById)));
   allMatchListEl.replaceChildren(fragment);
 }
 
@@ -2506,8 +2710,9 @@ function renderTbdSection() {
     return;
   }
   tbdSection.hidden = false;
+  const existingCardsById = collectExistingCardsById(tbdListEl);
   const fragment = document.createDocumentFragment();
-  state.tbdMatches.forEach(match => fragment.appendChild(buildMatchCard(match)));
+  state.tbdMatches.forEach(match => fragment.appendChild(getOrBuildMatchCard(match, existingCardsById)));
   tbdListEl.replaceChildren(fragment);
 }
 
