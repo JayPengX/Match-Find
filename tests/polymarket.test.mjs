@@ -23,7 +23,8 @@ import {
   resolvePoleWinnerOdds,
   polymarketEventsByTagUrl,
   fetchAllPolymarketEvents,
-  POLYMARKET_EVENTS_PAGE_SIZE
+  POLYMARKET_EVENTS_PAGE_SIZE,
+  POLYMARKET_MIN_LIQUIDITY_FOR_SCORING
 } from '../public/lib/polymarket.mjs';
 
 describe('normalizeTeamName / teamNamesMatch', () => {
@@ -161,6 +162,36 @@ describe('parseCombinedMoneylineMarket', () => {
   test('returns null when no matching combined market exists', () => {
     assert.equal(parseCombinedMoneylineMarket(REAL_MLB_EVENT.markets, 'New York Yankees', 'Boston Red Sox'), null);
   });
+
+  // Real live liquidity figures, 2026-09-23: Washington Nationals @ Detroit
+  // Tigers (11.9 hours out) vs. a same-shape market ~4.5 days out - see
+  // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment for the full
+  // investigation these numbers come from.
+  describe('liquidity', () => {
+    test('a real, deeply-liquid pregame market reports its own liquidity as a number, not a string', () => {
+      const event = {
+        ...REAL_MLB_EVENT,
+        markets: [{ ...REAL_MLB_EVENT.markets[0], liquidity: '137017.6445' }, REAL_MLB_EVENT.markets[1]]
+      };
+      const result = parseCombinedMoneylineMarket(event.markets, 'San Francisco Giants', 'Los Angeles Dodgers');
+      assert.equal(result.liquidity, 137017.6445);
+      assert.ok(result.liquidity >= POLYMARKET_MIN_LIQUIDITY_FOR_SCORING);
+    });
+
+    test('a real but genuinely untraded stub market (days out, nothing traded yet) reports its own low liquidity', () => {
+      const event = {
+        ...REAL_MLB_EVENT,
+        markets: [{ ...REAL_MLB_EVENT.markets[0], liquidity: '95.5' }, REAL_MLB_EVENT.markets[1]]
+      };
+      const result = parseCombinedMoneylineMarket(event.markets, 'San Francisco Giants', 'Los Angeles Dodgers');
+      assert.ok(result.liquidity < POLYMARKET_MIN_LIQUIDITY_FOR_SCORING);
+    });
+
+    test('defaults to 0, never NaN/undefined, when the field is missing entirely', () => {
+      const result = parseCombinedMoneylineMarket(REAL_MLB_EVENT.markets, 'San Francisco Giants', 'Los Angeles Dodgers');
+      assert.equal(result.liquidity, 0);
+    });
+  });
 });
 
 describe('resolveTeamOdds (MLB/NBA path)', () => {
@@ -174,6 +205,7 @@ describe('resolveTeamOdds (MLB/NBA path)', () => {
     assert.equal(result.away, 1.5);
     assert.equal(result.home, 98.5);
     assert.equal(result.draw, null);
+    assert.equal(result.liquidity, 0);
   });
 });
 
@@ -206,6 +238,17 @@ describe('parseSoccerThreeWayMarkets', () => {
   test('returns null when one of the three legs is missing', () => {
     const result = parseSoccerThreeWayMarkets(REAL_EPL_EVENT.markets.slice(0, 2), 'Liverpool', 'AFC Bournemouth');
     assert.equal(result, null);
+  });
+
+  test('liquidity is the WEAKEST of the three separate legs, not any one of them alone', () => {
+    const markets = [
+      { ...REAL_EPL_EVENT.markets[0], liquidity: '50000' }, // home win
+      { ...REAL_EPL_EVENT.markets[1], liquidity: '80' }, // draw - genuinely thin
+      { ...REAL_EPL_EVENT.markets[2], liquidity: '45000' } // away win
+    ];
+    const result = parseSoccerThreeWayMarkets(markets, 'Liverpool', 'AFC Bournemouth');
+    assert.equal(result.liquidity, 80);
+    assert.ok(result.liquidity < POLYMARKET_MIN_LIQUIDITY_FOR_SCORING);
   });
 });
 

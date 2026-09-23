@@ -19,8 +19,11 @@ import {
   describeFactorsZh,
   buildObjectiveReasonZh,
   freezeStartedMatchScoring,
-  parsePregameCoreOdds
+  parsePregameCoreOdds,
+  enrichWithPolymarketOdds,
+  PREGAME_SCORING_FIELDS
 } from '../public/lib/match-builder.mjs';
+import { POLYMARKET_MIN_LIQUIDITY_FOR_SCORING } from '../public/lib/polymarket.mjs';
 
 describe('isTimeTbd', () => {
   test('flags a status whose shortDetail contains TBD', () => {
@@ -214,6 +217,50 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
     });
   });
 
+  // match.oddsMarketWinPctAway/Home (see enrichWithPolymarketOdds below for
+  // where these actually get set - only once a market clears
+  // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING) are read straight off the match
+  // object and threaded into each sport's own formula, same as
+  // oddsSpread/oddsOverUnder already were.
+  describe('oddsMarketWinPctAway/oddsMarketWinPctHome (Polymarket win%, dispatched per sport)', () => {
+    test('MLB: a liquid market win% raises competitiveness over an otherwise-identical fixture with none', () => {
+      const base = {
+        sport: 'MLB',
+        broadcast: '',
+        isPostseason: false,
+        oddsSpread: 3,
+        oddsOverUnder: null,
+        competitors: [{ record: null }, { record: null }]
+      };
+      const withoutMarket = computeMatchObjectiveScore(base, {});
+      const withMarket = computeMatchObjectiveScore(
+        { ...base, oddsMarketWinPctAway: 49, oddsMarketWinPctHome: 51 },
+        {}
+      );
+      assert.ok(withMarket.competitiveness > withoutMarket.competitiveness);
+    });
+
+    test('NBA: dispatched the same way', () => {
+      const base = { sport: 'NBA', broadcast: '', isPostseason: false, oddsSpread: 15, competitors: [{ record: null }, { record: null }] };
+      const withoutMarket = computeMatchObjectiveScore(base, {});
+      const withMarket = computeMatchObjectiveScore(
+        { ...base, oddsMarketWinPctAway: 49, oddsMarketWinPctHome: 51 },
+        {}
+      );
+      assert.ok(withMarket.competitiveness > withoutMarket.competitiveness);
+    });
+
+    test('Premier League: dispatched the same way - usually the ONLY market-based closeness EPL ever gets', () => {
+      const base = { sport: 'Premier League', broadcast: '', oddsSpread: null, competitors: [{ record: null }, { record: null }] };
+      const withoutMarket = computeMatchObjectiveScore(base, {});
+      const withMarket = computeMatchObjectiveScore(
+        { ...base, oddsMarketWinPctAway: 49, oddsMarketWinPctHome: 51 },
+        {}
+      );
+      assert.ok(withMarket.competitiveness > withoutMarket.competitiveness);
+    });
+  });
+
   // Live-verified regression (2026-09-20, docs/recommendation-engine-audit.md
   // Round 14): Crystal Palace's real ESPN summary that day was "1-1-3" (1
   // win, 1 loss, 3 draws), parsed by the OLD parseOverallRecord into just
@@ -244,6 +291,93 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
   });
 });
 
+describe('enrichWithPolymarketOdds', () => {
+  function mlbEvent({ awayName, homeName, startTime, liquidity }) {
+    return {
+      teams: [
+        { name: awayName, ordering: 'away' },
+        { name: homeName, ordering: 'home' }
+      ],
+      startTime,
+      markets: [
+        {
+          question: `${awayName} vs. ${homeName}`,
+          outcomes: `["${awayName}", "${homeName}"]`,
+          outcomePrices: '["0.4", "0.6"]',
+          liquidity: String(liquidity)
+        }
+      ]
+    };
+  }
+
+  function baseMatch(overrides) {
+    return {
+      sport: 'MLB',
+      isFinished: false,
+      startTimeUtc: '2026-09-23T17:10:00Z',
+      oddsMarketWinPctAway: null,
+      oddsMarketWinPctHome: null,
+      competitors: [{ name: 'Washington Nationals' }, { name: 'Detroit Tigers' }],
+      ...overrides
+    };
+  }
+
+  test('a genuinely liquid market sets BOTH the display fields and the scoring-gated oddsMarketWinPctAway/Home', async () => {
+    const match = baseMatch();
+    const fetchJson = async () => [
+      mlbEvent({
+        awayName: 'Washington Nationals',
+        homeName: 'Detroit Tigers',
+        startTime: '2026-09-23T17:10:00Z',
+        liquidity: 708759
+      })
+    ];
+    await enrichWithPolymarketOdds([match], fetchJson);
+    assert.equal(match.oddsWinPctAway, 40);
+    assert.equal(match.oddsWinPctHome, 60);
+    assert.equal(match.oddsMarketWinPctAway, 40);
+    assert.equal(match.oddsMarketWinPctHome, 60);
+  });
+
+  // Live case: a real market this far out (see
+  // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment) exists but has
+  // essentially nothing traded on it yet - still shown on the odds bar
+  // (same as a real trader would see), but never trusted for scoring.
+  test('a real but genuinely untraded stub market sets the display fields but NOT the scoring ones', async () => {
+    assert.ok(95 < POLYMARKET_MIN_LIQUIDITY_FOR_SCORING);
+    const match = baseMatch();
+    const fetchJson = async () => [
+      mlbEvent({
+        awayName: 'Washington Nationals',
+        homeName: 'Detroit Tigers',
+        startTime: '2026-09-23T17:10:00Z',
+        liquidity: 95
+      })
+    ];
+    await enrichWithPolymarketOdds([match], fetchJson);
+    assert.equal(match.oddsWinPctAway, 40);
+    assert.equal(match.oddsWinPctHome, 60);
+    assert.equal(match.oddsMarketWinPctAway, null);
+    assert.equal(match.oddsMarketWinPctHome, null);
+  });
+
+  test('a finished match is skipped entirely - no market left to enrich from', async () => {
+    const match = baseMatch({ isFinished: true });
+    const fetchJson = async () => {
+      throw new Error('should never be called for an all-finished build');
+    };
+    await enrichWithPolymarketOdds([match], fetchJson);
+    assert.equal(match.oddsMarketWinPctAway, null);
+  });
+});
+
+describe('PREGAME_SCORING_FIELDS', () => {
+  test('includes the Polymarket market-win% fields, same pregame-freeze treatment as oddsSpread/oddsOverUnder', () => {
+    assert.ok(PREGAME_SCORING_FIELDS.includes('oddsMarketWinPctAway'));
+    assert.ok(PREGAME_SCORING_FIELDS.includes('oddsMarketWinPctHome'));
+  });
+});
+
 describe('describeFactorsZh', () => {
   test('maps recognized English factor strings to short Traditional Chinese labels', () => {
     const labels = describeFactorsZh(['season win% gap 5.0pp', 'postseason game']);
@@ -260,6 +394,10 @@ describe('describeFactorsZh', () => {
   test('maps the big-club factor to its own distinct label, stacking with a derby label', () => {
     const labels = describeFactorsZh(['known derby fixture', 'known big-club fixture']);
     assert.deepEqual(labels, ['宿敵對戰', '豪門球隊']);
+  });
+  test('maps the Polymarket market-win% factor to its own label, distinct from the odds-spread one', () => {
+    assert.deepEqual(describeFactorsZh(['market win% 38/62']), ['預測市場勝率']);
+    assert.deepEqual(describeFactorsZh(['odds spread 0.5']), ['盤口數據']);
   });
 });
 

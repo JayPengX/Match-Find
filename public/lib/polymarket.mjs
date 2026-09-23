@@ -16,6 +16,12 @@
 // live) for the actual network calls, so the exact same matching/parsing
 // logic backs both a card's initial build-time number and every later
 // live update to it.
+//
+// Also feeds the objective SCORING engine now (public/lib/objective-
+// score.mjs's closenessFromWinProb), not just the display badge - but only
+// once match-builder.mjs has checked the market clears
+// POLYMARKET_MIN_LIQUIDITY_FOR_SCORING below; the display badge itself is
+// unaffected and still shows a thin/untraded price same as before.
 
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 
@@ -55,6 +61,24 @@ export const POLYMARKET_TAG_ID = {
 // always fetched first, and fetchAllPolymarketEvents below pages past the
 // 100-cap so a tag with more open events than that (MLB's own case) still
 // gets everything currently available.
+// How liquid (Gamma's own `liquidity` field, in the market's collateral
+// currency) a moneyline market has to be before this app trusts its price
+// for SCORING (public/lib/objective-score.mjs's closenessFromWinProb) -
+// never gates the on-card win% DISPLAY, which shows whatever price exists
+// same as a real trader would see. Calibrated against a live snapshot of
+// every real MLB moneyline market open 2026-09-23 (232 combined-market
+// events across the full remaining regular season, `liquidity` grouped by
+// how far out the game was): a game inside ~21 hours of first pitch was
+// already deeply liquid ($14k-$730k); one ~1.5-3 days out still had real
+// trading ($4k-$12k); but past ~3.5 days out liquidity fell off a cliff to
+// $76-$400 - a market that exists (Polymarket lists it the moment the
+// schedule is known) but that nothing has actually traded on yet, same
+// as an empty order book with a stale/arbitrary last price. 2000 sits
+// cleanly in the real gap between those two tiers, comfortably below every
+// genuinely-traded price observed and comfortably above every untraded-
+// stub one.
+export const POLYMARKET_MIN_LIQUIDITY_FOR_SCORING = 2000;
+
 export const POLYMARKET_EVENTS_PAGE_SIZE = 100;
 export function polymarketEventsByTagUrl(tagId, { limit = POLYMARKET_EVENTS_PAGE_SIZE, offset = 0 } = {}) {
   return `${GAMMA_BASE}/events?tag_id=${tagId}&closed=false&limit=${limit}&offset=${offset}&order=startTime&ascending=true`;
@@ -227,7 +251,13 @@ export function parseCombinedMoneylineMarket(markets, awayName, homeName) {
     if (awayIdx === -1 || homeIdx === -1 || awayIdx === homeIdx) continue;
     const devigged = devigNWay([Number(prices[awayIdx]), Number(prices[homeIdx])]);
     if (!devigged) continue;
-    return { away: devigged[0], home: devigged[1] };
+    // `market.liquidity` comes back as a JSON-ENCODED STRING (like
+    // outcomes/outcomePrices - Gamma's own convention, not just an array
+    // thing), 0 or missing on a market nothing has traded on yet - see
+    // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment for why callers
+    // gate on this before trusting `away`/`home` for anything beyond
+    // display.
+    return { away: devigged[0], home: devigged[1], liquidity: Number(market.liquidity) || 0 };
   }
   return null;
 }
@@ -243,6 +273,12 @@ export function parseSoccerThreeWayMarkets(markets, awayName, homeName) {
   let awayProb = null;
   let homeProb = null;
   let drawProb = null;
+  // Unlike the combined two-outcome MLB/NBA market above, EPL's price is
+  // spread across three SEPARATE order books - liquidity gating needs the
+  // WEAKEST of the three, not just one number, since a thinly-traded draw
+  // market can leave the away/home prices looking liquid while the
+  // three-way price they're devigged against isn't really trustworthy yet.
+  let minLiquidity = Infinity;
   for (const market of markets || []) {
     const outcomes = parseJsonArrayField(market.outcomes);
     const prices = parseJsonArrayField(market.outcomePrices);
@@ -252,18 +288,25 @@ export function parseSoccerThreeWayMarkets(markets, awayName, homeName) {
     const yesPrice = Number(prices[yesIdx]);
     if (!Number.isFinite(yesPrice)) continue;
     const question = market.question || '';
+    const liquidity = Number(market.liquidity) || 0;
     if (/end in a draw/i.test(question)) {
       drawProb = yesPrice;
+      minLiquidity = Math.min(minLiquidity, liquidity);
       continue;
     }
     const willWinMatch = /^will (.+?) win\b/i.exec(question);
     if (!willWinMatch) continue;
-    if (teamNamesMatch(willWinMatch[1], awayName)) awayProb = yesPrice;
-    else if (teamNamesMatch(willWinMatch[1], homeName)) homeProb = yesPrice;
+    if (teamNamesMatch(willWinMatch[1], awayName)) {
+      awayProb = yesPrice;
+      minLiquidity = Math.min(minLiquidity, liquidity);
+    } else if (teamNamesMatch(willWinMatch[1], homeName)) {
+      homeProb = yesPrice;
+      minLiquidity = Math.min(minLiquidity, liquidity);
+    }
   }
   const devigged = devigNWay([awayProb, drawProb, homeProb]);
   if (!devigged) return null;
-  return { away: devigged[0], draw: devigged[1], home: devigged[2] };
+  return { away: devigged[0], draw: devigged[1], home: devigged[2], liquidity: Number.isFinite(minLiquidity) ? minLiquidity : 0 };
 }
 
 // One shared entry point for every team-vs-team sport this app tracks -

@@ -11,6 +11,7 @@ import {
   weightedAverage,
   closenessFromWinPctGap,
   closenessFromSpread,
+  closenessFromWinProb,
   playoffProximityScore,
   cutoffProximityScore,
   streakMomentum,
@@ -85,6 +86,36 @@ describe('closenessFromSpread', () => {
     assert.equal(closenessFromSpread(null, 3), null);
     assert.equal(closenessFromSpread(1, 0), null);
     assert.equal(closenessFromSpread(1, null), null);
+  });
+});
+
+describe('closenessFromWinProb', () => {
+  test('a genuine 50/50 scores a perfect 10', () => {
+    assert.equal(closenessFromWinProb(50, 50), 10);
+  });
+
+  test('a gap at the lopsided threshold (70pp) scores near the bottom', () => {
+    assert.equal(closenessFromWinProb(15, 85), 1);
+  });
+
+  test('a gap beyond the threshold still clamps at 1, never negative', () => {
+    assert.equal(closenessFromWinProb(1, 99), 1);
+  });
+
+  test('the direction of the favorite does not matter, only the gap size', () => {
+    assert.equal(closenessFromWinProb(38, 62), closenessFromWinProb(62, 38));
+  });
+
+  test('a real live-fetched moderate favorite (38/62) scores mid-scale', () => {
+    // Washington Nationals @ Detroit Tigers, live-fetched 2026-09-23 with
+    // liquidity $708,759 - a real, genuinely-liquid pregame moneyline.
+    assert.equal(closenessFromWinProb(38, 62), 7);
+  });
+
+  test('returns null when either probability is missing/invalid', () => {
+    assert.equal(closenessFromWinProb(null, 50), null);
+    assert.equal(closenessFromWinProb(50, undefined), null);
+    assert.equal(closenessFromWinProb(NaN, 50), null);
   });
 });
 
@@ -465,6 +496,69 @@ describe('computeMlbObjectiveScore', () => {
     });
   });
 
+  // Polymarket's own devigged moneyline win% (see match-builder.mjs's
+  // enrichWithPolymarketOdds, gated to only ever arrive here once the
+  // market is genuinely liquid) REPLACES the run-line-based oddsCloseness,
+  // never stacks with it - both measure the same underlying thing (how
+  // lopsided this fixture is expected to be).
+  describe('marketWinPctAway/marketWinPctHome (Polymarket, replacing not stacking with oddsSpread)', () => {
+    test('a real market win% contributes to competitiveness even with no odds spread or record signal at all', () => {
+      const result = computeMlbObjectiveScore({
+        awayWinPct: null,
+        homeWinPct: null,
+        away: null,
+        home: null,
+        isPostseason: false,
+        marketWinPctAway: 50,
+        marketWinPctHome: 50
+      });
+      assert.equal(result.competitiveness, 10);
+      assert.ok(result.factors.some(f => f.startsWith('market win%')));
+    });
+
+    test('takes priority over a real odds spread when both are present, rather than blending the two', () => {
+      const base = { awayWinPct: null, homeWinPct: null, away: null, home: null, isPostseason: false, oddsSpread: 3 };
+      // oddsSpread: 3 alone (MLB_SPREAD_LOPSIDED_AT) would bottom competitiveness
+      // out near 1 - a genuinely close market price should override that read.
+      const spreadOnly = computeMlbObjectiveScore(base);
+      const withLiquidMarket = computeMlbObjectiveScore({ ...base, marketWinPctAway: 49, marketWinPctHome: 51 });
+      assert.ok(withLiquidMarket.competitiveness > spreadOnly.competitiveness);
+      assert.ok(withLiquidMarket.factors.some(f => f.startsWith('market win%')));
+      assert.ok(!withLiquidMarket.factors.some(f => f.startsWith('odds spread')));
+    });
+
+    test('falls back to the odds spread when no market win% is available (the common case - see POLYMARKET_MIN_LIQUIDITY_FOR_SCORING)', () => {
+      const result = computeMlbObjectiveScore({
+        awayWinPct: null,
+        homeWinPct: null,
+        away: null,
+        home: null,
+        isPostseason: false,
+        oddsSpread: 0.5,
+        marketWinPctAway: null,
+        marketWinPctHome: null
+      });
+      assert.ok(result.competitiveness >= 8);
+      assert.ok(result.factors.some(f => f.startsWith('odds spread')));
+    });
+
+    // The exact real live case this was calibrated against - see
+    // closenessFromWinProb's own comment for the full 232-market liquidity
+    // investigation this constant/gating threshold came from.
+    test('live case: Washington Nationals @ Detroit Tigers, liquidity $708,759, 38/62', () => {
+      const result = computeMlbObjectiveScore({
+        awayWinPct: null,
+        homeWinPct: null,
+        away: null,
+        home: null,
+        isPostseason: false,
+        marketWinPctAway: 38,
+        marketWinPctHome: 62
+      });
+      assert.equal(result.competitiveness, 7);
+    });
+  });
+
   test('watchability comes ONLY from rivalry/big-club - never from stakes, skill, or momentum', () => {
     const base = { awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isBigClub: false };
     const plain = computeMlbObjectiveScore({ ...base, away: null, home: null });
@@ -649,6 +743,32 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(hotStreak.factors.some(f => f.startsWith('last 10')));
     assert.ok(hotStreak.factors.some(f => f.startsWith('streak')));
   });
+
+  // Same replace-not-stack rule as MLB's own - see that describe block's
+  // own comment for the full reasoning.
+  describe('marketWinPctAway/marketWinPctHome (Polymarket, replacing not stacking with oddsSpread)', () => {
+    test('takes priority over a real odds spread when both are present', () => {
+      const base = { awayWinPct: null, homeWinPct: null, isPostseason: false, isRivalry: false, isNationalBroadcast: false, oddsSpread: 15 };
+      const spreadOnly = computeNbaObjectiveScore(base);
+      const withLiquidMarket = computeNbaObjectiveScore({ ...base, marketWinPctAway: 49, marketWinPctHome: 51 });
+      assert.ok(withLiquidMarket.competitiveness > spreadOnly.competitiveness);
+      assert.ok(withLiquidMarket.factors.some(f => f.startsWith('market win%')));
+    });
+
+    test('falls back to the odds spread when no market win% is available', () => {
+      const result = computeNbaObjectiveScore({
+        awayWinPct: null,
+        homeWinPct: null,
+        isPostseason: false,
+        isRivalry: false,
+        isNationalBroadcast: false,
+        oddsSpread: 1,
+        marketWinPctAway: null,
+        marketWinPctHome: null
+      });
+      assert.ok(result.factors.some(f => f.startsWith('odds spread')));
+    });
+  });
 });
 
 describe('computeEplObjectiveScore', () => {
@@ -707,6 +827,34 @@ describe('computeEplObjectiveScore', () => {
       const withoutBroadcast = computeEplObjectiveScore({ ...base, isNationalBroadcast: false });
       const withBroadcast = computeEplObjectiveScore({ ...base, isNationalBroadcast: true });
       assert.ok(withBroadcast.watchability > withoutBroadcast.watchability);
+    });
+  });
+
+  // Same replace-not-stack rule as MLB/NBA's own - worth more here, since
+  // ESPN essentially never posts a real spread for EPL at all (see
+  // match-builder.mjs's oddsContext comment), so this is usually the ONLY
+  // market-based closeness signal EPL fixtures get, not just an upgrade
+  // over an already-present one.
+  describe('marketWinPctAway/marketWinPctHome (Polymarket, replacing not stacking with oddsSpread)', () => {
+    test('a real market win% contributes to competitiveness with no season-record or odds-spread signal at all', () => {
+      const result = computeEplObjectiveScore({
+        awayWinPct: null,
+        homeWinPct: null,
+        isDerby: false,
+        isBigClub: false,
+        marketWinPctAway: 50,
+        marketWinPctHome: 50
+      });
+      assert.equal(result.competitiveness, 10);
+      assert.ok(result.factors.some(f => f.startsWith('market win%')));
+    });
+
+    test('takes priority over a real odds spread when both are present', () => {
+      const base = { awayWinPct: null, homeWinPct: null, isDerby: false, isBigClub: false, oddsSpread: 15 };
+      const spreadOnly = computeEplObjectiveScore(base);
+      const withLiquidMarket = computeEplObjectiveScore({ ...base, marketWinPctAway: 49, marketWinPctHome: 51 });
+      assert.ok(withLiquidMarket.competitiveness > spreadOnly.competitiveness);
+      assert.ok(withLiquidMarket.factors.some(f => f.startsWith('market win%')));
     });
   });
 

@@ -209,6 +209,62 @@ one recommendation system.
   [Known Limitations](#known-limitations) — because ESPN's own standings
   response for this league has no per-team streak/last-5 figure at all.
 
+### Market win% (Polymarket), replacing the odds spread when it's liquid
+
+MLB/NBA/Premier League's own `competitiveness` used to blend season record,
+recent form, and ESPN's own betting-market spread (`closenessFromSpread`).
+Polymarket's own devigged moneyline win% (`public/lib/polymarket.mjs` —
+already fetched for the on-card odds badge, see [Live Win%
+Odds](#live-win-odds)) now feeds the same slot too, via
+`closenessFromWinProb`, whenever a fixture's market is actually liquid — a
+real trade price needs no spread-to-closeness heuristic the way a
+sportsbook line does, and for Premier League specifically it's usually the
+*only* market-based closeness signal there is at all, since ESPN
+essentially never posts a real spread for EPL fixtures.
+
+This **replaces** the spread-based signal rather than blending with it —
+both measure the exact same underlying thing (how lopsided this fixture is
+expected to be), and stacking them would just double-count one real signal
+as two. The market price wins whenever it's genuinely there; the odds
+spread survives purely as the fallback for the (common) case of a fixture
+more than roughly a day and a half out, before Polymarket has real depth.
+
+**Liquidity gating.** A live snapshot of every real MLB moneyline market
+open on 2026-09-23 (232 combined-market events across the remaining
+season) showed liquidity tracks how soon the game is, not a flat number:
+inside ~21 hours of first pitch, markets were already deeply liquid
+($14k–$730k); 1.5–3 days out, still real trading ($4k–$12k); past ~3.5
+days out, liquidity fell off a cliff to $76–$400 — a market that exists
+(Polymarket lists it the moment the schedule is known) but that nothing
+has actually traded on yet, same as an empty order book with a stale last
+price. `POLYMARKET_MIN_LIQUIDITY_FOR_SCORING` (2000, in
+`public/lib/polymarket.mjs`) sits in the real gap between those two tiers.
+A fixture whose market hasn't cleared it yet keeps
+`oddsMarketWinPctAway`/`oddsMarketWinPctHome` null and falls back to the
+odds spread — the on-card win% badge itself is unaffected either way and
+still shows whatever price exists, thin or not, same as a real trader
+would see; only the SCORE is gated. `WINPROB_LOPSIDED_GAP_AT` (70
+percentage points, `public/lib/objective-score.mjs`), the point past which
+a market win% gap bottoms out `competitiveness` the same way a maxed-out
+spread already did, is calibrated the same way — the 232-market sample's
+own real pregame gap distribution (median 22pp, p99 66pp, max 73pp) rarely
+gets more lopsided than that for a single MLB game, since even a clear
+favorite is bounded by starting-pitcher variance.
+
+**Scope limit, not an oversight:** this only ever feeds scoring on a build
+that awaits Polymarket enrichment BEFORE scoring runs (`buildMatches`'
+main path, which `scripts/build-data.mjs` and `dump-day-plan.mjs` already
+use) — the live in-browser refresh (`public/app.js`) still fetches
+Polymarket odds as an unblocked, non-blocking fast-follow *after* the
+score has already painted, exactly as before, and does not retroactively
+rescore once it lands. A viewer's live session keeps that day's
+spread-based closeness for the rest of the session; the next full rebuild
+or page reload picks up the market upgrade. Deliberate: the closeness
+component this replaces is already a small slice (≤30%) of a small slice
+(10%) of the overall `bestMatchScore`, not worth re-running the
+per-sport standings-context plumbing client-side on every background odds
+tick for.
+
 ### Why AI was removed from scoring
 
 `competitiveness`/`watchability`/`enduranceScore`/`broadcastQuality` used
@@ -1693,7 +1749,12 @@ fixture. This was chosen over a sportsbook-odds feed (an earlier version of
 this feature used ESPN's own) specifically because a real prediction
 market's own trade price already *is* a probability (no American-odds
 conversion needed), and it runs a genuine market on every sport this site
-tracks, including F1 — both the Race (an outright winner market across the
+tracks, including F1. As of the liquidity-gated scoring integration below,
+this is no longer purely a display badge, either — see [Market win%
+(Polymarket), replacing the odds spread when it's
+liquid](#market-win-polymarket-replacing-the-odds-spread-when-its-liquid)
+under [The Deterministic Scoring
+Engine](#the-deterministic-scoring-engine) — both the Race (an outright winner market across the
 whole grid) and Qualifying (a separate "Driver Pole Position" outright
 market, same shape) — shown as the top 3 favorites, not a two-sided bar,
 since that wouldn't make sense for a 20-driver field, something no

@@ -71,6 +71,35 @@ export function closenessFromSpread(absSpread, lopsidedAt) {
   return clamp(Math.round(10 - (Math.abs(absSpread) / lopsidedAt) * 9), 1, 10);
 }
 
+// A real prediction-market win-probability gap of 0 (a genuine 50/50, or a
+// soccer market pricing a real chance of a draw with neither side a clear
+// favorite) scores a 10; a gap at or beyond WINPROB_LOPSIDED_GAP_AT bottoms
+// out at 1 - same shape as closenessFromSpread just above, but for
+// Polymarket's own devigged win% (see public/lib/polymarket.mjs) instead of
+// a sportsbook spread. A percentage-point gap is already sport-agnostic
+// (unlike a spread's own units, which genuinely differ by sport - MLB run
+// lines vs NBA point spreads is exactly why closenessFromSpread takes a
+// per-sport `lopsidedAt`), so one shared threshold covers MLB/NBA/EPL alike
+// here, never mixed with closenessFromSpread's own inputs for the same
+// fixture - see this file's MLB/NBA/EPL sections for how the two are
+// combined (whichever is actually available, never both at once).
+//
+// WINPROB_LOPSIDED_GAP_AT calibrated against real live Polymarket data, not
+// guessed: 232 genuinely-liquid (liquidity >= POLYMARKET_MIN_LIQUIDITY_FOR_
+// SCORING) pregame MLB moneylines fetched live 2026-09-23 had a gap
+// distribution of min 0 / median 22 / p90 54 / p99 66 / max 73 percentage
+// points - a single MLB game's own starting-pitcher-driven variance means
+// even a clear favorite rarely prices past the mid-70s. 70 sits just above
+// that real observed ceiling, so only a fixture at least as lopsided as the
+// most lopsided genuinely-traded game actually seen bottoms out, rather
+// than an arbitrary round number.
+export const WINPROB_LOPSIDED_GAP_AT = 70;
+export function closenessFromWinProb(awayPct, homePct) {
+  if (!Number.isFinite(awayPct) || !Number.isFinite(homePct)) return null;
+  const gap = Math.abs(awayPct - homePct);
+  return clamp(Math.round(10 - (gap / WINPROB_LOPSIDED_GAP_AT) * 9), 1, 10);
+}
+
 // How close a team is to a real playoff spot right now - the smaller of
 // its division-race and wild-card-race deficits (a team can clinch either
 // way, so being close on EITHER axis keeps the race alive), turned into a
@@ -294,7 +323,9 @@ export function computeMlbObjectiveScore({
   isBigClub,
   isNationalBroadcast,
   oddsSpread,
-  oddsOverUnder
+  oddsOverUnder,
+  marketWinPctAway,
+  marketWinPctHome
 }) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
@@ -318,14 +349,30 @@ export function computeMlbObjectiveScore({
   // a non-standard run line is treated as a real signal.
   const isStandardRunLine = Number.isFinite(oddsSpread) && Math.abs(oddsSpread) === MLB_STANDARD_RUN_LINE;
   const oddsCloseness = isStandardRunLine ? null : closenessFromSpread(oddsSpread, MLB_SPREAD_LOPSIDED_AT);
-  if (Number.isFinite(oddsCloseness)) factors.push(`odds spread ${oddsSpread}`);
+  // Polymarket's own devigged moneyline win% (see match-builder.mjs's
+  // enrichWithPolymarketOdds - already gated there to only ever arrive here
+  // once the market clears POLYMARKET_MIN_LIQUIDITY_FOR_SCORING, never a
+  // thin/untraded stub) replaces the run-line signal above rather than
+  // stacking with it: both measure the exact same thing (how lopsided this
+  // specific fixture is expected to be), and a real moneyline needs no
+  // spread-to-closeness heuristic the run line does, so it wins whenever
+  // it's actually available. The run line survives purely as the fallback
+  // for the (common, given real Polymarket liquidity data) case of a
+  // fixture more than ~1.5 days out, before the market has real depth.
+  const marketCloseness = closenessFromWinProb(marketWinPctAway, marketWinPctHome);
+  const priceCloseness = marketCloseness ?? oddsCloseness;
+  if (Number.isFinite(marketCloseness)) {
+    factors.push(`market win% ${marketWinPctAway}/${marketWinPctHome}`);
+  } else if (Number.isFinite(oddsCloseness)) {
+    factors.push(`odds spread ${oddsSpread}`);
+  }
 
   const competitiveness = clamp(
     Math.round(
       weightedAverage([
         [seasonCloseness, 0.45],
         [recentCloseness, 0.3],
-        [oddsCloseness, 0.25]
+        [priceCloseness, 0.25]
       ]) ?? 5
     ),
     1,
@@ -446,7 +493,9 @@ export function computeNbaObjectiveScore({
   isRivalry,
   isNationalBroadcast,
   oddsSpread,
-  oddsOverUnder
+  oddsOverUnder,
+  marketWinPctAway,
+  marketWinPctHome
 }) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
@@ -462,14 +511,22 @@ export function computeNbaObjectiveScore({
   }
 
   const oddsCloseness = closenessFromSpread(oddsSpread, NBA_SPREAD_LOPSIDED_AT);
-  if (Number.isFinite(oddsCloseness)) factors.push(`odds spread ${oddsSpread}`);
+  // Same replacement, not stacking, as MLB's own - see that function's own
+  // comment on marketCloseness/priceCloseness for the full reasoning.
+  const marketCloseness = closenessFromWinProb(marketWinPctAway, marketWinPctHome);
+  const priceCloseness = marketCloseness ?? oddsCloseness;
+  if (Number.isFinite(marketCloseness)) {
+    factors.push(`market win% ${marketWinPctAway}/${marketWinPctHome}`);
+  } else if (Number.isFinite(oddsCloseness)) {
+    factors.push(`odds spread ${oddsSpread}`);
+  }
 
   const competitiveness = clamp(
     Math.round(
       weightedAverage([
         [seasonCloseness, 0.45],
         [recentCloseness, 0.3],
-        [oddsCloseness, 0.25]
+        [priceCloseness, 0.25]
       ]) ?? 5
     ),
     1,
@@ -557,7 +614,9 @@ export function computeEplObjectiveScore({
   isBigClub,
   isNationalBroadcast,
   oddsSpread,
-  oddsOverUnder
+  oddsOverUnder,
+  marketWinPctAway,
+  marketWinPctHome
 }) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
@@ -567,10 +626,26 @@ export function computeEplObjectiveScore({
     factors.push(`season points-rate gap ${(Math.abs(awayWinPct - homeWinPct) * 100).toFixed(1)}pp`);
   }
   const oddsCloseness = closenessFromSpread(oddsSpread, NBA_SPREAD_LOPSIDED_AT);
-  if (Number.isFinite(oddsCloseness)) factors.push(`odds spread ${oddsSpread}`);
+  // Same replacement, not stacking, as MLB's own - see computeMlbObjectiveScore's
+  // own comment on marketCloseness/priceCloseness. Worth more here than for
+  // MLB/NBA (ESPN essentially never posts a real spread for EPL at all - see
+  // match-builder.mjs's oddsContext comment - so this is usually the ONLY
+  // market-based closeness signal EPL ever gets, not a liquidity-gated
+  // upgrade over an already-present one). `closenessFromWinProb` reads
+  // straight off market.oddsMarketWinPctAway/Home regardless of a real draw
+  // chance already being priced in - a market pricing a likely draw already
+  // has away/home probabilities close together, so it naturally scores as
+  // "close" without EPL needing its own three-way variant of this function.
+  const marketCloseness = closenessFromWinProb(marketWinPctAway, marketWinPctHome);
+  const priceCloseness = marketCloseness ?? oddsCloseness;
+  if (Number.isFinite(marketCloseness)) {
+    factors.push(`market win% ${marketWinPctAway}/${marketWinPctHome}`);
+  } else if (Number.isFinite(oddsCloseness)) {
+    factors.push(`odds spread ${oddsSpread}`);
+  }
 
   const competitiveness = clamp(
-    Math.round(weightedAverage([[seasonCloseness, 0.7], [oddsCloseness, 0.3]]) ?? 5),
+    Math.round(weightedAverage([[seasonCloseness, 0.7], [priceCloseness, 0.3]]) ?? 5),
     1,
     10
   );

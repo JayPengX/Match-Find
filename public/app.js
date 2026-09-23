@@ -3539,21 +3539,30 @@ let fullRefreshTimer = null;
 let nextNearTermRefreshAt = null;
 let nextFullRefreshAt = null;
 
-// Polymarket odds is a pure display badge - recommendation.mjs's own
-// scoring never reads it (confirmed against every factor it does score:
-// live excitement, objective record, standings/title-race context, none
-// of it odds) - so it's the one piece of a build that's safe to let arrive
-// AFTER the match itself has already painted, rather than making every
-// refresh sit through Polymarket's own pagination first. Both refresh
-// tiers below pass `enrichOdds: false` to buildMatches and call this
-// straight on state.allRawMatches instead - the SAME objects buildMatches'
-// own `matches` return value already put there (mergeFreshMatches upserts
-// by reference, never clones - see its own comment), so mutating them
-// here is exactly as safe as pollLiveMatches already mutating those same
-// objects in place. Unblocked/fire-and-forget from both call sites; a
-// refresh that lands mid-flight just leaves this one targeting orphaned
-// objects nobody renders from anymore, same harmless race pollLiveMatches
-// already tolerates.
+// Polymarket odds is treated as a pure display badge HERE specifically -
+// this call fills in oddsWinPctAway/Home/Draw for the odds bar, but
+// deliberately does NOT feed match-builder.mjs's own objective scoring the
+// way a full buildMatches({ enrichOdds: true }) call now does (see that
+// function's own comment on POLYMARKET_MIN_LIQUIDITY_FOR_SCORING/
+// marketWinPctAway for why a liquid market IS a real scoring input now).
+// recomputeAndRender below only re-runs the day-plan/rotation logic over
+// whatever competitiveness/watchability each match ALREADY has - it never
+// recomputes the objective score itself - so this fast-follow is safe to
+// let arrive AFTER the match has already painted, rather than making every
+// refresh sit through Polymarket's own pagination first, at the cost of
+// this session's live view keeping its spread-based closeness for the rest
+// of the session instead of picking up the Polymarket upgrade (see
+// buildMatches' own `enrichOdds` comment for the full reasoning on why
+// that's an acceptable scope limit, not a bug). Both refresh tiers below
+// pass `enrichOdds: false` to buildMatches and call this straight on
+// state.allRawMatches instead - the SAME objects buildMatches' own
+// `matches` return value already put there (mergeFreshMatches upserts by
+// reference, never clones - see its own comment), so mutating them here is
+// exactly as safe as pollLiveMatches already mutating those same objects
+// in place. Unblocked/fire-and-forget from both call sites; a refresh that
+// lands mid-flight just leaves this one targeting orphaned objects nobody
+// renders from anymore, same harmless race pollLiveMatches already
+// tolerates.
 function enrichOddsInBackground() {
   enrichWithPolymarketOdds(state.allRawMatches, proxyFetchJson)
     .then(() => recomputeAndRender())

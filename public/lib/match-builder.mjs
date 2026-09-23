@@ -74,9 +74,15 @@ import { computeConfidence } from './recommendation.mjs';
 // price needs no American-odds conversion, and it's the only feed here
 // that covers F1 at all). enrichWithPolymarketOdds below is what actually
 // wires this in, once per build/refresh, after every match is otherwise
-// built.
+// built - and, now, BEFORE the scoring loop further down (buildMatches
+// itself awaits it first), since a liquid market's price also feeds
+// competitiveness now (see computeMatchObjectiveScore's own
+// marketWinPctAway/Home wiring and POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's
+// comment) - never a hard requirement, just an upgrade over oddsSpread
+// when it's actually there.
 import {
   POLYMARKET_TAG_ID,
+  POLYMARKET_MIN_LIQUIDITY_FOR_SCORING,
   fetchAllPolymarketEvents,
   resolveTeamOdds,
   resolveF1WinnerOdds,
@@ -581,6 +587,16 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         oddsWinPctHome: null,
         oddsWinPctDraw: null,
         oddsFavorites: null,
+        // Same numbers as oddsWinPctAway/Home above, but only ever set once
+        // the market clears POLYMARKET_MIN_LIQUIDITY_FOR_SCORING - see
+        // enrichWithPolymarketOdds below. Kept as separate fields
+        // deliberately: oddsWinPctAway/Home is a pure display badge (any
+        // price, thin or not, same as a real trader would see), while these
+        // two are what computeMatchObjectiveScore actually scores from, and
+        // conflating the two would mean a stale/untraded stub price could
+        // quietly move a fixture's ranking.
+        oddsMarketWinPctAway: null,
+        oddsMarketWinPctHome: null,
         durationMinutes: isFinished
           ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label, pregameEstimateMinutes)
           : pregameEstimateMinutes,
@@ -770,7 +786,9 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         isBigClub: isMlbBigClub(away?.name, home?.name),
         isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
-        oddsOverUnder: match.oddsOverUnder
+        oddsOverUnder: match.oddsOverUnder,
+        marketWinPctAway: match.oddsMarketWinPctAway,
+        marketWinPctHome: match.oddsMarketWinPctHome
       });
       break;
     case 'NBA':
@@ -784,7 +802,9 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         isRivalry: isNbaRivalry(away?.name, home?.name),
         isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
-        oddsOverUnder: match.oddsOverUnder
+        oddsOverUnder: match.oddsOverUnder,
+        marketWinPctAway: match.oddsMarketWinPctAway,
+        marketWinPctHome: match.oddsMarketWinPctHome
       });
       break;
     case 'Premier League':
@@ -812,7 +832,9 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         isBigClub: isEplBigClub(away?.name, home?.name),
         isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
-        oddsOverUnder: match.oddsOverUnder
+        oddsOverUnder: match.oddsOverUnder,
+        marketWinPctAway: match.oddsMarketWinPctAway,
+        marketWinPctHome: match.oddsMarketWinPctHome
       });
       break;
     case 'F1':
@@ -834,6 +856,12 @@ const FACTOR_ZH_HINTS = [
   [/season win% gap|season points-rate gap/, '雙方戰績'],
   [/last 10/, '近期戰況'],
   [/odds spread/, '盤口數據'],
+  // Polymarket's own real-money market win% (see objective-score.mjs's
+  // marketCloseness/priceCloseness comment) - REPLACES 盤口數據 above for a
+  // fixture whose market is liquid enough to trust, so both patterns exist
+  // side by side but a single factor list only ever carries one or the
+  // other, never both (see that same comment for why).
+  [/market win%/, '預測市場勝率'],
   [/playoff proximity/, '季後賽晉級形勢'],
   [/postseason game/, '季後賽'],
   [/streak/, '近期連勝連敗'],
@@ -893,8 +921,14 @@ export function buildObjectiveReasonZh(factors) {
 // `enrichOdds` option below for why.
 // Every field buildMatches' own scoring loop (below) derives from a
 // fixture's PRE-GAME data - its own objective score, the reason built from
-// it, and the ESPN spread/over-under that feeds both that score and the
-// pre-game duration estimate (computeDurationMinutes' own `oddsOverUnder`).
+// it, and the ESPN spread/over-under/Polymarket win% that feeds both that
+// score and the pre-game duration estimate (computeDurationMinutes' own
+// `oddsOverUnder`). oddsMarketWinPctAway/Home follow the exact same
+// pregame-freeze reasoning as oddsSpread/oddsOverUnder just below them -
+// once a game goes live, Polymarket's own price stops being a "will they
+// win" market and starts just tracking the live score, so it must freeze
+// at its last pregame value same as everything else here, not keep
+// drifting the score after kickoff.
 export const PREGAME_SCORING_FIELDS = [
   'competitiveness',
   'watchability',
@@ -909,6 +943,8 @@ export const PREGAME_SCORING_FIELDS = [
   'confidence',
   'oddsSpread',
   'oddsOverUnder',
+  'oddsMarketWinPctAway',
+  'oddsMarketWinPctHome',
   'plannedDurationMinutes'
 ];
 
@@ -993,6 +1029,17 @@ export async function enrichWithPolymarketOdds(matches, fetchJson) {
       match.oddsWinPctAway = result.away;
       match.oddsWinPctHome = result.home;
       match.oddsWinPctDraw = result.draw;
+      // Gated separately from the display fields above - see
+      // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment for the live
+      // liquidity investigation behind this threshold. A fixture whose
+      // market hasn't cleared it yet keeps these null and
+      // computeMatchObjectiveScore falls back to oddsSpread instead (see
+      // that function's own marketCloseness/priceCloseness comment) -
+      // never a stale/untraded stub price silently moving a ranking.
+      if (Number.isFinite(result.liquidity) && result.liquidity >= POLYMARKET_MIN_LIQUIDITY_FOR_SCORING) {
+        match.oddsMarketWinPctAway = result.away;
+        match.oddsMarketWinPctHome = result.home;
+      }
     }
   }
 }
@@ -1016,14 +1063,24 @@ export async function enrichWithPolymarketOdds(matches, fetchJson) {
 // backfill anything - are completely unaffected) lets app.js opt OUT of
 // odds specifically: Polymarket's own pagination is real, live-measured
 // wall-clock time this function used to make every caller sit through
-// before returning ANYTHING, even though odds affects nothing about
-// WHICH matches get recommended (recommendation.mjs's own scoring never
-// reads it at all - it's a pure display badge). app.js instead calls the
-// now-exported enrichWithPolymarketOdds itself as an unblocked fast-follow
-// once the real (score-affecting) build has already painted - see its own
-// call sites for why that's safe to do straight on the live match
-// objects, same pattern pollLiveMatches already uses for its own
-// odds/score refresh.
+// before returning ANYTHING. A liquid market's price DOES now feed
+// competitiveness when it's actually there (see
+// POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment) - but only ever as an
+// upgrade over the same oddsSpread-based closeness this already fell back
+// to before Polymarket existed, never a signal a fixture has NO other way
+// to get, so skipping it here costs a slightly less current closeness
+// number, not a missing one. app.js instead calls the now-exported
+// enrichWithPolymarketOdds itself as an unblocked fast-follow once the
+// initial build has already painted, WITHOUT rescoring afterward (see that
+// call site's own comment) - so a viewer's live in-browser refresh keeps
+// today's spread-based closeness for the rest of that session even after
+// the market fills in; only the next full batch build (scripts/build-
+// data.mjs, or a page reload) picks up the upgrade. A deliberate scope
+// limit, not an oversight - rescoring on every background odds tick would
+// mean re-running the whole per-sport standings-context plumbing
+// client-side for a component that's already a small slice of a small
+// slice of the overall ranking (competitiveness is 10% of bestMatchScore;
+// this replaces at most 25-30% of THAT).
 export async function buildMatches({
   now = new Date(),
   daysAhead = DEFAULT_DAYS_AHEAD,
