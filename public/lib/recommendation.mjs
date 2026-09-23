@@ -1940,3 +1940,33 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
 
   return withScores;
 }
+
+// Which alternatives each pick in `plan` shows in its swipe stack, given
+// the unpinned `baseline` plan (see app.js's stableDayPlan): an ordinary
+// pick keeps its baseline alternatives, and a viewer pin that isn't itself
+// a baseline pick takes over the stack(s) of every baseline pick it
+// displaced - the displaced picks plus their own alternatives, so the pin
+// is the only card added. A pin that displaced TWO picks gets both of
+// their stacks merged into one. Returns Map<matchId, matchId[]>, unfiltered
+// (the caller drops anything recommended/finished/missing).
+export function planStackAlternativeIds(plan, baseline, viewerPins) {
+  const planIds = new Set(plan.map(m => m.id));
+  const baselineById = new Map(baseline.map(m => [m.id, m]));
+  const clashes = (a, b) => {
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    return ai.start < bi.end && bi.start < ai.end;
+  };
+  const result = new Map();
+  plan.forEach(match => {
+    let ids;
+    if (viewerPins && viewerPins.has(match.id) && !baselineById.has(match.id)) {
+      const displaced = baseline.filter(b => !b.isFinished && !planIds.has(b.id) && clashes(b, match));
+      ids = displaced.flatMap(b => [b.id, ...(b.alternativeIds || [])]);
+    } else {
+      ids = (baselineById.get(match.id) || match).alternativeIds || [];
+    }
+    result.set(match.id, [...new Set(ids)].filter(id => id !== match.id));
+  });
+  return result;
+}

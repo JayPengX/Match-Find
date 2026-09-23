@@ -74,6 +74,7 @@ import {
   estimatedDurationMinutes,
   estimateLiveDurationMinutes,
   computeDayPlan,
+  planStackAlternativeIds,
   computeVarietyRotation,
   mergeVarietyForcedIds,
   clearRotationIsPreferred,
@@ -3026,22 +3027,7 @@ function renderRecommendedSection() {
   // greyed out and would suddenly get featured). Swiping off it clears the
   // pin, so it leaves the stack again.
   const baselineById = new Map(baseline.map(m => [m.id, m]));
-  const planClashes = (a, b) => {
-    const ai = schedulingInterval(a);
-    const bi = schedulingInterval(b);
-    return ai.start < bi.end && bi.start < ai.end;
-  };
-  const stackAlternativeIds = new Map();
-  dayPlan.forEach(match => {
-    let ids;
-    if (viewerPins.has(match.id) && !baselineById.has(match.id)) {
-      const displaced = baseline.filter(b => !b.isFinished && !dayPlan.some(p => p.id === b.id) && planClashes(b, match));
-      ids = displaced.flatMap(b => [b.id, ...(b.alternativeIds || [])]);
-    } else {
-      ids = (baselineById.get(match.id) || match).alternativeIds || [];
-    }
-    stackAlternativeIds.set(match.id, [...new Set(ids)]);
-  });
+  const stackAlternativeIds = planStackAlternativeIds(dayPlan, baseline, viewerPins);
   // Per-day, per-slot FROZEN membership - see state.stackMembershipByDay's
   // own comment for why. computeDayPlan's alternativeIds is genuinely
   // recomputed per CHOICE (whichever member the scheduler/a pin actually
@@ -3102,6 +3088,11 @@ function renderRecommendedSection() {
       // the pin does, and freezing it would leave the pinned game behind in
       // the original stack after the viewer swipes off it.
       const members = [match, ...alternatives];
+      // The WHOLE merged stack is the slot a swipe acts on - a pin that
+      // displaced two picks (A and C) has both of their stacks in here, and
+      // a narrower slotKey (the pin's own conflict cluster, which may hold
+      // only A) would leave the pin behind when the viewer swipes to C.
+      match.slotKey = slotKeyFromMembers(members);
       members.forEach(m => featuredIds.add(m.id));
       fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0));
     } else if (alternatives.length) {
