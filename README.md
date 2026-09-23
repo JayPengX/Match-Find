@@ -327,7 +327,9 @@ Red Sox game draws more than either fact alone):
 
 - **MLB**: `+2` known historic rivalry (`MLB_RIVALRY_PAIRS`), `+2`
   marquee franchise (`MLB_BIG_CLUBS` — Yankees, Dodgers, Red Sox, Cubs,
-  Giants, Cardinals, Braves, Mets; either side alone qualifies).
+  Giants, Cardinals, Braves, Mets; either side alone qualifies), `+1`
+  national broadcast (`isNationalBroadcast`, `MLB_NATIONAL_BROADCAST_NETWORKS`
+  — see below).
 - **NBA**: `+1.5` known rivalry, `+1` national broadcast
   (`isNationalBroadcast`).
 - **EPL**: `+2` known derby (`isEplDerby`), `+2` big club
@@ -394,6 +396,31 @@ competing with it. This is exactly the feature whose interaction with the
 old competitiveness-gated model caused the Brewers/Phillies blackout above
 — fixed by the full rewrite this whole section now describes, not by
 retuning the old gate further.
+
+**National broadcast — MLB's own gap, not just NBA's.** MLB never had NBA's
+own `isNationalBroadcast` bonus at all, despite the exact same real-world
+data (ESPN's own `broadcasts[].names`) already being fetched for every
+fixture. Live case caught directly from what a real TV network actually
+pushes, not a heuristic guess (direct instruction: "look what actual TV
+networks and public media actually push"): Cleveland Guardians @ Boston Red
+Sox — a live, 1-game-back AL Central race, magic number 5 — was tagged
+plain `ESPN` in the real fetched data specifically on 2026-09-24, the one
+day ESPN chose to air it nationally (independently confirmed against a live
+web search of ESPN's own broadcast slate); the same two teams' game the
+very next day carried only `MLB.TV`. Before this signal existed, both days
+scored identically (a `bestMatchScore` of 7.1) from team/stakes signals
+alone — a `0.3` margin over a same-slot rival (Cincinnati Reds @ Atlanta
+Braves, whose own division leader had already clinched, `stakes` discounted
+to 6) narrow enough to fall inside the variety-rotation mechanism's own
+`0.6` close-call threshold (see [Back-to-back variety](#back-to-back-variety-whole-window-rotation-among-real-close-contenders)),
+so rotation spread the pick across both days — handing the real ESPN night
+to the stakes-less Reds/Braves game instead of the actual marquee race.
+`MLB_NATIONAL_BROADCAST_NETWORKS` (`sport-duration.mjs`) is a short,
+exact-match list (`ESPN`, `ESPN2`, `ABC`, `FOX`, `FS1`, `TBS`, `Apple TV+`,
+`Peacock`, `MLB Network`) — deliberately excludes `MLB.TV` (every
+out-of-market game ever, not a producer's choice) and `ESPN Unlmtd` (a
+bundled streaming tier seen on ordinary games with nothing special about
+them, unlike plain `ESPN`).
 
 ### Known scoring limitations
 

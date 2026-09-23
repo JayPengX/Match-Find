@@ -292,6 +292,7 @@ export function computeMlbObjectiveScore({
   isPostseason,
   isRivalry,
   isBigClub,
+  isNationalBroadcast,
   oddsSpread,
   oddsOverUnder
 }) {
@@ -390,6 +391,18 @@ export function computeMlbObjectiveScore({
   if (isBigClub) {
     watchability += 2;
     factors.push('known marquee-franchise fixture');
+  }
+  // ESPN (or another flagship partner) choosing to air THIS specific game
+  // nationally is itself a real producer signal, not something this module
+  // has to infer from team identity/stakes alone - same axis NBA's own
+  // watchability already had, MLB's never did until this real gap was
+  // caught live (see sport-duration.mjs's own MLB_NATIONAL_BROADCAST_NETWORKS
+  // comment for the live case). A flat, undiscounted +1, same increment
+  // NBA's own isNationalBroadcast uses - stacks with rivalry/big-club
+  // exactly like every other fame factor in this section does.
+  if (isNationalBroadcast) {
+    watchability += 1;
+    factors.push('national broadcast');
   }
   watchability = clamp(watchability, 1, 10);
 

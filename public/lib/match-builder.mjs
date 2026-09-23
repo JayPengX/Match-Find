@@ -93,6 +93,7 @@ import {
   predictF1RaceDurationMinutes,
   isMlbRivalry,
   isMlbBigClub,
+  MLB_NATIONAL_BROADCAST_NETWORKS,
   isNbaRivalry,
   isEplDerby,
   isEplBigClub,
@@ -757,6 +758,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         isPostseason: match.isPostseason,
         isRivalry: isMlbRivalry(away?.name, home?.name),
         isBigClub: isMlbBigClub(away?.name, home?.name),
+        isNationalBroadcast: isNationalBroadcast(match.broadcast, MLB_NATIONAL_BROADCAST_NETWORKS),
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });

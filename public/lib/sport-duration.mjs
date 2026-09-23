@@ -267,6 +267,25 @@ export function isMlbBigClub(awayTeam, homeTeam, bigClubs = MLB_BIG_CLUBS) {
   return bigClubs.includes(awayTeam) || bigClubs.includes(homeTeam);
 }
 
+// MLB's own counterpart to NBA_NATIONAL_BROADCAST_NETWORKS above - which of
+// ESPN's own `broadcasts[].names` values for an MLB fixture are a genuine
+// flagship national placement (ESPN choosing to air THIS specific game
+// nationally, ahead of every other one that day) rather than just "you can
+// stream it" (`MLB.TV`, every out-of-market game ever) or a bundled add-on
+// tier (`ESPN Unlmtd`, seen on ordinary games with nothing special about
+// them - see this file's own git history for the live case that ruled it
+// out: Miami Marlins @ Chicago Cubs and Chicago Cubs @ Boston Red Sox both
+// carried this exact label despite neither being a real appointment-viewing
+// pick). Live-verified real case (2026-09-24): Cleveland Guardians @ Boston
+// Red Sox - a live, 1-game-back AL Central race - was tagged plain `ESPN`
+// specifically on the one day ESPN chose to air it nationally, while the
+// same two teams' very next game a day later carried only `MLB.TV`, and a
+// contemporaneous web search independently confirmed ESPN's real broadcast
+// slate agreed. Deliberately a short, exact-match list (same posture as
+// NBA_NATIONAL_BROADCAST_NETWORKS's own comment) rather than trying to
+// enumerate every regional feed or streaming bundle name by pattern.
+export const MLB_NATIONAL_BROADCAST_NETWORKS = ['ESPN', 'ESPN2', 'ABC', 'FOX', 'FS1', 'TBS', 'Apple TV+', 'Peacock', 'MLB Network'];
+
 export function predictNbaDurationMinutes({ awayTeam, homeTeam, broadcast }) {
   const expectedOvertimeMinutes = NBA_OVERTIME_PROBABILITY * NBA_OVERTIME_REAL_MINUTES_PER_PERIOD;
   let modifierTotal = 0;

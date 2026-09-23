@@ -397,6 +397,74 @@ describe('computeMlbObjectiveScore', () => {
     });
   });
 
+  // MLB's own counterpart to computeNbaObjectiveScore's isNationalBroadcast
+  // below - added late, after a real gap was caught live: MLB never had
+  // this signal at all. Live case (2026-09-24): Cleveland Guardians @
+  // Boston Red Sox, a live 1-game-back AL Central race, was tagged plain
+  // `ESPN` in the real fetched data specifically on the one day ESPN chose
+  // to air it nationally (independently confirmed against a live web
+  // search of ESPN's own broadcast slate) - the very next day's game
+  // between the same two teams carried only `MLB.TV`. Before this signal
+  // existed, both days scored identically (7.1) purely from team/stakes
+  // signals, a 0.3 margin over a same-slot rival (Cincinnati Reds @
+  // Atlanta Braves, whose own division leader had already clinched) narrow
+  // enough that the variety-rotation mechanism (recommendation.mjs's
+  // computeVarietyRotation) treated the two as genuine rivals and spread
+  // the pick across both days - handing the real ESPN night to the
+  // stakes-less Reds/Braves game instead. See sport-duration.mjs's own
+  // MLB_NATIONAL_BROADCAST_NETWORKS comment for why the bonus is a plain
+  // exact-network match, not any string containing "ESPN".
+  describe('isNationalBroadcast (a real network choosing to air this specific game)', () => {
+    test('a flagship national broadcast raises watchability over an otherwise-identical fixture with no national placement', () => {
+      const base = { awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false };
+      const plain = computeMlbObjectiveScore({ ...base, isNationalBroadcast: false });
+      const national = computeMlbObjectiveScore({ ...base, isNationalBroadcast: true });
+      assert.ok(national.watchability > plain.watchability);
+      assert.ok(national.factors.includes('national broadcast'));
+    });
+
+    test('stacks with rivalry/big-club rather than competing with them', () => {
+      const base = { awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: true, isBigClub: true };
+      const withoutBroadcast = computeMlbObjectiveScore({ ...base, isNationalBroadcast: false });
+      const withBroadcast = computeMlbObjectiveScore({ ...base, isNationalBroadcast: true });
+      assert.ok(withBroadcast.watchability > withoutBroadcast.watchability);
+    });
+
+    // The exact live case above, reproduced with real numbers: a genuine
+    // 1-game division race (Guardians) against a divison leader that's
+    // already clinched (Braves, divisionLeadMargin 5) should not lose to
+    // it once the real broadcast placement is counted, even though the gap
+    // was only 0.3 (well inside the rotation mechanism's own 0.6 close-call
+    // threshold) before this signal existed.
+    test('live case: turns a too-close-to-call gap into a clear, unambiguous win for the nationally-broadcast race', () => {
+      const guardiansAtRedSoxOnEspn = computeMlbObjectiveScore({
+        awayWinPct: 82 / 157,
+        homeWinPct: 84 / 157,
+        away: { gamesBack: 0, wildCardGamesBack: 0, magicNumber: 5, lastTen: null, streakCode: 'W6' },
+        home: { gamesBack: 12, wildCardGamesBack: 0, lastTen: null, streakCode: 'L3' },
+        isPostseason: false,
+        isRivalry: false,
+        isBigClub: true,
+        isNationalBroadcast: true
+      });
+      const redsAtBravesOnMlbTv = computeMlbObjectiveScore({
+        awayWinPct: 73 / 157,
+        homeWinPct: 92 / 157,
+        away: { gamesBack: 25, wildCardGamesBack: 14, lastTen: null, streakCode: 'W1' },
+        home: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 5, lastTen: null, streakCode: 'L1' },
+        isPostseason: false,
+        isRivalry: false,
+        isBigClub: true,
+        isNationalBroadcast: false
+      });
+      assert.ok(guardiansAtRedSoxOnEspn.watchability > redsAtBravesOnMlbTv.watchability);
+      assert.ok(
+        guardiansAtRedSoxOnEspn.stakes > redsAtBravesOnMlbTv.stakes,
+        'a live magic-number race should already outrank a clinched leader on stakes alone, independent of the broadcast signal'
+      );
+    });
+  });
+
   test('watchability comes ONLY from rivalry/big-club - never from stakes, skill, or momentum', () => {
     const base = { awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isBigClub: false };
     const plain = computeMlbObjectiveScore({ ...base, away: null, home: null });
