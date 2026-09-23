@@ -1652,11 +1652,20 @@ What happens between opening the page and seeing the full list, in order:
    them come back; up to 12 proxy requests run at once
    (`PROXY_FETCH_MAX_CONCURRENCY`); and most of what's requested is
    already in the proxy's shared cache (see the tiers above).
-5. **Logos arrive with their cards.** Team/league logos are requested
-   through ESPN's own resizer at 64px (`sizedEspnLogoUrl` in
+5. **Logos are in place before the page is shown.** Team/league logos are
+   requested through ESPN's own resizer at 64px (`sizedEspnLogoUrl` in
    `public/lib/espn.mjs` — 2-5KB instead of a 20-45KB 500px PNG drawn at
-   21px), and each one starts downloading as soon as the scoreboard naming
-   it arrives.
+   21px). On the first render, the loading screen stays up as a full-screen
+   cover (`.loading-state.is-covering`) over the already-laid-out page and
+   only lifts once every image on the page has loaded and decoded
+   (`revealApp`), capped at `FIRST_REVEAL_IMAGE_WAIT_MS` (1.5s) so a slow or
+   broken image can't hold the page back. Every team's logo in the whole
+   window (not just the day shown) plus the league logos start downloading
+   as soon as the match list is known (`warmMatchLogos`), and those Image
+   objects are kept decoded in memory — stacked cards are rebuilt from
+   scratch on every render (their swipe handlers are tied to one render),
+   and the held copies let those new `<img>`s paint immediately instead of
+   blinking.
 
 `tests/app-shell.test.mjs` keeps the hand-maintained lists involved here
 (the worker's `SHELL_FILES`, the `modulepreload` links, and the preloaded

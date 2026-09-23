@@ -1163,6 +1163,19 @@ main#app {
   border-radius: 18px;
   animation: loading-logo-pulse 1.6s ease-in-out infinite;
 }
+/* While the first render finishes loading its logos (see revealApp in
+   app.js), the loading screen covers the already-laid-out page instead of
+   sitting above it - the page underneath needs real layout (the day
+   scroller centers its selected pill), so it can't just stay hidden.
+   Same look as the in-flow version: same padding, same centered column. */
+.loading-state.is-covering:not([hidden]) {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  max-width: none;
+  margin: 0;
+  background: var(--bg);
+}
 @keyframes loading-logo-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(0.92); opacity: 0.7; }

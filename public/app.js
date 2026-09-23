@@ -277,18 +277,27 @@ async function proxyFetchJson(url, { trim = null } = {}) {
 // show up together with the card instead of popping in afterwards. Same
 // downsized URL updateTeamRow requests (see sizedEspnLogoUrl), so it's the
 // exact same cache entry; each URL is only ever requested once per tab.
-const warmedLogoUrls = new Set();
+//
+// The Image objects are KEPT (not dropped once started) and decoded: stacked
+// cards are rebuilt from scratch on every render (see buildMatchStack), so
+// their logos are brand-new <img> elements each time, and a held, decoded
+// copy of the same URL is what lets the browser paint those immediately
+// instead of blanking them for a moment. ~80 logos at 64px - about a
+// megabyte of decoded pixels at most.
+const warmedLogos = new Map(); // downsized src -> decoded Image
+function warmLogo(logo) {
+  const src = sizedEspnLogoUrl(logo);
+  if (!src || warmedLogos.has(src)) return;
+  const img = new Image();
+  img.referrerPolicy = 'no-referrer';
+  img.src = src;
+  img.decode().catch(() => {});
+  warmedLogos.set(src, img);
+}
 function warmTeamLogos(url, data) {
   if (!url.startsWith('https://site.api.espn.com/') || !Array.isArray(data?.events)) return;
   data.events.forEach(event => {
-    (event.competitions?.[0]?.competitors || []).forEach(competitor => {
-      const src = sizedEspnLogoUrl(competitor.team?.logo);
-      if (!src || warmedLogoUrls.has(src)) return;
-      warmedLogoUrls.add(src);
-      const img = new Image();
-      img.referrerPolicy = 'no-referrer';
-      img.src = src;
-    });
+    (event.competitions?.[0]?.competitors || []).forEach(competitor => warmLogo(competitor.team?.logo));
   });
 }
 
@@ -3446,12 +3455,10 @@ function needsPregameOdds(id) {
 // own first run), so "how a fresh batch of matches turns into what's on
 // screen" only exists in one place.
 function applyFreshBuild(matches, generatedAt) {
-  // Both the instant-paint-from-snapshot call and every real refresh funnel
-  // through here (see this function's own call sites) - hiding the
-  // loading spinner right at the top, unconditionally, means it disappears
-  // the instant EITHER one has something to show, without needing its own
-  // copy of this logic at every call site.
-  if (loadingStateEl) loadingStateEl.hidden = true;
+  // Both snapshot paints and every real refresh funnel through here (see
+  // this function's own call sites), so the loading screen is lifted from
+  // the paths below - immediately when there's nothing to show, or via
+  // revealApp once the first real render's logos are in.
   const previousIds = new Set(state.allRawMatches.map(m => m.id));
   const { rawMatches, tbdMatches } = mergeFreshMatches(matches);
   // A genuine add/remove (a new fixture entering the window, a
@@ -3484,6 +3491,8 @@ function applyFreshBuild(matches, generatedAt) {
     // unhidden for it to actually show up.
     appEl.hidden = !state.tbdMatches.length;
     emptyState.hidden = !!state.tbdMatches.length;
+    // Nothing with logos to wait for here - drop the loading screen now.
+    if (loadingStateEl) loadingStateEl.hidden = true;
     // A genuine build (even an empty one) means the fetch itself didn't
     // fail - clear any stale error message a PRIOR failed refresh left up,
     // same as the non-empty branch below already does. Without this, a
@@ -3501,6 +3510,7 @@ function applyFreshBuild(matches, generatedAt) {
   // populated still deserves its own pill.
   state.daysAhead = DEFAULT_DAYS_AHEAD;
   state.allRawMatches = rawMatches;
+  warmMatchLogos(rawMatches);
   applyEnabledSportsAndRender();
   saveMatchSnapshot(rawMatches, tbdMatches, generatedAt || new Date().toISOString());
   rememberPregameScoring(rawMatches);
@@ -3561,6 +3571,57 @@ function applyEnabledSportsAndRender() {
   renderDayLabels();
   renderFilters();
   renderSections();
+  revealApp();
+}
+
+// ---- First reveal: logos in place before the loading screen lifts ---------
+//
+// The first render used to lift the loading screen the instant the cards
+// existed, and their team/league logos then popped in a moment later -
+// visibly, since they only start downloading once their <img> exists. Now
+// the first render happens UNDER the loading screen (switched to a
+// full-screen cover, see .loading-state.is-covering) and the screen lifts
+// once every image in the page has loaded and decoded - capped at
+// FIRST_REVEAL_IMAGE_WAIT_MS, so a slow or broken image can never hold the
+// page back for more than a moment. Later renders never wait on anything.
+const FIRST_REVEAL_IMAGE_WAIT_MS = 1500;
+let appRevealStarted = false;
+
+function imageReady(img) {
+  const loaded = img.complete
+    ? Promise.resolve()
+    : new Promise(resolve => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      });
+  // decode() makes sure it's ready to paint, not just downloaded; it
+  // rejects for a broken image, which counts as "done" here too.
+  return loaded.then(() => (img.naturalWidth ? img.decode().catch(() => {}) : undefined));
+}
+
+function revealApp() {
+  if (appRevealStarted || !loadingStateEl || loadingStateEl.hidden) return;
+  appRevealStarted = true;
+  loadingStateEl.classList.add('is-covering');
+  const images = [...appEl.querySelectorAll('img')].filter(img => img.getAttribute('src'));
+  Promise.race([
+    Promise.all(images.map(imageReady)),
+    new Promise(resolve => setTimeout(resolve, FIRST_REVEAL_IMAGE_WAIT_MS))
+  ]).then(() => {
+    loadingStateEl.hidden = true;
+    loadingStateEl.classList.remove('is-covering');
+  });
+}
+
+// Starts every team's logo downloading as soon as the match list is known -
+// not just the ones on the day being shown - so switching days later
+// doesn't make them pop in either. Same downsized URLs updateTeamRow uses,
+// shared with warmTeamLogos (see warmLogo); a few KB each.
+function warmMatchLogos(matches) {
+  matches.forEach(match => {
+    [match.logo, ...(Array.isArray(match.competitors) ? match.competitors.map(c => c.logo) : [])].forEach(warmLogo);
+  });
+  Object.values(LEAGUE_LOGOS).forEach(warmLogo);
 }
 
 // ---- Live match data: two refresh tiers, both calling buildMatches -------
