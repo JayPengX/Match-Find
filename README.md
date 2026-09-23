@@ -53,13 +53,15 @@ behind it (see [Page Layout & UI](#page-layout--ui)).
 
 There is no sign-up and no app. It's a static GitHub Pages site, deployed
 only when its own code changes, and installable as a PWA. The match list
-is fetched and scored **live, in the viewer's own browser**, every time
-the page opens and on an ongoing refresh cycle after that (see [How It
-Works](#how-it-works) and [Live Match Data &
-Refresh](#live-match-data--refresh)). A copy of that same build is also
-prebuilt every 5 minutes by a GitHub Action, but only to paint the first
-screen instantly — the live build replaces it within seconds, so it is
-never what the page settles on (see [Load Performance](#load-performance)).
+is built by one shared pipeline (`buildMatches`) that runs in two places:
+every 5 minutes in a GitHub Action, which publishes the result as a
+prebuilt snapshot, and in the viewer's own browser as the fallback. The
+page normally reads the snapshot on open and on its refresh timers, and
+live games are polled every 30 seconds on top (see [Live Match Data &
+Refresh](#live-match-data--refresh) and [Load
+Performance](#load-performance)). Keeping each viewer off the proxy for
+everything except live games is what keeps the shared Cloudflare Worker
+inside its free daily quota (see [Cloudflare Quota](#cloudflare-quota)).
 There is also no in-page header: an
 earlier version had a slim one, but it was dropped entirely, since an
 installed PWA's home-screen icon and OS title bar already carry the app's
@@ -1425,6 +1427,11 @@ Gemini or any other AI service.
 
 ### Two fetch-and-score refresh tiers
 
+Both tiers below first try the prebuilt snapshot (`refreshFromSnapshot` —
+see [Cloudflare Quota](#cloudflare-quota)); only when it isn't current
+enough do they run their own live build through the proxy as described
+here.
+
 `buildMatches` (`public/lib/match-builder.mjs`) — the same fetch-and-score
 pipeline described in [How It Works](#how-it-works) — runs on two refresh
 tiers, both through `/sports-proxy`, chosen because ESPN's own scoreboard
@@ -1651,9 +1658,10 @@ What happens between opening the page and seeing the full list, in order:
    pauses scheduled workflows in a repo with no commits for 60 days;
    re-enable it from the Actions tab, or just run it once from there (a
    manual run starts a new loop).
-4. **The live build runs immediately anyway** and replaces the snapshot,
-   exactly as before (see [Live Match Data &
-   Refresh](#live-match-data--refresh)). To keep that fast:
+4. **A live build through the proxy runs only if the snapshot can't stand
+   in for it** — none arrived within 2.5 seconds, or it's more than 12
+   minutes old (`SERVER_SNAPSHOT_LIVE_ENOUGH_MS`; see [Cloudflare
+   Quota](#cloudflare-quota)). When it does run, to keep it fast:
    Polymarket's `/events` pages are fetched through the proxy's
    `&trim=polymarket-events` mode (only the fields
    `public/lib/polymarket.mjs` reads: 11.5MB → ~0.45MB per MLB page), pages
@@ -1685,6 +1693,43 @@ What happens between opening the page and seeing the full list, in order:
 `tests/app-shell.test.mjs` keeps the hand-maintained lists involved here
 (the worker's `SHELL_FILES`, the `modulepreload` links, and the preloaded
 snapshot URL) in sync with the code.
+
+### Cloudflare Quota
+
+Every request through `/sports-proxy` is one Worker request against the
+Workers Free plan's **100,000 requests/day for the whole Cloudflare
+account** — shared with Orbit's own Worker, and counted even when the
+proxy answers from its cache (the Worker still runs to serve it). The
+snapshot costs nothing here: GitHub Actions calls ESPN/Polymarket directly
+and GitHub serves the file.
+
+Measured on one open tab over 5 minutes:
+
+| Setup | Worker requests | Per hour |
+| --- | --- | --- |
+| Before (every tab built its own data through the proxy; odds polled 48h ahead) | 304 | ~3,600 |
+| Now, snapshot available (the normal case), no game live | 0 | 0 |
+| Now, snapshot unavailable (fallback) | 199 | ~2,400 |
+| Now, during a live game (estimate: ESPN + that sport's Polymarket pages every 30s) | ~70 | ~840 |
+
+How it gets there (`public/app.js`, "Snapshot-first refreshing"):
+
+- **On open**, the page waits up to 2.5s for the snapshot. If it was built
+  by the same deploy and is at most 12 minutes old
+  (`SERVER_SNAPSHOT_LIVE_ENOUGH_MS`), it *is* the load — no proxy requests.
+- **Both refresh timers** (60s and 5 min) re-read the snapshot from
+  GitHub, with a per-minute cache-busting query so a newly published one
+  shows up within about a minute, and fall back to a proxy build only if
+  it isn't current.
+- **The 30s live poll** is the one thing that always uses the proxy, and
+  only while a game is live or about to start.
+- **Refresh now** in Settings still does a full live build through the
+  proxy, on purpose.
+
+Fallback happens after a deploy until the snapshot loop has published one
+from the new build (usually a minute or two), if GitHub is unreachable, or
+if the snapshot workflow has stopped — check the Actions tab if usage
+climbs.
 
 ### The Shared Proxy Architecture
 
@@ -1781,7 +1826,10 @@ in this project's history.
 
 A third, even faster tier sits on top of the two refresh tiers above —
 `pollLiveMatches` (`public/app.js`) polls just score/status/odds for
-whatever's already loaded, on a much shorter interval
+games that are live, ending, or starting within 15 minutes (an earlier
+version also polled odds up to 48 hours before kickoff, which kept it
+running around the clock - see [Cloudflare Quota](#cloudflare-quota);
+pre-game odds now come from the 5-minute snapshot), on a much shorter interval
 (`LIVE_POLL_INTERVAL_MS`, 30 seconds) than re-scoring a whole fetch batch
 could reasonably run at, by hitting each sport's own narrow live-scoreboard
 endpoint (today ± a day, not the whole window) through the same

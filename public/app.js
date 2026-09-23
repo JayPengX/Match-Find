@@ -415,10 +415,6 @@ const state = {
   // this flag's own call sites for why that distinction is the whole
   // point.
   fullWindowLoaded: false,
-  // True once THIS load's own live build (either tier) has been applied -
-  // from then on the prebuilt server snapshot is older than what's on
-  // screen and must never be painted over it (see fetchServerSnapshot).
-  liveBuildApplied: false,
   // Same idea as fullWindowLoaded, one tier down - set once refreshNearTerm
   // (today/tomorrow) has resolved at least once. Covers the one case the
   // fallback in isDayPending (real data already sitting in
@@ -3420,25 +3416,82 @@ const SERVER_SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
 const SERVER_SNAPSHOT_TIMEOUT_MS = 6_000;
 const IS_DEPLOYED_BUILD = !APP_BUILD_ID.startsWith('__');
 
-async function fetchServerSnapshot() {
+// ---- Snapshot-first refreshing (Cloudflare quota) --------------------------
+//
+// Every request through the shared proxy is one Worker request against the
+// Workers Free plan's 100,000/day for the WHOLE Cloudflare account (Orbit's
+// Worker draws from the same pool) - cache hits included, since the Worker
+// runs to serve them. A tab doing its own live builds (a ~75-request full
+// window on load, today/tomorrow every 60s, the full window every 5
+// minutes) was live-measured at ~3,600 Worker requests an hour: only ~27
+// viewer-hours a day for everyone combined. The prebuilt snapshot is the
+// same build, redone every 5 minutes by a GitHub Action and served by
+// GitHub - zero Worker requests - so whenever it's current enough
+// (SERVER_SNAPSHOT_LIVE_ENOUGH_MS) it stands in for this tab's own builds:
+// on load and on both refresh timers. The proxy-based builds remain as the
+// fallback for when it isn't (a GitHub hiccup, the first minutes after a
+// deploy before a snapshot from the new build is out, or the workflow having
+// stopped), and the 30s live poll (live games only - see
+// matchWorthPollingNow) is the one thing that always uses the proxy.
+const SERVER_SNAPSHOT_LIVE_ENOUGH_MS = 12 * 60_000;
+// How long the first paint waits for the snapshot before falling back to a
+// live build through the proxy.
+const SERVER_SNAPSHOT_FIRST_PAINT_WAIT_MS = 2_500;
+
+// `bust` adds a per-minute query so the periodic refreshes see a new
+// snapshot within about a minute of it being published, instead of up to
+// 5 minutes later (GitHub's CDN cache time for the plain URL). The plain
+// URL is still what the first load asks for, to reuse index.html's preload.
+async function fetchServerSnapshot({ bust = false, maxAgeMs = SERVER_SNAPSHOT_MAX_AGE_MS } = {}) {
   if (!IS_DEPLOYED_BUILD) return null;
   try {
     // Default cache mode (not 'no-store'), so this can reuse index.html's
     // <link rel="preload"> of the same URL instead of downloading it twice.
     // GitHub's CDN already caps its own caching at 5 minutes, and the age
     // check below discards anything too old regardless.
-    const response = await fetch(SERVER_SNAPSHOT_URL, {
+    const url = bust ? `${SERVER_SNAPSHOT_URL}?t=${Math.floor(Date.now() / 60_000)}` : SERVER_SNAPSHOT_URL;
+    const response = await fetch(url, {
       signal: AbortSignal.timeout(SERVER_SNAPSHOT_TIMEOUT_MS)
     });
     if (!response.ok) return null;
     const snapshot = await response.json();
     if (!snapshot || snapshot.buildId !== APP_BUILD_ID || !Array.isArray(snapshot.matches)) return null;
     const generatedMs = Date.parse(snapshot.generatedAt);
-    if (!Number.isFinite(generatedMs) || Date.now() - generatedMs > SERVER_SNAPSHOT_MAX_AGE_MS) return null;
+    if (!Number.isFinite(generatedMs) || Date.now() - generatedMs > maxAgeMs) return null;
     return snapshot;
   } catch {
     return null;
   }
+}
+
+function isSnapshotLiveEnough(snapshot) {
+  return !!snapshot && Date.now() - Date.parse(snapshot.generatedAt) <= SERVER_SNAPSHOT_LIVE_ENOUGH_MS;
+}
+
+// Paints a snapshot unless what's on screen is already as new or newer (a
+// fallback live build, or the same snapshot again). It's a whole-window
+// build, so every day counts as loaded, same as after the live full-window
+// refresh.
+function applyServerSnapshot(snapshot) {
+  if (state.lastGeneratedAt && Date.parse(snapshot.generatedAt) <= Date.parse(state.lastGeneratedAt)) return;
+  state.fullWindowLoaded = true;
+  state.nearTermLoaded = true;
+  applyFreshBuild(snapshot.matches, snapshot.generatedAt);
+}
+
+// One timer tick's worth of refreshing from the snapshot. True when the
+// snapshot was current enough to use (whether or not it was newer than
+// what's shown), false when the caller should fall back to a live build.
+async function refreshFromSnapshot() {
+  const snapshot = await fetchServerSnapshot({ bust: true, maxAgeMs: SERVER_SNAPSHOT_LIVE_ENOUGH_MS });
+  if (!snapshot) return false;
+  try {
+    applyServerSnapshot(snapshot);
+  } catch (error) {
+    console.error('failed to apply server snapshot', error);
+    return false;
+  }
+  return true;
 }
 
 // Which in-progress or finished fixtures a build should look up the pre-game line for
@@ -3757,7 +3810,6 @@ async function refreshNearTerm() {
     // comment on refreshFullWindow for why this only ever goes true on a
     // real resolve - same reasoning, one tier down.
     state.nearTermLoaded = true;
-    state.liveBuildApplied = true;
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
   } catch (error) {
@@ -3982,7 +4034,6 @@ async function refreshFullWindow({ silent = false, statusEl, button, waitForOdds
     // real resolve, never optimistically before one. See isDayPending's
     // own comment for what this unlocks.
     state.fullWindowLoaded = true;
-    state.liveBuildApplied = true;
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = t('dataUpdated');
@@ -4007,7 +4058,8 @@ function scheduleNearTermRefresh() {
     // A backgrounded tab still gets rescheduled (so it picks back up the
     // moment it's visible again) but skips the actual fetch - no point
     // spending battery/quota refreshing a page nobody's looking at.
-    if (document.visibilityState !== 'hidden') await refreshNearTerm();
+    // Snapshot first - see "Snapshot-first refreshing" above.
+    if (document.visibilityState !== 'hidden' && !(await refreshFromSnapshot())) await refreshNearTerm();
     scheduleNearTermRefresh();
   }, NEAR_TERM_REFRESH_MS);
 }
@@ -4016,7 +4068,12 @@ function scheduleFullRefresh() {
   if (fullRefreshTimer) clearTimeout(fullRefreshTimer);
   nextFullRefreshAt = Date.now() + FULL_REFRESH_MS;
   fullRefreshTimer = setTimeout(async () => {
-    if (document.visibilityState !== 'hidden') await refreshFullWindow({ silent: true });
+    if (document.visibilityState !== 'hidden') {
+      // refreshFullWindow also runs the new-version check, so the snapshot
+      // path has to run it itself.
+      if (await refreshFromSnapshot()) await checkForAppVersionUpdate();
+      else await refreshFullWindow({ silent: true });
+    }
     scheduleFullRefresh();
   }, FULL_REFRESH_MS);
 }
@@ -4063,13 +4120,17 @@ refreshDataBtn.addEventListener('click', async () => {
 const LIVE_POLL_INTERVAL_MS = 30_000;
 let livePollTimer = null;
 let nextLivePollAt = null;
-// How far before kickoff this starts polling a still-PRE fixture purely for
-// odds movement (never score, which doesn't exist yet) - live-verified a
-// real MLS moneyline already posted ~3.3 hours before kickoff, so this errs
-// wide: polling a match that in fact has no market open yet is a harmless
-// no-op (resolveTeamOdds/resolveF1WinnerOdds just report null again), not a
-// wasted or incorrect request.
-const PREGAME_ODDS_POLL_WINDOW_MS = 48 * 60 * 60 * 1000;
+// Only games that are live, ending, or starting within
+// STARTING_SOON_WINDOW_MINUTES are polled. An earlier version also polled
+// every fixture up to 48 hours before kickoff purely for pre-game odds
+// movement - which, since there's almost always a game in the next two
+// days, kept this 30-second poll (up to ~8 Polymarket pages + ESPN per
+// tick, all through the shared Worker) running around the clock in every
+// open tab: live-measured as most of a tab's ~3,600 Worker requests an
+// hour, against the Workers Free plan's 100,000/day for the whole account.
+// Pre-game odds now come from the prebuilt snapshot instead, refreshed
+// every 5 minutes at no Worker cost (see refreshFromSnapshot) - plenty for
+// a price that moves over hours, not seconds.
 
 function matchWorthPollingNow(m, now = Date.now()) {
   // Worth polling if EITHER a live score (ESPN, team sports only) OR live
@@ -4081,9 +4142,7 @@ function matchWorthPollingNow(m, now = Date.now()) {
   if (!TEAM_LEAGUE_ESPN[m.sport] && POLYMARKET_TAG_ID[m.sport] == null) return false;
   const lifecycle = matchLifecycleState(m, now);
   if (lifecycle === LIFECYCLE_STATES.LIVE || lifecycle === LIFECYCLE_STATES.ENDING_SOON) return true;
-  if (lifecycle === LIFECYCLE_STATES.STARTING_SOON) return true;
-  const msToStart = Date.parse(m.startTimeUtc) - now;
-  return msToStart > 0 && msToStart <= PREGAME_ODDS_POLL_WINDOW_MS;
+  return lifecycle === LIFECYCLE_STATES.STARTING_SOON;
 }
 
 function anyMatchWorthPollingNow() {
@@ -4313,10 +4372,13 @@ const FOREGROUND_STALE_MS = 30_000;
 let hiddenSinceAt = null;
 
 async function handleForegroundReturn(awayMs) {
-  try {
-    await refreshNearTerm();
-  } catch (error) {
-    console.error('foreground-return near-term refresh failed', error);
+  const fromSnapshot = await refreshFromSnapshot().catch(() => false);
+  if (!fromSnapshot) {
+    try {
+      await refreshNearTerm();
+    } catch (error) {
+      console.error('foreground-return near-term refresh failed', error);
+    }
   }
   scheduleNearTermRefresh();
   if (document.visibilityState !== 'hidden' && anyMatchWorthPollingNow()) {
@@ -4335,7 +4397,8 @@ async function handleForegroundReturn(awayMs) {
     // Includes its own version check - see checkForAppVersionUpdate's own
     // comment on why that's wired into refreshFullWindow directly rather
     // than kept as a separate call here too.
-    await refreshFullWindow({ silent: true }).catch(() => {});
+    if (fromSnapshot) await checkForAppVersionUpdate().catch(() => {});
+    else await refreshFullWindow({ silent: true }).catch(() => {});
     scheduleFullRefresh();
   }
 }
@@ -4419,55 +4482,40 @@ async function init() {
       console.error('failed to paint cached snapshot', error);
     }
   }
-  // The prebuilt server snapshot (see its own section above), fetched in
-  // parallel with the live build below - painted only if it lands before
-  // that live build does, and only if it's newer than whatever this
-  // browser's own snapshot just painted. It's a whole-window build, so the
-  // day scroller can treat every day as loaded, same as after the live
-  // full-window refresh.
-  fetchServerSnapshot().then(serverSnapshot => {
-    if (!serverSnapshot || state.liveBuildApplied) return;
-    if (snapshot && Date.parse(snapshot.generatedAt) >= Date.parse(serverSnapshot.generatedAt)) return;
+  // The prebuilt server snapshot (see "Prebuilt server snapshot" and
+  // "Snapshot-first refreshing" above): tried first - the plain URL reuses
+  // index.html's preload; if that copy is from another build or too old
+  // (GitHub's CDN can hold the previous deploy's for a few minutes), once
+  // more with a cache-busting query - bounded by
+  // SERVER_SNAPSHOT_FIRST_PAINT_WAIT_MS in total. A current-enough one
+  // replaces this load's own live build entirely: no proxy requests at all
+  // until a live game needs polling. Otherwise (none, or one too old to
+  // stand in for a live build - still painted as a head start) the live
+  // full-window build below runs exactly as before.
+  const serverSnapshot = await Promise.race([
+    (async () => (await fetchServerSnapshot()) || fetchServerSnapshot({ bust: true }))(),
+    new Promise(resolve => setTimeout(() => resolve(null), SERVER_SNAPSHOT_FIRST_PAINT_WAIT_MS))
+  ]);
+  if (serverSnapshot) {
     try {
-      state.fullWindowLoaded = true;
-      applyFreshBuild(serverSnapshot.matches, serverSnapshot.generatedAt);
+      applyServerSnapshot(serverSnapshot);
     } catch (error) {
       console.error('failed to paint server snapshot', error);
     }
-  });
-  // The WHOLE window awaited here, not just near-term - variety rotation
-  // (computeVarietyRotation, via getVarietyRotation) decides which match
-  // wins a slot by looking for repeat matchups across MULTIPLE consecutive
-  // days, and an empty/not-yet-fetched day reads to it as a hard gap that
-  // closes any run early (see that function's own comment) - so a
-  // recommendation computed from only near-term's 2 days is a genuinely
-  // DIFFERENT, incomplete answer, not just a preview of the same one.
-  // Awaiting only near-term here (an earlier version of this) meant
-  // today's recommended pick could visibly change the moment the full
-  // window landed moments later and rotation recomputed with the real,
-  // complete picture - live-reported directly: "it flick and change
-  // recommendation afterward, it should show content after it finish
-  // calculating all the logic" - the viewer's own diagnosis (needs the
-  // full schedule to decide) was exactly right. Awaiting the full window
-  // here means the very FIRST recommendation ever shown is already the
-  // stable, fully-informed one - nothing left to silently correct later.
-  // This is safe to do now specifically because of
-  // PROXY_FETCH_MAX_CONCURRENCY - the same 50+-request full window that
-  // once made first paint slow/unreliable (live-reported as "sometimes it
-  // failed to load also the load time is significantly longer") no longer
-  // stampedes the connection pool once capped to 6 in flight at a time.
-  // refreshNearTerm still exists exactly as before, just no longer
-  // called from here - it's still what scheduleNearTermRefresh below uses
-  // for the PERIODIC 60s freshness tier once the page is already up (by
-  // then state.allRawMatches already holds the full window regardless, so
-  // a routine near-term-only refresh from here on can never recreate this
-  // same incomplete-rotation flicker).
-  prefetchPolymarketEvents();
-  prefetchStandings();
-  try {
-    await refreshFullWindow({ silent: true, waitForOdds: true });
-  } catch (error) {
-    console.error(error);
+  }
+  if (isSnapshotLiveEnough(serverSnapshot) && state.allRawMatches.length) {
+    // refreshFullWindow would have run this; the snapshot path must too.
+    checkForAppVersionUpdate().catch(() => {});
+  } else {
+    // See prefetchPolymarketEvents/prefetchStandings for why these start
+    // before the build itself.
+    prefetchPolymarketEvents();
+    prefetchStandings();
+    try {
+      await refreshFullWindow({ silent: true, waitForOdds: true });
+    } catch (error) {
+      console.error(error);
+    }
   }
   if (!state.allRawMatches.length && !state.tbdMatches.length) {
     // Nothing loaded at all yet (the fetch itself failed outright, e.g.
