@@ -620,8 +620,8 @@ installTapLog(generatedNote);
 // effect is registering document-level listeners, so copying just its
 // touch/pointer ones here fixed it for good (confirmed on a real iPhone).
 //
-// What did NOT fix it, and is not the reason it works now (each is still
-// in buildMatchStack and harmless, but don't mistake them for the fix):
+// What did NOT fix it (all tried first, then removed - don't re-add them
+// hoping they help; see git history for the code):
 //   1. Explicit releasePointerCapture before the card is removed.
 //   2. Deferring choose()'s re-render with setTimeout(0).
 //   3. Switching finger swipes from Pointer Events to passive Touch Events.
@@ -2686,90 +2686,41 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const chosen = ordered[clamped];
     if (!chosen || chosen.id === primary.id) return;
     tapLog(`[app] choose index=${clamped}`);
-    // Deferred one tick (setTimeout 0) so the big DOM rebuild
-    // (pinSlotChoice -> renderSections) runs after the touch/click event
-    // that triggered it has fully finished, not inside it. Added as an
-    // attempted fix for the iOS "every tap needs two taps after a swipe"
-    // bug - it did NOT fix that; the page-wide listeners near the top of this file ("DO NOT REMOVE - iOS
-    // Safari") are the real fix. Kept because
-    // rebuilding outside the input event is still the safer order.
-    setTimeout(() => pinSlotChoice(dayKey, slotKey, chosen.id), 0);
+    pinSlotChoice(dayKey, slotKey, chosen.id);
   }
 
-  // ---- Swipe gesture (layered on top of choose(), never a second state
-  // machine) -----------------------------------------------------------
+  // ---- Swipe gesture ------------------------------------------------------
   //
-  // The prior swipe implementation was ripped out entirely (see this
-  // function's own git history / docs/recommendation-engine-audit.md Round
-  // 12) after three straight live-reported "stuck after one swipe on
-  // Safari" bugs, each one a variant of the same root cause: the gesture's
-  // COMPLETION was decided by something that can silently never fire on
-  // real Safari - a requestAnimationFrame count, then a `transitionend`
-  // listener (Safari drops transitionend outright when a transition is
-  // interrupted, backgrounded, or its element is removed mid-transition -
-  // exactly what happens here on every successful swipe, since choose()
-  // replaces this whole card). That rewrite went all the way to tap-only
-  // controls to eliminate the bug class structurally.
+  // A thin input layer on top of choose() - never a second state machine.
+  // Rules, each learned from a live-reported Safari bug (see git history and
+  // docs/recommendation-engine-audit.md Round 12):
+  //   - The commit decision happens synchronously in pointerup, from the
+  //     pointer's final position - never in a requestAnimationFrame or
+  //     transitionend callback, which Safari can silently never fire (an
+  //     earlier version got stuck after one swipe that way).
+  //   - Pointer Events + setPointerCapture, so a finger or cursor drifting
+  //     outside the card mid-drag doesn't lose the gesture.
+  //   - `touch-action: pan-y` (styles.css) lets the browser itself decide
+  //     "vertical page scroll" vs. "horizontal swipe".
+  //   - On a commit, card.style is left untouched before choose() removes the
+  //     card. Writing any transform to it in that same tick left a "ghost"
+  //     of the swiped card stuck on screen on iPad Safari.
+  //   - pointerup, pointercancel and lostpointercapture all end the drag, so
+  //     the card can never be stranded mid-transform.
   //
-  // This restores dragging as a real INPUT method without reintroducing
-  // that risk, by keeping the actual commit point synchronous and
-  // untangled from any animation:
-  //   - Passive Touch Events for a finger, Pointer Events + explicit
-  //     setPointerCapture for a mouse/pen - see the "Finger input" comment
-  //     further down for why a finger no longer goes through Pointer Events
-  //     (an iOS Safari "every tap needs two taps after one swipe" bug).
-  //   - `touch-action: pan-y` on the card (see styles.css) instead of a
-  //     manual preventDefault() dance, so Safari's own native gesture
-  //     engine (not our JS) arbitrates "this is a page scroll" vs. "this
-  //     is a horizontal swipe" - one less place for our own logic to get
-  //     that disambiguation wrong.
-  //   - The decision to advance is made directly in the pointerup handler,
-  //     synchronously, from the pointer's own final position - never from
-  //     a transition/animation callback. On a COMMIT specifically (the card
-  //     is about to be replaced outright), nothing here touches card.style
-  //     at all between the drag's last live frame and choose() tearing the
-  //     node out - see resetDragState/resetDrag's own split just below for
-  //     why. Two earlier versions of this both got that wrong in slightly
-  //     different ways: first a decorative fly-off transform/opacity set
-  //     right before removal, then - after removing THAT - discovering
-  //     resetDrag() itself was still doing the same thing on every commit,
-  //     just resetting to a NEUTRAL transform/transition instead of a
-  //     fly-off one. Either way, mutating card.style (which promotes the
-  //     card to its own GPU-composited layer the instant it has a
-  //     non-default transform, as it does throughout an active drag) and
-  //     then, in the very same tick, having choose() tear that exact DOM
-  //     node out from under it left Safari holding onto that
-  //     already-rasterized layer - a ghost of the swiped-away card visibly
-  //     stuck on screen - regardless of what the LAST value written to it
-  //     was. Live-reported on iPad, with a screenshot showing exactly that:
-  //     faded, rotated ghost cards left over from earlier swipes, on both
-  //     sides (confirming they'd accumulated across several swipes, since
-  //     nothing was ever cleaning them up). A commit now leaves card.style
-  //     completely alone - it disappears mid-drag-transform, still tilted
-  //     from wherever the finger last was, rather than snapping to neutral
-  //     first - since it's about to vanish anyway.
-  //   - pointerup, pointercancel AND lostpointercapture all route through
-  //     resetDrag() (or, on a commit specifically, its own resetDragState()
-  //     half - see above), so however the gesture ends (a normal release,
-  //     the OS taking the gesture back for its own use, a second finger
-  //     landing), the card is guaranteed to leave the drag state - never
-  //     left stranded mid-transform waiting for an event that might not
-  //     come.
+  // The iOS "every tap needs two taps after a swipe" bug is NOT fixed here -
+  // see the page-wide listeners near the top of this file ("DO NOT REMOVE -
+  // iOS Safari").
   const SWIPE_COMMIT_PX = 60;
   const SWIPE_START_PX = 8;
   let activePointerId = null;
-  // 'touch' (Touch Events) or 'pointer' (mouse/pen Pointer Events) - see
-  // the two input paths below for why a finger and a mouse are split.
-  let activeInputKind = null;
   let dragStartX = 0;
   let dragStartY = 0;
   let dragDx = 0;
   let isHorizontalDrag = false;
-  // Guards startTrackingSwipe/stopTrackingSwipe so a gesture that never
-  // really started (pointerdown fired, then immediately reset without ever
-  // setting activePointerId - can't currently happen here, but keeps this
-  // pairing safe against a future early-return) never double-decrements
-  // the shared activeSwipeCount.
+  // Pairs each startTrackingSwipe() with exactly one stopTrackingSwipe(), so
+  // the shared activeSwipeCount can never be left raised (which would make
+  // renderSections defer itself forever).
   let isTrackingSwipe = false;
 
   function setDragTransform(dx) {
@@ -2777,30 +2728,13 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     card.style.transform = `translateX(${dx}px) rotate(${dx / 28}deg)`;
   }
 
-  // Just the pointer/tracking bookkeeping, deliberately WITHOUT touching
-  // card.style - see endDrag's own commit branch for the one place this
-  // matters: card.style must stay completely untouched between the drag's
-  // last live frame and choose() removing the node, or Safari can be left
-  // holding a stale, ghosted compositor layer for it (see this function's
-  // own swipe-gesture comment above for the full story). resetDrag() below
-  // is this PLUS the style reset, for the two cases where the card
-  // actually stays in the DOM and genuinely needs to animate back.
+  // Bookkeeping only - deliberately doesn't touch card.style (see the
+  // commit rule above). resetDrag() adds the snap-back animation for the
+  // cases where the card stays in the DOM.
   function resetDragState() {
-    const pointerId = activePointerId;
-    const inputKind = activeInputKind;
     activePointerId = null;
-    activeInputKind = null;
     isHorizontalDrag = false;
     dragDx = 0;
-    // Explicit capture release (mouse/pen path only), before a commit
-    // removes this card from the DOM, rather than trusting the browser's
-    // implicit release on pointerup. Added as an attempted fix for the iOS
-    // "every tap needs two taps after a swipe" bug - it did NOT fix that;
-    // the page-wide listeners near the top of this file ("DO NOT REMOVE - iOS
-    // Safari") are the real fix. Kept as cheap hygiene.
-    if (pointerId != null && inputKind === 'pointer') {
-      try { card.releasePointerCapture(pointerId); } catch { /* already released, or node already gone */ }
-    }
     if (isTrackingSwipe) {
       isTrackingSwipe = false;
       stopTrackingSwipe();
@@ -2813,157 +2747,69 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     card.style.transform = '';
   }
 
-  // Shared by both input paths below (Pointer Events for a mouse, Touch
-  // Events for a finger) - `id` is a pointerId or a Touch.identifier.
-  function beginDrag(kind, id, x, y) {
-    tapLog(`[app] swipe begin ${kind} activeSwipeCount=${activeSwipeCount}`);
-    activeInputKind = kind;
-    activePointerId = id;
-    dragStartX = x;
-    dragStartY = y;
+  // preventDefault() stops a mouse drag that starts on a team-logo <img>
+  // from kicking off the browser's native image drag-and-drop (a ghost
+  // image following the cursor, outside this code's control). The CSS
+  // `-webkit-user-drag: none` on the images covers the same case.
+  card.addEventListener('pointerdown', event => {
+    if (!event.isPrimary || activePointerId != null) return;
+    if (event.target.closest('button')) return; // dots/arrows keep their own click handling
+    event.preventDefault();
+    tapLog(`[app] swipe begin ${event.pointerType}`);
+    activePointerId = event.pointerId;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
     dragDx = 0;
     isHorizontalDrag = false;
     isTrackingSwipe = true;
     startTrackingSwipe();
-  }
-
-  function moveDrag(x, y) {
-    const dx = x - dragStartX;
-    const dy = y - dragStartY;
-    if (!isHorizontalDrag) {
-      if (Math.abs(dx) < SWIPE_START_PX && Math.abs(dy) < SWIPE_START_PX) return;
-      // A drag that turns out to be more vertical than horizontal is a
-      // page scroll, not a swipe - let go of it entirely (touch-action:
-      // pan-y already told Safari the same thing) rather than fighting it.
-      // resetDragState (not just clearing activePointerId) so the shared
-      // activeSwipeCount comes back down too - otherwise renderSections
-      // defers itself forever. No transform applied yet, so no style reset.
-      if (Math.abs(dy) > Math.abs(dx)) {
-        tapLog('[app] swipe -> vertical, released');
-        resetDragState();
-        return;
-      }
-      isHorizontalDrag = true;
-      tapLog('[app] swipe -> horizontal');
-    }
-    dragDx = dx;
-    setDragTransform(dx);
-  }
-
-  function endDrag() {
-    const committedDx = isHorizontalDrag ? dragDx : 0;
-    tapLog(`[app] swipe end dx=${Math.round(committedDx)}`);
-    const wasHorizontalDrag = isHorizontalDrag;
-
-    if (!wasHorizontalDrag || Math.abs(committedDx) < SWIPE_COMMIT_PX) {
-      resetDrag(); // stays in the DOM - genuinely snap back to center
-      return;
-    }
-    // Already at that end of the stack (e.g. swiping right on the very
-    // first card) - nothing to advance to, so this must snap back like any
-    // other below-threshold drag rather than fly off into an empty
-    // replacement that never comes (choose() below is a no-op when the
-    // target index is already the current one - see its own clamp).
-    const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
-    const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
-    if (!target || target.id === primary.id) {
-      resetDrag(); // also stays in the DOM
-      return;
-    }
-    // Committing - card.style is deliberately left completely untouched
-    // from here on (resetDragState, not resetDrag) - see this function's
-    // own top comment on the swipe gesture for why even resetting it to a
-    // NEUTRAL transform right before choose() below tears this exact card
-    // out of the DOM was still enough to leave a stuck ghost on iPad
-    // Safari.
-    resetDragState();
-    choose(targetIndex);
-  }
-
-  // ---- Finger input: plain Touch Events, all passive ----
-  //
-  // A finger uses plain passive Touch Events - no preventDefault(), no
-  // setPointerCapture. Neither is needed for a finger: a touch is already
-  // bound to the element it started on, and the native image-drag that
-  // preventDefault() guards against is mouse-only. touch-action: pan-y
-  // (styles.css) still keeps a horizontal drag from scrolling the page.
-  //
-  // This split was the third attempted fix for the iOS "every tap needs
-  // two taps after a swipe" bug (finger swipes used to go through Pointer
-  // Events like the mouse path below). It did NOT fix that; the page-wide
-  // listeners near the top of this file ("DO NOT REMOVE - iOS Safari") are
-  // the real fix. Kept because it's the simpler, more standard way to
-  // handle a finger drag on iOS.
-  function findTouch(list) {
-    for (const touch of list) if (touch.identifier === activePointerId) return touch;
-    return null;
-  }
-
-  card.addEventListener('touchstart', event => {
-    if (activePointerId != null || event.touches.length !== 1) return;
-    if (event.target.closest('button')) return; // dots/arrows keep their own click handling
-    const touch = event.changedTouches[0];
-    beginDrag('touch', touch.identifier, touch.clientX, touch.clientY);
-  }, { passive: true });
-
-  card.addEventListener('touchmove', event => {
-    if (activeInputKind !== 'touch') return;
-    const touch = findTouch(event.changedTouches);
-    if (touch) moveDrag(touch.clientX, touch.clientY);
-  }, { passive: true });
-
-  card.addEventListener('touchend', event => {
-    if (activeInputKind !== 'touch' || !findTouch(event.changedTouches)) return;
-    endDrag();
-  }, { passive: true });
-
-  card.addEventListener('touchcancel', event => {
-    if (activeInputKind !== 'touch' || !findTouch(event.changedTouches)) return;
-    tapLog('[app] swipe cancelled');
-    resetDrag();
-  }, { passive: true });
-
-  // ---- Mouse/pen input: Pointer Events + explicit capture ----
-  //
-  // Touch pointers are ignored here entirely (the Touch Events path above
-  // owns a finger) - otherwise the same gesture would be tracked twice.
-  //
-  // A card contains real <img> team-logo elements, and starting a mouse
-  // drag ON TOP of an <img> is the browser's own built-in trigger for
-  // native HTML5 drag-and-drop (a "ghost" copy of the image that follows
-  // the cursor, entirely outside this code's event handling) - reported
-  // live as the swipe visibly getting "stuck in the background" when
-  // dragging with a mouse on a screen bigger than a phone. preventDefault()
-  // here is what stops that native drag from ever starting, on top of the
-  // CSS `-webkit-user-drag: none` on the card's own images (styles.css).
-  card.addEventListener('pointerdown', event => {
-    if (event.pointerType === 'touch') return;
-    if (!event.isPrimary || activePointerId != null) return;
-    if (event.target.closest('button')) return; // dots/arrows keep their own click handling
-    event.preventDefault();
-    beginDrag('pointer', event.pointerId, event.clientX, event.clientY);
-    // setPointerCapture keeps this whole gesture pinned to `card` even if
-    // the cursor wanders outside its box mid-drag. Best-effort: a capture
-    // failure just means no safety net, never a thrown error.
-    try { card.setPointerCapture(activePointerId); } catch { /* see above */ }
+    try { card.setPointerCapture(activePointerId); } catch { /* best-effort */ }
   });
 
   card.addEventListener('pointermove', event => {
-    if (activeInputKind !== 'pointer' || event.pointerId !== activePointerId) return;
-    moveDrag(event.clientX, event.clientY);
+    if (event.pointerId !== activePointerId) return;
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    if (!isHorizontalDrag) {
+      if (Math.abs(dx) < SWIPE_START_PX && Math.abs(dy) < SWIPE_START_PX) return;
+      // More vertical than horizontal: it's a page scroll, not a swipe - let
+      // go entirely. No transform applied yet, so no style to reset.
+      if (Math.abs(dy) > Math.abs(dx)) {
+        const pointerId = activePointerId;
+        resetDragState();
+        try { card.releasePointerCapture(pointerId); } catch { /* already released */ }
+        return;
+      }
+      isHorizontalDrag = true;
+    }
+    dragDx = dx;
+    setDragTransform(dx);
   });
 
-  card.addEventListener('pointerup', event => {
-    if (activeInputKind !== 'pointer' || event.pointerId !== activePointerId) return;
-    endDrag();
-  });
-  card.addEventListener('pointercancel', event => {
-    if (activeInputKind !== 'pointer' || event.pointerId !== activePointerId) return;
-    resetDrag();
-  });
-  card.addEventListener('lostpointercapture', event => {
-    if (activeInputKind !== 'pointer' || event.pointerId !== activePointerId) return;
-    resetDrag();
+  function endDrag(event) {
+    if (event.pointerId !== activePointerId) return;
+    const committedDx = isHorizontalDrag ? dragDx : 0;
+    tapLog(`[app] swipe end dx=${Math.round(committedDx)}`);
+    if (Math.abs(committedDx) < SWIPE_COMMIT_PX) {
+      resetDrag(); // below threshold (or never horizontal) - snap back
+      return;
+    }
+    const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
+    const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
+    if (!target || target.id === primary.id) {
+      resetDrag(); // already at that end of the stack - snap back
+      return;
+    }
+    resetDragState(); // not resetDrag - see the commit rule above
+    choose(targetIndex);
+  }
+
+  card.addEventListener('pointerup', endDrag);
+  card.addEventListener('pointercancel', resetDrag);
+  card.addEventListener('lostpointercapture', () => {
+    // isTrackingSwipe too: the vertical-scroll branch already cleared
+    // activePointerId but must still have released its activeSwipeCount.
+    if (activePointerId != null || isTrackingSwipe) resetDrag();
   });
 
   const nav = document.createElement('div');

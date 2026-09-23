@@ -1185,7 +1185,8 @@ next tap elsewhere. **Don't remove them.**
 
 **How it was found:** three guessed fixes (explicit
 `releasePointerCapture`, deferring the re-render with `setTimeout(0)`,
-switching finger swipes to Touch Events) all failed — headless
+switching finger swipes to Touch Events) all failed and were removed
+afterwards — headless
 Chromium/Playwright never reproduces iOS WebKit tap bugs, even with real CDP
 touch input. What cracked it was the hidden tap log (below): the bug
 vanished whenever the log was on, which pointed straight at its
