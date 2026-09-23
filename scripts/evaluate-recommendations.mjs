@@ -1,10 +1,8 @@
 // ---- scripts/evaluate-recommendations.mjs ----
 //
-// Offline evaluator for one or more historical recommendation exports -
-// either public/data/matches.json itself, or the Settings panel's own
-// "匯出資料" (exportRecommendationData in public/app.js) download, which is
-// the same {matches: [...]} shape with every match's .recommended/.score/
-// .effectiveScore/.confidence already decided.
+// Offline evaluator for one or more matches.json snapshots (see
+// scripts/build-data.mjs) - the {matches: [...]} shape with every match's
+// .score/.confidence already decided.
 //
 // Deliberately NOT a pass/fail grader - this codebase has no ground-truth
 // "was this actually a good recommendation" label (see docs/
@@ -28,14 +26,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { computeConfidence, matchupKey, schedulingInterval, isQuietHours } from '../public/lib/recommendation.mjs';
 
-// Re-exported so existing importers (this file's own tests included) don't
-// need to know matchupKey moved - it's the one shared definition of "same
-// matchup" this codebase has, not a second copy of this logic living only
-// here (see docs/recommendation-engine-audit.md's "remove complexity
-// instead of adding more patches").
-export { matchupKey };
-
-// Accepts either `{matches: [...]}` (matches.json/the export button's own
+// Accepts either `{matches: [...]}` (matches.json's own
 // shape) or a bare `[...]` array, so this also works against an ad hoc
 // slice of matches someone hand-edited for a test case.
 export function extractMatches(parsed) {

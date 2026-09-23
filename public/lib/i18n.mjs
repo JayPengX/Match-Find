@@ -25,15 +25,9 @@
 import zhTW from './locales/zh-TW.mjs';
 import en from './locales/en.mjs';
 
-export const DEFAULT_LOCALE = 'zh-TW';
+const DEFAULT_LOCALE = 'zh-TW';
 
 export const STRINGS = { 'zh-TW': zhTW, en };
-
-// Same local-only localStorage pattern/key convention as app.js's own
-// SETTINGS_STORAGE_KEY/ENABLED_SPORTS_STORAGE_KEY ('matchfind-*') - see that
-// file's top comment on why every per-viewer preference here is local-only,
-// no server sync.
-const LOCALE_STORAGE_KEY = 'matchfind-locale';
 
 // navigator.languages (an ordered preference list) is preferred over the
 // single navigator.language when a browser exposes it - a viewer whose OS
@@ -57,36 +51,11 @@ export function detectLocale() {
   return DEFAULT_LOCALE;
 }
 
-function loadStoredLocale() {
-  try {
-    const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-    return stored && Object.prototype.hasOwnProperty.call(STRINGS, stored) ? stored : null;
-  } catch {
-    // Private browsing / blocked storage - just means no override survives
-    // reload, same as every other localStorage read in this app.
-    return null;
-  }
-}
-
-// Resolved once at module load: an explicit prior choice (setLocale below)
-// always wins over re-detecting from the browser every time, so a viewer
-// who deliberately picked a language doesn't get overridden the next time
-// their OS/browser language happens to differ from it.
-let currentLocale = loadStoredLocale() || detectLocale();
+// Resolved once at module load from the browser's language preferences.
+const currentLocale = detectLocale();
 
 export function getLocale() {
   return currentLocale;
-}
-
-export function setLocale(locale) {
-  if (!Object.prototype.hasOwnProperty.call(STRINGS, locale)) return;
-  currentLocale = locale;
-  try {
-    localStorage.setItem(LOCALE_STORAGE_KEY, locale);
-  } catch {
-    // Same best-effort posture as every other localStorage write here - the
-    // page still works for this view, it just won't remember next time.
-  }
 }
 
 // `vars`, when given, fills in `{placeholder}` tokens in the resolved

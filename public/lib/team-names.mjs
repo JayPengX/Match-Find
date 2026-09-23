@@ -7,7 +7,7 @@
 // service reliably provides these. A team missing from its league's map
 // (a promoted/relegated or newly added club ESPN hasn't been re-checked
 // against) just falls back to English-only in the UI rather than breaking
-// anything - see build-data.mjs's `zhName`.
+// anything - see teamNameZh below.
 
 export const TEAM_NAMES_ZH = {
   nba: {
@@ -106,7 +106,7 @@ export function teamNameZh(leagueId, abbreviation) {
 }
 
 // F1 has no per-team competitor breakdown in ESPN's scoreboard response
-// (see build-data.mjs's fetchF1Matches) - the "name" worth translating is
+// (see match-builder.mjs's fetchF1Matches) - the "name" worth translating is
 // the Grand Prix itself. ESPN's event name always carries a title-sponsor
 // prefix that changes season to season (e.g. "Qatar Airways Azerbaijan
 // Grand Prix"), so this matches by whichever known location name appears

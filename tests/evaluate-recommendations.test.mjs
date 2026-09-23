@@ -2,12 +2,11 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractMatches,
-  matchupKey,
   summarize,
   computePlannerOracle,
   computeDimensionCorrelations
 } from '../scripts/evaluate-recommendations.mjs';
-import { computeDayPlan, CONFIDENCE_OBJECTIVE } from '../public/lib/recommendation.mjs';
+import { computeDayPlan, CONFIDENCE_OBJECTIVE, matchupKey } from '../public/lib/recommendation.mjs';
 
 function match(overrides = {}) {
   return {

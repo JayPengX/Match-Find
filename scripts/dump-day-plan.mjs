@@ -8,8 +8,9 @@
 // because this repo's own build/deploy pipeline runs on GitHub Actions,
 // where the job log is retrievable through the GitHub API even when direct
 // network access to the deployed site/ESPN/the build artifact itself is
-// blocked - see .github/workflows/deploy.yml's "Debug: dump day plan" step,
-// wired to an opt-in workflow_dispatch input specifically so this can be
+// blocked - see .github/workflows/deploy.yml's "Debug: build a snapshot
+// and dump the computed day plan" step, wired to an opt-in
+// workflow_dispatch input specifically so this can be
 // triggered on demand to investigate a reported scheduling bug against
 // REAL, CURRENT fetched data instead of guessing from code alone.
 //
@@ -48,7 +49,7 @@ const [, , fromArg, toArg, sportArg] = process.argv;
 const raw = JSON.parse(await readFile(new URL('../public/data/matches.json', import.meta.url), 'utf8'));
 const rawMatches = Array.isArray(raw) ? raw : raw.matches;
 // .effectiveScore/.score (bestMatchScore) only exist after resolveViewingPlan
-// - the same first step app.js's own applyMatchData runs on every fetch,
+// - the same first step app.js's own recomputeAndRender runs on every fetch,
 // before ANY day-plan scheduling. No sport-priority/owned-service nudges
 // (a default, un-customized viewer) since this tool has no way to know a
 // real viewer's own local-only preferences.

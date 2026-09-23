@@ -16,17 +16,10 @@
 //
 // Every formula here is intentionally a plain, auditable arithmetic model
 // over facts ESPN's own scoreboard API already gives this build for every
-// fixture (team display names, venue, national broadcaster) - never a
-// Gemini call. This is the deterministic, authoritative source for how
-// long a broadcast is expected to run; Gemini is never asked to predict
-// duration at all, and nothing here depends on it being reachable. This
-// mirrors the same posture the shared proxy's own prompt already takes
-// toward its scoring judgment ("a SIGNAL feeding computeDayPlan's
-// deterministic scheduler, never the final decision by itself" - see this
-// repo's README) - applied here to duration and (see build-data.mjs's own
-// resolveWhereToWatchTw) to the Taiwan broadcast source as well, both of
-// which are now fixed, explainable rules rather than a per-fixture AI
-// guess.
+// fixture (team display names, venue, national broadcaster). This is the
+// deterministic, authoritative source for how long a broadcast is expected
+// to run - a fixed, explainable rule, same as match-builder.mjs's
+// resolveWhereToWatchTw is for the Taiwan broadcast source.
 //
 // A team/venue/circuit this module doesn't recognize never throws or
 // blocks a build - every lookup below falls back to a neutral default
@@ -115,7 +108,7 @@ export function isCoorsField(venueFullName) {
 
 // A real, pre-game-available signal this formula didn't use before: the
 // betting market's own total-runs line (already fetched for every MLB
-// fixture - see build-data.mjs's oddsContext/parseOddsSignal). More total
+// fixture - see match-builder.mjs's parseOddsSignal). More total
 // runs means more baserunners, more pitching changes, more mound visits -
 // all real, additional broadcast time a low-scoring pitchers' duel simply
 // doesn't accumulate; fewer means the opposite. `MLB_LEAGUE_AVG_OVER_UNDER`
@@ -136,7 +129,7 @@ export function mlbOddsDurationModifier(oddsOverUnder) {
 }
 
 // away/home team names are ESPN's own `team.displayName` (already what
-// build-data.mjs's buildCompetitor stores as `competitor.name`) - an
+// match-builder.mjs's buildCompetitor stores as `competitor.name`) - an
 // unrecognized team (a spring-training/exhibition opponent, or a rename
 // this table hasn't caught up with yet) contributes an offset of 0 rather
 // than skewing the estimate in either direction or failing the build.

@@ -18,7 +18,7 @@
 //
 // Nothing in this file reads or writes localStorage, the network, or the
 // DOM - every function here is a pure function of its arguments (aside from
-// isQuietHours/effectiveInterval's own use of the current wall clock via
+// isQuietHours's own use of the current wall clock via
 // `new Date`, which is inherent to "is this match on right now", not a
 // hidden dependency on outside state).
 //
@@ -34,7 +34,7 @@
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` (see build-data.mjs's resolveWhereToWatchTw - a
+// `whereToWatchTw` (see match-builder.mjs's resolveWhereToWatchTw - a
 // hardcoded rule, not an AI guess) is free-form text, not a fixed enum -
 // this registry is what turns that text back into a stable id, both for
 // app.js's badge rendering and
@@ -205,17 +205,10 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
 //
 // How much a match's score should actually be trusted - NOT a second
 // opinion on whether the match itself is good, just on how solid the
-// judgment behind it is. Used to key off `match.source` (was this
-// particular fixture validated by Gemini, and if so how thoroughly) back
-// when that varied per fixture depending on quota/throttling - see this
-// file's own git history. Gemini validation is gone entirely now (see
-// docs/recommendation-engine-audit.md's Round 11): every non-finished
-// fixture gets the exact same deterministic, real-data objective score
-// (public/lib/objective-score.mjs) computed the exact same way, so there is
-// no longer a per-fixture "how was THIS one scored" question to answer -
-// only "was a score computed for it at all" (a finished/never-scored
-// fixture has none, hence null - "how confident is this score" is
-// meaningless when there isn't one).
+// judgment behind it is. Every non-finished fixture gets the same
+// deterministic objective score (public/lib/objective-score.mjs), so the
+// only question left is whether a score was computed at all - a
+// finished/never-scored fixture has none, hence null.
 export const CONFIDENCE_OBJECTIVE = 0.7;
 
 export function computeConfidence(match) {
@@ -281,17 +274,13 @@ export function isNearTotalOverlap(a, b) {
 }
 
 // How much of a match's OWN nominal length actually gets reserved in the
-// day's schedule - see enduranceScore's own comment (shared-proxy's
-// worker.js buildMatchRecommendPrompt) for what it measures.
+// day's schedule - scaled by enduranceScore (see objective-score.mjs's
+// per-sport formulas for how it's computed).
 export const ENDURANCE_DURATION_FLOOR = 0.4;
 export function effectiveDurationMinutes(match) {
   const endurance = Number.isFinite(match.enduranceScore) ? match.enduranceScore : 5;
   const factor = ENDURANCE_DURATION_FLOOR + (1 - ENDURANCE_DURATION_FLOOR) * (endurance / 10);
   return match.durationMinutes * factor;
-}
-export function effectiveInterval(match) {
-  const start = Date.parse(match.startTimeUtc);
-  return { start, end: start + effectiveDurationMinutes(match) * 60_000 };
 }
 
 // ---- Sport timing profiles (duration uncertainty + transition buffer) -----
@@ -1191,7 +1180,7 @@ export function naturalSlotChoice(dayKey, dayMatches, slotKey, pinnedForDay = nu
 // A team-sport matchup's identity, independent of which side is home/away
 // or which export produced it (so "A @ B" and "B @ A" - a return leg, or
 // just a different [away, home] ordering - count as the same matchup). An
-// F1 session has no `competitors` (see build-data.mjs's fetchF1Matches), so
+// F1 session has no `competitors` (see match-builder.mjs's fetchF1Matches), so
 // it falls back to its own name, which already includes the session suffix
 // - qualifying and the race itself are correctly two different keys, never
 // folded together as "the same event recommended twice". Nothing in this
@@ -1282,22 +1271,7 @@ export function isUnderway(match, now = Date.now()) {
 
 // ---- Back-to-back variety (bounded, elite-exempt) --------------------------
 //
-// Round 41: Gemini (Round 32-38's bounded daily tie-break, calling Shared-
-// Proxy's /match-recommend) is REMOVED ENTIRELY from this app - direct
-// instruction: "the credits it's burning is way beyond its improvement to
-// our system" - live billing was already flowing (Round 38) with no
-// guarantee its own judgment would even agree with any one viewer's
-// preference (Round 38's own two live test calls happened to agree with
-// the deterministic engine both times - proof the hard-pin mechanism only
-// ever guarantees "whatever Gemini says wins", never "Gemini matches your
-// taste"). Every export in this section used to live here
-// (selectGeminiTieBreakCandidates/buildGeminiTieBreakPayload/
-// tieBreakCandidateKey/resolveGeminiOverridePin/computeDayPlanWithGeminiTieBreak)
-// - deleted outright rather than left dead, per this codebase's own "don't
-// keep unused code around" convention; app.js now calls computeDayPlan
-// directly again.
-//
-// Separately, and NOT a Gemini replacement: direct feedback that the
+// Direct feedback that the
 // deterministic scheduler's own math will happily recommend the exact same
 // matchup three (or more) real calendar days running whenever a live
 // series/back-to-back naturally scores best every one of those days -
@@ -1648,7 +1622,6 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
         if (!(bestScoreByMember.get(key) >= score)) bestScoreByMember.set(key, score);
       })
     );
-    const byScoreThenName = (a, b) => (bestScoreByMember.get(b) ?? 0) - (bestScoreByMember.get(a) ?? 0) || a.localeCompare(b);
     // Strongest first, so when a run has more contenders than days the one
     // left out is always the weakest. This used to go scarcest-first (fewest
     // eligible days), which let a borderline contender that was only close
@@ -1775,10 +1748,9 @@ export function mergeVarietyForcedIds(pinnedForDay, forcedIds) {
 }
 
 // computeDayPlan's own forcedIds mechanism marks EVERY forced pick as
-// `.isPreferred` (indistinguishable from a real viewer swipe-to-pin) -
-// the exact Round 41 bug that got Gemini's own forced override removed in
-// the first place (a system decision rendering 偏好 "Prefer" instead of
-// 推薦 "Recommended"). Call this immediately after the real, final
+// `.isPreferred` (indistinguishable from a real viewer swipe-to-pin), which
+// would render a system decision as 偏好 "Prefer" instead of 推薦
+// "Recommended". Call this immediately after the real, final
 // computeDayPlan pass (the one using `mergeVarietyForcedIds`'s own merged
 // pin set) to put the correct `.isPreferred = false` back on every id
 // THIS rotation forced in - `pinnedForDay` is the viewer's own REAL pins

@@ -25,17 +25,13 @@
 // The scoring itself (competitiveness/watchability/reason) is entirely
 // deterministic, computed from real sports-data APIs - see
 // public/lib/match-builder.mjs's own top comment. There is no AI anywhere
-// in this pipeline as of docs/recommendation-engine-audit.md's Round 11
-// (removed entirely - free-tier Gemini quota couldn't sustain the
-// workload, and its own bounded ±2 validation nudge was never more than a
-// small adjustment on top of this same deterministic score anyway).
-// `whereToWatchTw` was never an AI answer either - it's a hardcoded rule
+// in this pipeline. `whereToWatchTw` is a hardcoded rule
 // (`resolveWhereToWatchTw`, in match-builder.mjs): 愛爾達體育台 for
 // everything except an MLB fixture ESPN itself reports as Apple TV. The
 // only network endpoint this page ever talks to is the shared proxy's own
-// read-only `/sports-proxy` passthrough - used for building/refreshing the
-// match list itself now (see proxyFetchJson), not just live score/odds
-// polling (pollLiveMatches) the way it used to be. Everything else - sport
+// read-only `/sports-proxy` passthrough - used both for building/refreshing
+// the match list (see proxyFetchJson) and for live score/odds polling
+// (pollLiveMatches). Everything else - sport
 // priority, enabled sports, and which swiped match a viewer prefers - is
 // local-only, in this browser's own localStorage, with no server-side sync
 // of any kind (see README's "Local-only, no accounts").
@@ -43,7 +39,7 @@
 // UI copy goes through ./lib/i18n.mjs's t() (zh-TW by default, English
 // auto-detected from the browser - see that module's own top comment); team
 // names and venues stay bilingual regardless of UI language (see
-// buildTeamRow/renderVenue) since an English team/venue name is often the
+// updateTeamRow/renderVenue) since an English team/venue name is often the
 // more recognizable half for a fixture nobody has a settled Chinese name
 // for yet - that's real sports data, not UI chrome, so it isn't part of the
 // i18n layer at all.
@@ -122,27 +118,14 @@ import { installTapLog, tapLog } from './lib/tap-log.mjs';
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
 // anything truly hidden anyway - see that repo's own sports-proxy-worker.js
-// comment on /sports-proxy). Used to be injected into matches.json at
-// build time from a GitHub Actions repo Variable; hardcoded directly here
-// now that there's no more build step to inject it from (see this file's
-// own top comment on why) - confirmed live to still be the real deployed
-// Worker's own URL.
+// comment on /sports-proxy).
 //
 // A DIFFERENT Worker/URL than the rest of that repo's routes
 // (`orbit-workers-proxy`, still used by Orbit Class/Vocab) - not a typo.
-// /sports-proxy used to live on that same shared Worker, but that Worker's
-// wrangler.toml pins [placement] to region gcp:us-east4 (needed for its
-// /gemini route to dodge Google's Gemini-in-Hong-Kong block), a
-// whole-SCRIPT setting with no per-route override - so every request this
-// app made was being forced through a Virginia isolate regardless of this
-// app's own real audience being Taiwan-based, live-confirmed via
-// X-Worker-Colo: IAD on a plain /sports-proxy call. That was a real,
-// significant contributor to this app's own live-reported "first load
-// blank for 10+ seconds" / "updating data takes 10-20 seconds" symptoms -
-// see that repo's README ("Match Find live data") for the full story.
-// Pointing at this Worker's own separate, unpinned deployment instead lets
-// Cloudflare's default placement apply: run near whichever colo actually
-// received the request, i.e. near this app's own real viewers.
+// That Worker is region-pinned to Virginia for Gemini's sake, which added a
+// transpacific round trip to every request from this app's Taiwan-based
+// audience; this separate, unpinned deployment runs near the viewer instead
+// (see that repo's README, "Match Find live data").
 const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 
 // Every host buildMatches needs (ESPN, Polymarket, the MLB Stats API,
@@ -150,8 +133,8 @@ const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 // directly - this is the ONE fetchJson this page ever hands to
 // buildMatches, routing every request through the shared proxy's
 // /sports-proxy passthrough instead (see that Worker's own
-// SPORTS_PROXY_ALLOWED_HOSTS - it only forwards to hosts it already
-// trusts). Same shape as scripts/build-data.mjs's own Node-side fetchJson,
+// SPORTS_PROXY_ALLOWED_HOSTS in shared-proxy's sports-proxy-worker.js - it
+// only forwards to hosts it already trusts). Same shape as scripts/build-data.mjs's own Node-side fetchJson,
 // just reaching these hosts through the proxy instead of directly.
 //
 // Cached here, per exact upstream URL, for PROXY_FETCH_CACHE_TTL_MS - this
@@ -173,7 +156,7 @@ const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 // uncached direct fetches (see that function) are NOT routed through this -
 // live score/odds polling needs a guaranteed fresh request every tick, not
 // a cached one; the shared Worker's own short-TTL edge cache (see
-// jaypengx-collab/shared-proxy's worker.js) is what keeps THAT tier's real
+// jaypengx-collab/shared-proxy's sports-proxy-worker.js) is what keeps THAT tier's real
 // upstream cost down instead, across every viewer, not just this tab.
 const PROXY_FETCH_CACHE_TTL_MS = 45_000;
 const proxyFetchCache = new Map(); // url -> { data, expiresAt }
@@ -190,7 +173,7 @@ const proxyFetchInFlight = new Map(); // url -> Promise<data>
 // inconsistency itself is a symptom of exactly this: which one straggler
 // happens to be slow varies refresh to refresh. Set a little above the
 // shared Worker's own SPORTS_PROXY_UPSTREAM_TIMEOUT_MS (8s, see that
-// repo's worker.js) so a normal Worker-side timeout still gets to finish
+// repo's sports-proxy-worker.js) so a normal Worker-side timeout still gets to finish
 // and return its own clean error response first, rather than being raced
 // and losing to this timeout on every genuinely slow (not stuck) request.
 const PROXY_FETCH_TIMEOUT_MS = 12_000;
@@ -511,9 +494,8 @@ function buildSportIcon(sport) {
 
 // ---- Broadcast service registry -------------------------------------------
 //
-// `whereToWatchTw` is now a fixed rule's output (see match-builder.mjs's
-// `resolveWhereToWatchTw`), not Gemini's own free-form guess, but this
-// registry still matches it by plain text rather than a hardcoded enum
+// `whereToWatchTw` is a fixed rule's output (see match-builder.mjs's
+// `resolveWhereToWatchTw`), but this registry still matches it by plain text rather than a hardcoded enum
 // value here - both service names it can now actually produce (愛爾達體育台/
 // Apple TV) already match an entry below, and staying text-matched costs
 // nothing while keeping this file decoupled from exactly how the rule
@@ -755,35 +737,43 @@ applyStaticTranslations();
 // place personal taste overrides the algorithm's own judgment, and it's
 // local, explicit, and per-match rather than a blanket ranking toggle.
 
+// Every per-viewer localStorage read/write in this file goes through these
+// two. Storage can be missing, blocked (private browsing) or full, and the
+// stored value can be anything a previous visit left behind - a failed
+// read is just "nothing stored" (null) and a failed write just means this
+// page view won't be remembered next time, never an error worth surfacing.
+function readStoredJson(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key));
+  } catch {
+    return null;
+  }
+}
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // See readStoredJson's comment.
+  }
+}
+
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
-// PRIORITY_SCORE_DELTA/OWNED_SERVICE_SCORE_BONUS now live in
-// ./lib/recommendation.mjs alongside resolveViewingPlan, which is the only
-// place they're actually used.
 
 const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABEL_KEYS);
 
 function loadPriorityOrder() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
-    if (!Array.isArray(stored)) return DEFAULT_SPORT_ORDER.slice();
-    // Tolerates the sport list itself changing between visits: keeps
-    // whatever stored order still applies, appends any brand new sport at
-    // the end (never assume a new sport, or leftover an unknown value in a
-    // stale write, means anything relative to today's ranking).
-    const known = stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
-    const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
-    return [...known, ...missing];
-  } catch {
-    return DEFAULT_SPORT_ORDER.slice();
-  }
+  const stored = readStoredJson(SETTINGS_STORAGE_KEY);
+  if (!Array.isArray(stored)) return DEFAULT_SPORT_ORDER.slice();
+  // Tolerates the sport list itself changing between visits: keeps
+  // whatever stored order still applies, appends any brand new sport at
+  // the end (never assume a new sport, or leftover an unknown value in a
+  // stale write, means anything relative to today's ranking).
+  const known = stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
+  const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
+  return [...known, ...missing];
 }
 function savePriorityOrder(order) {
-  try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    // Private browsing / blocked storage - the panel still works for this
-    // page view, it just won't remember next time. Not worth surfacing.
-  }
+  writeStoredJson(SETTINGS_STORAGE_KEY, order);
 }
 state.priorityOrder = loadPriorityOrder();
 
@@ -797,20 +787,12 @@ state.priorityOrder = loadPriorityOrder();
 const ENABLED_SPORTS_STORAGE_KEY = 'matchfind-enabled-sports';
 
 function loadEnabledSports() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(ENABLED_SPORTS_STORAGE_KEY));
-    if (!Array.isArray(stored) || !stored.length) return new Set(DEFAULT_SPORT_ORDER);
-    return new Set(stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport)));
-  } catch {
-    return new Set(DEFAULT_SPORT_ORDER);
-  }
+  const stored = readStoredJson(ENABLED_SPORTS_STORAGE_KEY);
+  if (!Array.isArray(stored) || !stored.length) return new Set(DEFAULT_SPORT_ORDER);
+  return new Set(stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport)));
 }
 function saveEnabledSports(enabledSports) {
-  try {
-    localStorage.setItem(ENABLED_SPORTS_STORAGE_KEY, JSON.stringify([...enabledSports]));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
+  writeStoredJson(ENABLED_SPORTS_STORAGE_KEY, [...enabledSports]);
 }
 state.enabledSports = loadEnabledSports();
 // Not a per-viewer setting (see SERVICES' own comment) - fixed to this
@@ -833,18 +815,10 @@ state.myServiceIds = new Set(DEFAULT_MY_SERVICE_IDS);
 const PINNED_CHOICES_STORAGE_KEY = 'matchfind-pinned-choices';
 
 function loadPinnedChoices() {
-  try {
-    return deserializePinnedChoices(JSON.parse(localStorage.getItem(PINNED_CHOICES_STORAGE_KEY)), localDateKey(new Date()));
-  } catch {
-    return new Map();
-  }
+  return deserializePinnedChoices(readStoredJson(PINNED_CHOICES_STORAGE_KEY), localDateKey(new Date()));
 }
 function savePinnedChoices() {
-  try {
-    localStorage.setItem(PINNED_CHOICES_STORAGE_KEY, JSON.stringify(serializePinnedChoices(state.pinnedChoices)));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
+  writeStoredJson(PINNED_CHOICES_STORAGE_KEY, serializePinnedChoices(state.pinnedChoices));
 }
 // The REAL load - see state.pinnedChoices's own comment in the state
 // literal above for why this can't happen there directly (PINNED_CHOICES_
@@ -860,19 +834,11 @@ state.pinnedChoices = loadPinnedChoices();
 // by pruneLiveStickyIds.
 const LIVE_STICKY_STORAGE_KEY = 'matchfind-live-sticky-ids';
 function loadLiveStickyIds() {
-  try {
-    const ids = JSON.parse(localStorage.getItem(LIVE_STICKY_STORAGE_KEY));
-    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
-  } catch {
-    return new Set();
-  }
+  const ids = readStoredJson(LIVE_STICKY_STORAGE_KEY);
+  return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
 }
 function saveLiveStickyIds() {
-  try {
-    localStorage.setItem(LIVE_STICKY_STORAGE_KEY, JSON.stringify([...state.liveStickyIds]));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
+  writeStoredJson(LIVE_STICKY_STORAGE_KEY, [...state.liveStickyIds]);
 }
 state.liveStickyIds = loadLiveStickyIds();
 
@@ -899,20 +865,11 @@ function oldestPlanHistoryDayKey() {
 // bug once, before a fix went out, kept seeing the SAME wrong pick after
 // the fix deployed too, because it was already recorded as history.
 function loadDayPlanHistory() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(DAY_PLAN_HISTORY_STORAGE_KEY));
-    if (!stored) return new Map();
-    return deserializeDayPlanHistory(stored.entries, oldestPlanHistoryDayKey());
-  } catch {
-    return new Map();
-  }
+  const stored = readStoredJson(DAY_PLAN_HISTORY_STORAGE_KEY);
+  return deserializeDayPlanHistory(stored?.entries, oldestPlanHistoryDayKey());
 }
 function saveDayPlanHistory() {
-  try {
-    localStorage.setItem(DAY_PLAN_HISTORY_STORAGE_KEY, JSON.stringify({ entries: serializeDayPlanHistory(state.dayPlanHistory) }));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
+  writeStoredJson(DAY_PLAN_HISTORY_STORAGE_KEY, { entries: serializeDayPlanHistory(state.dayPlanHistory) });
 }
 state.dayPlanHistory = loadDayPlanHistory();
 // Every day's locks at once, for computeVarietyRotation - a series spans
@@ -1530,7 +1487,7 @@ function dayLabelFor(date, { short = false } = {}) {
 // between any two back-to-back picks.
 //
 // isQuietHours/matchInterval/computeOverlapRange/overlapMinutes/
-// isNearTotalOverlap/effectiveDurationMinutes/effectiveInterval/
+// isNearTotalOverlap/effectiveDurationMinutes/
 // schedulingInterval/canWatchSequentially/groupIntoSlots/
 // slotKeyFromMembers/weightedIntervalSchedule/computeDayPlan/
 // applyLiveExcitementBonus/matchupKey/resolveViewingPlan all now live in
@@ -2618,9 +2575,8 @@ function renderFilters() {
 // itself while this is nonzero instead of tearing the DOM out from under
 // an active gesture - see that function's own comment for the two real,
 // reported bugs this fixes: a team-logo flash on every background-
-// triggered re-render (a routine live-data poll arriving mid-interaction -
-// this used to also cover the now-removed Gemini tie-break's own async
-// answer, see docs/recommendation-engine-audit.md's Round 41) and a swipe silently breaking
+// triggered re-render (a routine live-data poll arriving mid-interaction)
+// and a swipe silently breaking
 // mid-drag (the dragged card's own DOM node, and its pointer capture, gets
 // removed out from under an active pointerdown, so the browser has
 // nowhere left to deliver the rest of that gesture's move/up events).
@@ -2903,8 +2859,7 @@ function renderRecommendedSection() {
   // computeDayPlan's own forcedIds mechanism marks every forced pick as
   // .isPreferred (indistinguishable from a real viewer pin) - correct for
   // a genuine pin, wrong for a rotation-forced one (see
-  // recommendation.mjs's own Round 41/44 comments: this is exactly the
-  // bug that got Gemini's forced override removed). Put the correct 推薦
+  // recommendation.mjs's clearRotationIsPreferred). Put the correct 推薦
   // label back on anything ONLY rotation forced in, never touching an id
   // that's ALSO a real pin.
   clearRotationIsPreferred(dayCandidates, rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)), state.pinnedChoices.get(dayKey));
@@ -3312,20 +3267,12 @@ function pickPregameScoring(match) {
   return entry;
 }
 function loadPregameScoring() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PREGAME_SCORING_STORAGE_KEY));
-    if (!raw || typeof raw !== 'object') return new Map();
-    return new Map(Object.entries(raw).filter(([, entry]) => entry && Number.isFinite(entry.score) && typeof entry.startTimeUtc === 'string'));
-  } catch {
-    return new Map();
-  }
+  const raw = readStoredJson(PREGAME_SCORING_STORAGE_KEY);
+  if (!raw || typeof raw !== 'object') return new Map();
+  return new Map(Object.entries(raw).filter(([, entry]) => entry && Number.isFinite(entry.score) && typeof entry.startTimeUtc === 'string'));
 }
 function savePregameScoring() {
-  try {
-    localStorage.setItem(PREGAME_SCORING_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.pregameScoring)));
-  } catch {
-    // Private browsing / blocked storage - see savePriorityOrder's own comment.
-  }
+  writeStoredJson(PREGAME_SCORING_STORAGE_KEY, Object.fromEntries(state.pregameScoring));
 }
 // Called after every merge: by then a started fixture already carries its
 // frozen pre-game values (freezeStartedMatchScoring), so storing whatever
@@ -3337,33 +3284,27 @@ function rememberPregameScoring(rawMatches) {
 }
 state.pregameScoring = loadPregameScoring();
 
+// Purely a perceived-load-time optimization - losing it (quota exceeded,
+// blocked storage) just means the next load is network-first.
 function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
-  try {
-    // `.live` is stripped - it's pollLiveMatches's own poll-tier detail
-    // (inning/quarter/lap), already stale or flat wrong by the time a LATER
-    // page load reads this snapshot back; that load's own live poll
-    // repopulates it fresh within LIVE_POLL_INTERVAL_MS regardless (see
-    // matchWorthPollingNow), so keeping a frozen copy here would only risk
-    // briefly showing a long-over inning as if it were still happening.
-    const snapshot = { generatedAt, rawMatches: rawMatches.map(({ live, ...rest }) => rest), tbdMatches };
-    localStorage.setItem(MATCH_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
-  } catch {
-    // Private browsing / blocked storage / quota exceeded - this is purely
-    // a perceived-load-time optimization; losing it just means the next
-    // load falls back to today's normal (network-first) behavior, nothing
-    // worth surfacing a failure for.
-  }
+  // `.live` is stripped - it's pollLiveMatches's own poll-tier detail
+  // (inning/quarter/lap), already stale or flat wrong by the time a LATER
+  // page load reads this snapshot back; that load's own live poll
+  // repopulates it fresh within LIVE_POLL_INTERVAL_MS regardless (see
+  // matchWorthPollingNow), so keeping a frozen copy here would only risk
+  // briefly showing a long-over inning as if it were still happening.
+  writeStoredJson(MATCH_SNAPSHOT_STORAGE_KEY, {
+    generatedAt,
+    rawMatches: rawMatches.map(({ live, ...rest }) => rest),
+    tbdMatches
+  });
 }
 
 function loadMatchSnapshot() {
-  try {
-    const snapshot = JSON.parse(localStorage.getItem(MATCH_SNAPSHOT_STORAGE_KEY));
-    if (!snapshot || !Array.isArray(snapshot.rawMatches) || !snapshot.generatedAt) return null;
-    if (Date.now() - Date.parse(snapshot.generatedAt) > MATCH_SNAPSHOT_MAX_AGE_MS) return null;
-    return snapshot;
-  } catch {
-    return null;
-  }
+  const snapshot = readStoredJson(MATCH_SNAPSHOT_STORAGE_KEY);
+  if (!snapshot || !Array.isArray(snapshot.rawMatches) || !snapshot.generatedAt) return null;
+  if (Date.now() - Date.parse(snapshot.generatedAt) > MATCH_SNAPSHOT_MAX_AGE_MS) return null;
+  return snapshot;
 }
 
 // Which in-progress or finished fixtures a build should look up the pre-game line for

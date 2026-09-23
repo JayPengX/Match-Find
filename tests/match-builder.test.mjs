@@ -1,14 +1,12 @@
 // Tests for the pure helper functions exported from public/lib/match-builder.mjs
-// (isTimeTbd/parseOverallRecord/oddsContext/computeMatchObjectiveScore/...).
-// Importing this file does NOT run a live build - see build-data.mjs's own
-// entry-module guard at the bottom (`if (isMain) { main()... }`), added
-// specifically so these helpers could be unit-tested without a network call.
+// (isTimeTbd/parseOverallRecord/parseOddsSignal/computeMatchObjectiveScore/...).
+// Importing the module does NOT run a live build - buildMatches only fetches
+// when called, through an injected fetchJson.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isTimeTbd,
   parseOverallRecord,
-  oddsContext,
   parseOddsSignal,
   resolveWhereToWatchTw,
   computeDurationMinutes,
@@ -50,19 +48,6 @@ describe('parseOverallRecord', () => {
   });
   test('returns null when records is missing entirely', () => {
     assert.equal(parseOverallRecord({}), null);
-  });
-});
-
-describe('oddsContext', () => {
-  test('formats a details string with an over/under when both are present', () => {
-    assert.equal(oddsContext({ odds: [{ details: 'LAD -1.5', overUnder: 8.5 }] }), ' [Odds: LAD -1.5, O/U 8.5]');
-  });
-  test('formats without an over/under clause when overUnder is not a number', () => {
-    assert.equal(oddsContext({ odds: [{ details: 'LAD -1.5' }] }), ' [Odds: LAD -1.5]');
-  });
-  test('returns empty string when no provider has posted odds', () => {
-    assert.equal(oddsContext({}), '');
-    assert.equal(oddsContext({ odds: [] }), '');
   });
 });
 

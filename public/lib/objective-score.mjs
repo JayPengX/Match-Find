@@ -2,16 +2,9 @@
 // Deterministic, per-sport "objective" competitiveness/watchability/
 // enduranceScore/broadcastQuality scoring, computed from real statistical
 // signals (season record, recent form, standings proximity to a playoff
-// spot, championship-race intensity, betting-market spread) rather than
-// asked from Gemini's own training-data impression of two teams.
-//
-// This is the architectural inversion public/lib/match-builder.mjs's own
-// top-of-file comment describes: these numbers are now the PRIMARY score,
-// computed the same way every time from the same inputs, before Gemini
-// ever sees the fixture. The shared proxy's `/match-recommend` is asked
-// only to VALIDATE this score against its own real-world knowledge and
-// return a small, bounded adjustment (see that repo's worker.js) - never
-// to invent competitiveness/watchability from scratch the way it used to.
+// spot, championship-race intensity, betting-market spread). These numbers
+// are the whole score - see public/lib/match-builder.mjs's top-of-file
+// comment.
 //
 // Every function here is pure (no network, no Date.now(), no randomness) -
 // public/lib/sport-signals.mjs owns fetching/parsing the real API data these
@@ -222,10 +215,7 @@ export function closenessFromLastTen(awayLastTen, homeLastTen) {
 // well-known premium/exclusive streaming package starts higher than an
 // unlisted or bare regional feed. This is deliberately coarse (a single
 // flat tier per network, not a real production-quality dataset, which
-// doesn't exist anywhere as structured data this build could fetch) - it
-// exists so Gemini has a concrete NUMBER to validate/adjust against,
-// instead of being asked to invent one from nothing the way this field
-// used to be scored end to end.
+// doesn't exist anywhere as structured data this build could fetch).
 export const FLAGSHIP_BROADCAST_NETWORKS = [
   'espn',
   'espn2',
@@ -629,7 +619,7 @@ export function computeEplObjectiveScore({
   // Same replacement, not stacking, as MLB's own - see computeMlbObjectiveScore's
   // own comment on marketCloseness/priceCloseness. Worth more here than for
   // MLB/NBA (ESPN essentially never posts a real spread for EPL at all - see
-  // match-builder.mjs's oddsContext comment - so this is usually the ONLY
+  // match-builder.mjs's parseOddsSignal comment - so this is usually the ONLY
   // market-based closeness signal EPL ever gets, not a liquidity-gated
   // upgrade over an already-present one). `closenessFromWinProb` reads
   // straight off market.oddsMarketWinPctAway/Home regardless of a real draw

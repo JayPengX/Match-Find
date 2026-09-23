@@ -1233,17 +1233,6 @@ main#app {
 }
 .page-footer p { margin: 4px 0; }
 #next-update-note { font-variant-numeric: tabular-nums; }
-#ai-status-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-#ai-refetch-link {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 600;
-}
-#ai-refetch-link:hover { text-decoration: underline; }
 
 @media (max-width: 480px) {
   .match-card { padding: 16px; }

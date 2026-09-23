@@ -737,7 +737,7 @@ describe('Test 5 - MLB continuation respects the real overrun-padded end, not ju
     // predicted length still had ANOTHER 25% padded on top once it was
     // already over, keeping an obviously-fine continuation blocked. Once
     // build-data.mjs marks a match isFinished, its durationMinutes is
-    // already real (see build-data.mjs's finishedDurationMinutes) - there
+    // already real (see match-builder.mjs's finishedDurationMinutes) - there
     // is no more forward uncertainty left to hedge.
     const liveUncertain = mlbMatch({ durationMinutes: 150 });
     const finished = mlbMatch({ durationMinutes: 150, isFinished: true });

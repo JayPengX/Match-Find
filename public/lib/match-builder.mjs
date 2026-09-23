@@ -37,28 +37,10 @@
 // baseline something else refines - it's the WHOLE score, for every
 // fixture, every run.
 //
-// This pipeline used to also send every fixture to Gemini (via the shared
-// Cloudflare Worker in jaypengx-collab/shared-proxy, route
-// /match-recommend) for a small, bounded validation adjustment on top of
-// this score - removed entirely as of docs/recommendation-engine-audit.md's
-// Round 11. Two independent reasons, not one: (1) free-tier Gemini quota
-// proved unable to sustain this workload - Round 9 found Google Search
-// grounding (the one thing that could have added real signal a formula
-// can't see - an injury, a hot narrative) failing with 429
-// RESOURCE_EXHAUSTED on 100% of requests, a billing-tier wall, not a bug;
-// (2) even where the plain (non-grounded) validation call succeeded, its
-// own adjustment was clamped to ±2 specifically so it could never do more
-// than nudge this same objective score - Round 9's own live-verified case
-// (a 0-0 preseason exhibition scoring near-maximum) showed Gemini's
-// validation correctly IDENTIFYING the problem in its own reasoning text
-// while being structurally unable to fix it, because the bound meant only
-// the deterministic formula itself ever could. Losing a bounded nudge that
-// was already quota-starved and already couldn't fix what it correctly
-// noticed is a real loss of a little variety in the `reason` text (see
-// buildObjectiveReasonZh below - always built from the same objective
-// factors now, not sometimes replaced with Gemini's own prose), not a loss
-// of scoring quality - every fixture's actual number is computed exactly
-// the same way it always was.
+// An earlier version also asked Gemini (via the shared proxy) for a small
+// bounded adjustment on top of this score; it was removed in
+// docs/recommendation-engine-audit.md's Round 11 (quota couldn't sustain it,
+// and its ±2 clamp meant it could never fix what the formula got wrong).
 //
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // Confidence is computed from exactly the same source/refined fields this
@@ -107,8 +89,7 @@ import {
   isNationalBroadcast
 } from './sport-duration.mjs';
 // The deterministic, API-data-based scoring engine - see that module's own
-// top-of-file comment for why this replaced asking Gemini to score a
-// fixture from scratch.
+// top-of-file comment.
 import {
   clamp,
   estimateBroadcastQualityBaseline,
@@ -363,8 +344,7 @@ export function isTimeTbd(statusType) {
 // (.200) one, directly inflating computeEplObjectiveScore's season-closeness
 // signal (a fake near-.500-vs-.400 "close game" instead of the real
 // .200-vs-.400 gap) - see docs/recommendation-engine-audit.md's Round 14.
-// Feeds both the objective scoring engine's win% signal and the short
-// human-readable context string handed to Gemini - never trusted for
+// Feeds the objective scoring engine's win% signal - never trusted for
 // anything more precise than "roughly how good is this team right now".
 export function parseOverallRecord(competitor) {
   const summary = (competitor.records || []).find(r => r.type === 'total' || r.name === 'overall')
@@ -401,34 +381,10 @@ function buildCompetitor(leagueId, c) {
   };
 }
 
-function competitorContext(competitor) {
-  const record = competitor.record;
-  if (!record) return competitor.name;
-  // Ties only ever print for a sport that actually has them (EPL) - a
-  // trailing "-0" on every MLB/NBA context string would be dead noise.
-  const suffix = record.ties ? `-${record.ties}` : '';
-  return `${competitor.name} (${record.wins}-${record.losses}${suffix})`;
-}
-
-// ESPN's own on-record betting line for the fixture, when a provider has
-// actually posted one (mainstream US sports only in practice - MLB/NBA
-// typically have one most days, soccer/EPL and F1 essentially never do via
-// this API) - a short, human-readable string for Gemini's own context
-// (e.g. "LAD -1.5"). See parseOddsSignal just below for the same data as
-// plain numbers, which is what the objective scoring engine actually
-// computes from.
-export function oddsContext(competition) {
-  const odds = competition.odds?.[0];
-  const details = typeof odds?.details === 'string' ? odds.details.trim() : '';
-  if (!details) return '';
-  const overUnder = Number(odds?.overUnder);
-  return ` [Odds: ${details}${Number.isFinite(overUnder) ? `, O/U ${overUnder}` : ''}]`;
-}
-
-// The SAME `competition.odds[0]` object oddsContext reads, as plain numbers
-// instead of a formatted string meant for a language model - what
-// public/lib/objective-score.mjs's closenessFromSpread actually consumes.
-// Returns nulls (never NaN) when no provider has posted a line, which is
+// ESPN's own on-record betting line for the fixture (`competition.odds[0]`),
+// when a provider has actually posted one - mainstream US sports only in
+// practice; soccer/EPL and F1 essentially never have one via this API. What
+// public/lib/objective-score.mjs's closenessFromSpread consumes. Returns nulls (never NaN) when no provider has posted a line, which is
 // the common case for most non-mainstream-US fixtures.
 export function parseOddsSignal(competition) {
   const odds = competition.odds?.[0];
@@ -536,9 +492,9 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         .flatMap(b => b.names || [])
         .slice(0, 1)[0];
       // ESPN's season.type is 2 for the regular season and 3 for the
-      // postseason (confirmed against the live API) - now feeds the
-      // objective scoring engine's own stakes calculation directly (see
-      // computeMatchObjectiveScore below), not just Gemini's own context.
+      // postseason (confirmed against the live API) - feeds the objective
+      // scoring engine's stakes calculation (see computeMatchObjectiveScore
+      // below).
       const isPostseason = event.season?.type === 3;
       const oddsSignal = parseOddsSignal(competition);
       const id = `${league.id}-${event.id}`;
@@ -607,11 +563,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
-        competitors,
-        context:
-          competitors.map(competitorContext).join(' vs ') +
-          (isPostseason ? ' (postseason/playoff game)' : '') +
-          oddsContext(competition)
+        competitors
       });
     }
   }
@@ -717,8 +669,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
         venue,
         broadcast: broadcast || '',
         logo: F1_LOGO,
-        competitors: [],
-        context: `${event.name}${sessionType.labelSuffix} - Formula 1${sessionType.labelSuffix ? ' ' + sessionType.labelSuffix.trim().toLowerCase() : ' race'}`
+        competitors: []
       });
     }
   }
@@ -895,11 +846,8 @@ export function describeFactorsZh(factors) {
   return labels;
 }
 
-// The reason text a fixture gets BEFORE (or without) Gemini's own
-// validation pass - grounded in the actual data that produced its
-// objective score, not a static "no data" placeholder the way the old
-// heuristicScore's fallback reason was, since there almost always IS real
-// data behind this score now.
+// The reason text shown for a fixture - grounded in the actual data that
+// produced its objective score rather than a static placeholder.
 export function buildObjectiveReasonZh(factors) {
   const labels = describeFactorsZh(factors);
   if (!labels.length) return '目前沒有足夠的客觀數據可供估計。';
@@ -1005,7 +953,7 @@ export async function enrichWithPolymarketOdds(matches, fetchJson) {
       // outright market (confirmed live - same per-driver Yes/No shape,
       // see resolvePoleWinnerOdds's own comment) - a practice session
       // isn't "who wins" anything Polymarket has a market for, so it's
-      // left alone (see build-data.mjs's own F1_SESSION_TYPES/match id
+      // left alone (see F1_SESSION_TYPES above/match id
       // convention for the `-race`/`-qual` suffixes checked here).
       const sessionDateUtc = match.startTimeUtc.slice(0, 10);
       const favorites = match.id.endsWith('-race')

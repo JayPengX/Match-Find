@@ -1,6 +1,5 @@
 // Tests for public/lib/objective-score.mjs - the deterministic, API-data-based
-// scoring engine that replaced asking Gemini for competitiveness/
-// watchability/enduranceScore from scratch. Every function here is pure,
+// scoring engine for competitiveness/watchability/enduranceScore. Every function here is pure,
 // so these tests use plain hand-built numbers rather than real API
 // responses (see public/lib/sport-signals.mjs's own tests for the parsing
 // half of this pipeline).
@@ -832,7 +831,7 @@ describe('computeEplObjectiveScore', () => {
 
   // Same replace-not-stack rule as MLB/NBA's own - worth more here, since
   // ESPN essentially never posts a real spread for EPL at all (see
-  // match-builder.mjs's oddsContext comment), so this is usually the ONLY
+  // match-builder.mjs's parseOddsSignal comment), so this is usually the ONLY
   // market-based closeness signal EPL fixtures get, not just an upgrade
   // over an already-present one.
   describe('marketWinPctAway/marketWinPctHome (Polymarket, replacing not stacking with oddsSpread)', () => {

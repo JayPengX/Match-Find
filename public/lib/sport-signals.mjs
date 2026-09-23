@@ -197,9 +197,7 @@ export function parseMlbStandingsResponse(json) {
 // on hand for every fixture, via buildCompetitor's `.name`) so callers
 // never need to touch a numeric team id themselves. Called ONCE per build
 // (not once per fixture - every MLB game that day shares the same league-
-// wide standings snapshot), same "one call serves every fixture" shape as
-// this repo's own oddsContext/context building already assumes for
-// per-match data. Returns an EMPTY Map (never null, never throws) on any
+// wide standings snapshot). Returns an EMPTY Map (never null, never throws) on any
 // failure - every team simply reads back as "no standings signal", which
 // computeMlbObjectiveScore already treats as a normal, harmless case (see
 // its own comment).
