@@ -59,7 +59,8 @@ import {
   computeVarietyRotation,
   mergeVarietyForcedIds,
   clearRotationIsPreferred,
-  VARIETY_CLOSE_CALL_GAP
+  VARIETY_CLOSE_CALL_GAP,
+  isWeekendDayKey
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -1508,6 +1509,75 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
       });
       assert.ok(winners.includes('rays')); // the incumbent still wins at least one of its own two days
       assert.equal(new Set(winners).size, 2); // still real variety - the two days aren't identical
+    });
+
+    describe('saving the best contender for the weekend', () => {
+      const winnersFor = (days, rotation) =>
+        Object.fromEntries(
+          [...days.keys()].map(dayKey => {
+            const dayMatches = days.get(dayKey);
+            computeDayPlan(dayKey, dayMatches, mergeVarietyForcedIds(null, rotation.get(dayKey)), { scoreField: 'planningScore' });
+            return [dayKey, dayMatches.find(m => m.recommended).id.split('-')[0]];
+          })
+        );
+
+      test('isWeekendDayKey is Fri/Sat/Sun by the local calendar date', () => {
+        assert.deepEqual(
+          ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28'].map(isWeekendDayKey),
+          [false, true, true, true, false]
+        );
+      });
+
+      test('a Wed-Fri run gives Friday to the strongest contender', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `brewers-${dayKey}`, planningScore: 7.2, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') }),
+              makeMatch({ id: `guardians-${dayKey}`, planningScore: 7.0, competitors: teams('Cleveland Guardians', 'Boston Red Sox') }),
+              makeMatch({ id: `rays-${dayKey}`, planningScore: 6.9, competitors: teams('Tampa Bay Rays', 'New York Yankees') })
+            ])
+          );
+        }
+        const winners = winnersFor(days, computeVarietyRotation(days));
+        assert.equal(winners['2026-09-25'], 'brewers');
+        assert.equal(new Set(Object.values(winners)).size, 3); // still one day each
+      });
+
+      test('a Thu-Fri run whose incumbent would land on Thursday is swapped so the better game is on Friday', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `best-${dayKey}`, planningScore: 7.2, competitors: teams('A', 'B') }),
+              makeMatch({ id: `alt-${dayKey}`, planningScore: 6.9, competitors: teams('C', 'D') })
+            ])
+          );
+        }
+        const winners = winnersFor(days, computeVarietyRotation(days));
+        assert.deepEqual(winners, { '2026-09-24': 'alt', '2026-09-25': 'best' });
+      });
+
+      test('never trades variety for the weekend - no back-to-back repeat even when the best game has two turns', () => {
+        // Thu/Fri/Sat, two contenders: the best one gets two of the three
+        // days, but Fri+Sat would repeat it back to back, so it has to be
+        // Thu+Sat with the alternative on Fri.
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25', '2026-09-26']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `best-${dayKey}`, planningScore: 7.2, competitors: teams('A', 'B') }),
+              makeMatch({ id: `alt-${dayKey}`, planningScore: 6.9, competitors: teams('C', 'D') })
+            ])
+          );
+        }
+        const winners = Object.values(winnersFor(days, computeVarietyRotation(days)));
+        winners.forEach((w, i) => i > 0 && assert.notEqual(w, winners[i - 1]));
+        assert.equal(winners[2], 'best'); // Saturday
+      });
     });
 
     test('a real gap day (no matches at all) breaks a run instead of silently joining two separate repeats across it', () => {

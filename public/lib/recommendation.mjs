@@ -1337,6 +1337,67 @@ function closeAlternativeMatches(choice, byId) {
 // hard force, not a score nudge). A day absent from the map needs no
 // intervention at all - either no rotation run touches it, or its own
 // natural winner already IS that day's assigned turn.
+// Fri/Sat/Sun (by the viewer's own local calendar day - dayKeys are local
+// dates, see app.js's localDateKey) - when the viewer actually has time to
+// watch, per direct request: "I want the best match when it's closer to
+// weekend, because that's when I actually watch those games". Only used to
+// decide WHICH day of a rotated run each contender gets (see
+// arrangeRunDays) - never whether a run rotates or who gets a turn.
+export const WEEKEND_WEEKDAYS = new Set([5, 6, 0]);
+
+export function isWeekendDayKey(dayKey) {
+  return WEEKEND_WEEKDAYS.has(new Date(`${dayKey}T12:00:00Z`).getUTCDay());
+}
+
+// Final arrangement of a rotated run's already-decided assignment. Swaps two
+// days' members (only when each is eligible for the other's day) whenever
+// that strictly improves, in order of priority:
+//   1. fewer back-to-back repeats of the same matchup - when a run has more
+//      days than close contenders, someone plays twice, and the leftover-
+//      day step above can hand it a day right next to its other one (a
+//      Thu/Fri/Sat run with two contenders came out alt/best/best);
+//   2. a stronger game on the weekend days (see WEEKEND_WEEKDAYS).
+// Only ever swaps, so every contender keeps exactly as many days as the
+// matching gave it - who gets a turn is untouched, only the ORDER changes.
+function arrangeRunDays(run, dayAssignedTo, closeMatchByDay) {
+  const dayKeys = run.entries.map(e => e.dayKey); // consecutive, in order
+  if (dayKeys.length < 2) return;
+  const scoreOn = (dayKey, member) => {
+    const m = closeMatchByDay.get(dayKey).get(member);
+    return Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore;
+  };
+  const repeats = assignment => dayKeys.filter((dayKey, i) => i > 0 && assignment.get(dayKey) === assignment.get(dayKeys[i - 1])).length;
+  const weekendTotal = assignment =>
+    dayKeys.reduce((sum, dayKey) => (isWeekendDayKey(dayKey) ? sum + scoreOn(dayKey, assignment.get(dayKey)) : sum), 0);
+  const better = (next, current) => {
+    const r = repeats(next) - repeats(current);
+    if (r !== 0) return r < 0;
+    return weekendTotal(next) > weekendTotal(current) + 1e-9; // strict, so this always terminates
+  };
+
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < dayKeys.length && !improved; i += 1) {
+      for (let j = i + 1; j < dayKeys.length && !improved; j += 1) {
+        const [a, b] = [dayKeys[i], dayKeys[j]];
+        const memberA = dayAssignedTo.get(a);
+        const memberB = dayAssignedTo.get(b);
+        if (memberA === memberB) continue;
+        if (!closeMatchByDay.get(a).has(memberB) || !closeMatchByDay.get(b).has(memberA)) continue;
+        const swapped = new Map(dayAssignedTo);
+        swapped.set(a, memberB);
+        swapped.set(b, memberA);
+        if (better(swapped, dayAssignedTo)) {
+          dayAssignedTo.set(a, memberB);
+          dayAssignedTo.set(b, memberA);
+          improved = true;
+        }
+      }
+    }
+  }
+}
+
 export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map()) {
   const dayKeys = [...matchesByDayKey.keys()].sort();
   const byIdByDay = new Map();
@@ -1505,6 +1566,8 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
       dayAssignedTo.set(dayKey, chosen);
       winCount.set(chosen, winCount.get(chosen) + 1);
     });
+
+    arrangeRunDays(run, dayAssignedTo, closeMatchByDay);
 
     // Every day of a rotated run is forced - INCLUDING the days the
     // incumbent keeps. Leaving those "to happen naturally" assumed the
