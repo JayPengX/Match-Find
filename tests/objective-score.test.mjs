@@ -127,6 +127,64 @@ describe('playoffProximityScore', () => {
   test('divisionLeadMargin is ignored for a team that is NOT leading (gamesBack > 0)', () => {
     assert.equal(playoffProximityScore(8, 8, 30), playoffProximityScore(8, 8, undefined));
   });
+
+  describe('magicNumber (preferred over divisionLeadMargin - see sport-signals.mjs)', () => {
+    test('a magic number of 1 (could clinch tonight) scores a perfect 10, regardless of lead margin', () => {
+      assert.equal(playoffProximityScore(0, 0, 30, 1), 10);
+    });
+
+    test('a real, live case: a 1-game division lead with a magic number of 5 still reads as genuinely tense', () => {
+      // Live case validated against contemporary coverage (2026-09-23):
+      // Cleveland Guardians, AL Central, division lead margin 1 over a
+      // Chicago White Sox team a single game back - a real, live division
+      // race - magic number 5. Matches what divisionLeadMargin alone
+      // already gave this exact margin (playoffProximityScore(0,0,1) = 9,
+      // by design - see the slope comment above) rather than reading as
+      // notably LESS tense just because it's read a different way.
+      assert.equal(playoffProximityScore(0, 0, 1, 5), 9);
+    });
+
+    test('regression: a real rival stays inside the rotation\'s own close-call gap, not pushed out by an over-eager discount', () => {
+      // Live case this guards against: a first cut of this fix (slope
+      // 0.5/point) discounted magic-number 5 down to 8, dropping Cleveland
+      // Guardians @ Boston Red Sox (effectiveScore ~6.8) more than
+      // VARIETY_CLOSE_CALL_GAP (0.6) behind its real rival Milwaukee
+      // Brewers @ Philadelphia Phillies (~7.1) - which silently excluded a
+      // genuinely live, comparably-strong rival from the whole-week
+      // rotation (see computeVarietyRotation's own pool filter) purely
+      // because ITS OWN stakes got read a slightly different, less
+      // generous way than an equally-tense divisionLeadMargin case would
+      // have. The margin between the two readings has to stay well under
+      // VARIETY_CLOSE_CALL_GAP's own scale (0.6) for a genuinely
+      // comparable case, not swing the outcome on its own.
+      const byMagicNumber = playoffProximityScore(0, 0, 1, 5);
+      const byLeadMarginAlone = playoffProximityScore(0, 0, 1);
+      assert.ok(Math.abs(byMagicNumber - byLeadMarginAlone) <= 1);
+    });
+
+    test('a comfortable lead margin with a SMALL magic number scores higher than lead margin alone would', () => {
+      // The gap this exists for: divisionLeadMargin alone can't tell "6
+      // games up in June" from "6 games up with a handful left" - a magic
+      // number already bakes the schedule in, so a small one outscores
+      // what the lead-margin-only reading would have given.
+      const byMagicNumber = playoffProximityScore(0, 0, 6, 3);
+      const byLeadMarginAlone = playoffProximityScore(0, 0, 6, undefined);
+      assert.ok(byMagicNumber > byLeadMarginAlone);
+    });
+
+    test('falls back to divisionLeadMargin once the leader has clinched (no magic number reported any more)', () => {
+      assert.equal(playoffProximityScore(0, 0, 9, undefined), playoffProximityScore(0, 0, 9));
+      assert.equal(playoffProximityScore(0, 0, 9, null), playoffProximityScore(0, 0, 9));
+    });
+
+    test('never discounted below 2, same floor as divisionLeadMargin', () => {
+      assert.equal(playoffProximityScore(0, 0, undefined, 40), 2);
+    });
+
+    test('ignored for a team that is NOT leading (gamesBack > 0)', () => {
+      assert.equal(playoffProximityScore(8, 8, undefined, 1), playoffProximityScore(8, 8, undefined, undefined));
+    });
+  });
 });
 
 describe('cutoffProximityScore', () => {
@@ -309,6 +367,53 @@ describe('computeMlbObjectiveScore', () => {
     // At this high a competitiveness, full marquee credit applies - same
     // as the old hard gate's own "yes" case.
     assert.equal(rivalry.marqueeCredit, 1);
+  });
+
+  // Direct instruction: "we prioritize star/team power" - EPL's own
+  // isBigClub brought to MLB (see sport-duration.mjs's MLB_BIG_CLUBS).
+  describe('isBigClub (star/team power)', () => {
+    test('a marquee franchise raises watchability over an otherwise-identical non-marquee fixture, same shape as isRivalry', () => {
+      const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isBigClub: false });
+      const bigClub = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isBigClub: true });
+      assert.ok(bigClub.watchability > plain.watchability);
+      assert.equal(bigClub.marqueeCredit, 1);
+      assert.ok(bigClub.factors.includes('known marquee-franchise fixture'));
+    });
+
+    test('stacks with a genuine rivalry (a Yankees @ Red Sox game is both) - a bigger lift than either fact alone', () => {
+      const base = { awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false };
+      const neither = computeMlbObjectiveScore({ ...base, isRivalry: false, isBigClub: false });
+      const rivalryOnly = computeMlbObjectiveScore({ ...base, isRivalry: true, isBigClub: false });
+      const bigClubOnly = computeMlbObjectiveScore({ ...base, isRivalry: false, isBigClub: true });
+      const both = computeMlbObjectiveScore({ ...base, isRivalry: true, isBigClub: true });
+      assert.ok(both.watchability > rivalryOnly.watchability);
+      assert.ok(both.watchability > bigClubOnly.watchability);
+      assert.ok(rivalryOnly.watchability > neither.watchability);
+      assert.ok(bigClubOnly.watchability > neither.watchability);
+      // The gating fraction itself is a single number (purely a function of
+      // tonight's own competitiveness), not doubled just for having two
+      // reasons - matches recommendation.mjs's own flat, non-stacking
+      // undiluted bonus (MARQUEE_FIXTURE_SCORE_BONUS's own comment).
+      assert.equal(both.marqueeCredit, rivalryOnly.marqueeCredit);
+      assert.equal(both.marqueeCredit, bigClubOnly.marqueeCredit);
+    });
+
+    test('gated by tonight\'s own competitiveness the same graduated way as isRivalry - a decided blowout between two marquee names gets little to no credit', () => {
+      // Same real shape as the Dodgers/Giants rivalry case just below -
+      // both Los Angeles Dodgers and San Francisco Giants are also on
+      // MLB_BIG_CLUBS, so a lopsided pairing between them is both.
+      const belowGate = computeMlbObjectiveScore({
+        awayWinPct: 96 / 156,
+        homeWinPct: 64 / 156,
+        away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
+        home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
+        isPostseason: false,
+        isRivalry: false,
+        isBigClub: true
+      });
+      assert.equal(belowGate.competitiveness, 5);
+      assert.ok(belowGate.marqueeCredit > 0 && belowGate.marqueeCredit < 1);
+    });
   });
 
   // Round 31 (2026-09-26 TW time): a REAL Dodgers (96-60) @ Giants (64-92)

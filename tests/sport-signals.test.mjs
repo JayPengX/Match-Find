@@ -140,6 +140,34 @@ describe('parseMlbStandingsResponse', () => {
     const json = { records: [{ teamRecords: [{ team: { id: 119 }, gamesBack: '-' }] }] };
     assert.equal(parseMlbStandingsResponse(json).get(119).divisionLeadMargin, null);
   });
+
+  describe('magicNumber (leader only, see objective-score.mjs\'s playoffProximityScore)', () => {
+    test('the leader gets a real, still-counting-down magic number parsed from the API', () => {
+      const json = {
+        records: [
+          {
+            teamRecords: [
+              { team: { id: 114 }, gamesBack: '-', magicNumber: '5' }, // Guardians, leading, not yet clinched
+              { team: { id: 145 }, gamesBack: '1.0', magicNumber: undefined } // White Sox, runner-up
+            ]
+          }
+        ]
+      };
+      const parsed = parseMlbStandingsResponse(json);
+      assert.equal(parsed.get(114).magicNumber, 5);
+      assert.equal(parsed.get(145).magicNumber, undefined, 'only ever set for the leader itself');
+    });
+
+    test('"-" (already clinched) parses as null, not 0', () => {
+      const json = { records: [{ teamRecords: [{ team: { id: 139 }, gamesBack: '-', magicNumber: '-' }] }] };
+      assert.equal(parseMlbStandingsResponse(json).get(139).magicNumber, null);
+    });
+
+    test('a missing magicNumber field (a division with no live race at all) parses as null', () => {
+      const json = { records: [{ teamRecords: [{ team: { id: 119 }, gamesBack: '-' }] }] };
+      assert.equal(parseMlbStandingsResponse(json).get(119).magicNumber, null);
+    });
+  });
 });
 
 // Unlike the MLB parser above, these two ARE verified against real live

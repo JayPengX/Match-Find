@@ -179,7 +179,7 @@ export const OWNED_SERVICE_SCORE_BONUS = 0.5;
 // (already shipped in matches.json, see build-data.mjs) rather than needing
 // a brand new build-time field - every relevant factor string already has a
 // stable, matchable substring.
-const MARQUEE_FACTOR_SUBSTRINGS = ['derby fixture', 'big-club fixture', 'rivalry matchup'];
+const MARQUEE_FACTOR_SUBSTRINGS = ['derby fixture', 'big-club fixture', 'marquee-franchise fixture', 'rivalry matchup'];
 export function isMarqueeFixture(match) {
   return Array.isArray(match.objectiveFactors) && match.objectiveFactors.some(f => MARQUEE_FACTOR_SUBSTRINGS.some(s => f.includes(s)));
 }

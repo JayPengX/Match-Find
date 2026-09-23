@@ -12,6 +12,8 @@ import {
   MLB_LEAGUE_AVG_OVER_UNDER,
   MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES,
   isMlbRivalry,
+  MLB_BIG_CLUBS,
+  isMlbBigClub,
   NBA_BASELINE_MINUTES,
   isNationalBroadcast,
   isNbaRivalry,
@@ -97,6 +99,23 @@ describe('isMlbRivalry', () => {
 
   test('a non-rivalry matchup is not flagged', () => {
     assert.ok(!isMlbRivalry('Los Angeles Dodgers', 'Miami Marlins'));
+  });
+});
+
+describe('isMlbBigClub (star/team power, direct instruction: "we prioritize star/team power")', () => {
+  test('either side alone is enough to qualify, same as EPL\'s own isBigClub', () => {
+    assert.ok(isMlbBigClub('New York Yankees', 'Miami Marlins'));
+    assert.ok(isMlbBigClub('Miami Marlins', 'New York Yankees'));
+  });
+
+  test('a fixture between two non-marquee sides does not qualify', () => {
+    assert.ok(!isMlbBigClub('Miami Marlins', 'Tampa Bay Rays'));
+  });
+
+  test('every listed club is recognized', () => {
+    for (const club of MLB_BIG_CLUBS) {
+      assert.ok(isMlbBigClub(club, 'Miami Marlins'), `${club} should qualify as a big club`);
+    }
   });
 });
 

@@ -92,6 +92,7 @@ import {
   predictEplDurationMinutes,
   predictF1RaceDurationMinutes,
   isMlbRivalry,
+  isMlbBigClub,
   isNbaRivalry,
   isEplDerby,
   isEplBigClub,
@@ -755,6 +756,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         home: mlbStandings?.get(home?.name) || null,
         isPostseason: match.isPostseason,
         isRivalry: isMlbRivalry(away?.name, home?.name),
+        isBigClub: isMlbBigClub(away?.name, home?.name),
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });
@@ -806,8 +808,14 @@ const FACTOR_ZH_HINTS = [
   [/playoff proximity/, '季後賽晉級形勢'],
   [/postseason game/, '季後賽'],
   [/streak/, '近期連勝連敗'],
-  [/known rivalry matchup|known derby fixture/, '宿敵對戰'],
-  [/known big-club fixture/, '豪門球隊'],
+  // "historic " - MLB's own rivalry factor string (see
+  // objective-score.mjs's computeMlbObjectiveScore) is "known historic
+  // rivalry matchup", not "known rivalry matchup" (NBA's own, unqualified,
+  // version) - the old pattern here only ever matched NBA's, so an MLB
+  // rivalry fixture's reason silently fell through to the raw, untranslated
+  // English factor string in the Chinese UI instead of 宿敵對戰.
+  [/known (historic )?rivalry matchup|known derby fixture/, '宿敵對戰'],
+  [/known big-club fixture|known marquee-franchise fixture/, '豪門球隊'],
   [/national broadcast/, '全國轉播'],
   [/championship gap intensity/, '冠軍積分差距']
 ];

@@ -108,6 +108,23 @@ function parseGamesBack(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// The API's own `magicNumber` - real wins-or-opponent-losses left before a
+// division leader clinches it outright, "-" once it already has (see
+// `clinched` below). Unlike gamesBack/divisionLeadMargin (a snapshot of
+// today's standings with no idea how many games are even left to play), a
+// magic number already bakes the schedule in: it can't reach 0 before the
+// leader has genuinely locked the race up, so a small one is real,
+// verifiable, close-to-clinching drama - not just "comfortably ahead" -
+// see playoffProximityScore's own comment for the live case this fixes.
+// "E" (mathematically eliminated) never applies to a magic number itself,
+// but the same defensive parse handles it the same way as any other
+// non-numeric value: a genuinely absent signal, never a guessed 0.
+function parseMagicNumber(value) {
+  if (value == null || value === '-' || value === 'E') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 // One teamRecord entry (per the MLB Stats API's own standings response
 // shape) -> the signal shape public/lib/objective-score.mjs's
 // computeMlbObjectiveScore expects. Exported and pure specifically so it's
@@ -160,7 +177,15 @@ export function parseMlbStandingsResponse(json) {
       // Only meaningful for the leader itself (gamesBack === 0) - a team
       // that's already behind has its own real deficit in `gamesBack`
       // already, this field would just be noise for it.
-      if (signal.gamesBack === 0) signal.divisionLeadMargin = runnerUpGamesBack;
+      if (signal.gamesBack === 0) {
+        signal.divisionLeadMargin = runnerUpGamesBack;
+        // Same "leader only" scoping as divisionLeadMargin above - null
+        // once the leader has already clinched (the API itself stops
+        // counting down at that point, see parseMagicNumber), which is
+        // exactly playoffProximityScore's own cue to fall back to
+        // divisionLeadMargin instead.
+        signal.magicNumber = parseMagicNumber(teamRecord?.magicNumber);
+      }
       byTeamId.set(teamId, signal);
     }
   }

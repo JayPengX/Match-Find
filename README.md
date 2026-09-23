@@ -369,6 +369,50 @@ automatically maxed at 10 just for holding first place. The same direction
 was applied to NBA and EPL, each with its own tailored formula rather than
 copying MLB's numbers (see the per-sport blend weights above).
 
+**`divisionLeadMargin` alone still can't tell a comfortable-but-early lead
+apart from a comfortable, imminent-clinch one.** It's a snapshot of
+today's standings with no idea how many games are even left to play — "6
+games up in June" and "6 games up with a week left" read identically.
+`playoffProximityScore` now prefers the MLB Stats API's own `magicNumber`
+whenever a division leader hasn't clinched yet (see
+`sport-signals.mjs`'s `parseMagicNumber`) — a real win-or-opponent-loss
+countdown that already bakes the remaining schedule in, so a small one is
+verifiable imminent-clinch drama, not just a guess from the lead size
+alone. Falls back to `divisionLeadMargin` once the leader has clinched
+(the API stops reporting a magic number at that point) — a clinched
+leader still has real, lesser stakes (seeding, a title, a milestone), same
+as before. Validated against real reporting and the live MLB Stats API
+response (2026-09-23): Cleveland Guardians, AL Central, division lead
+margin only 1 over a Chicago White Sox team a single game back — a real,
+live race per contemporary coverage — magic number 5, both reading as
+genuinely tense. The slope (0.25/point, gentler than `divisionLeadMargin`'s
+own 0.8/point) was chosen specifically so a magic number this small still
+lands close to what the already-tuned `divisionLeadMargin` reading gives
+an equally tense same-day race — a first cut (0.5/point) discounted it
+enough to silently drop that exact rival more than the whole-week variety
+rotation's own close-call gap behind its incumbent, excluding a genuinely
+live rival from rotation consideration entirely.
+
+**Star/team power — MLB's own version of EPL's "Big Six".** Direct
+instruction: "we prioritize star/team power." A pure win%/standings-based
+score has no way to see that a marquee, big-market franchise draws real,
+national attention essentially independent of this particular season's
+record — the same gap `MLB_RIVALRY_PAIRS`/`EPL_BIG_CLUBS` already cover for
+a specific historic pairing or England's biggest clubs, but MLB had no
+per-club (rather than per-pairing) equivalent. `MLB_BIG_CLUBS`
+(`sport-duration.mjs`) is a short, deliberately conservative list of MLB's
+biggest national brands (Yankees, Dodgers, Red Sox, Cubs, Giants,
+Cardinals, Braves, Mets) — either side alone qualifies, same as
+`isEplBigClub`. Stacks additively with a genuine rivalry in
+`computeMlbObjectiveScore` (a Yankees @ Red Sox game is both, and gets more
+lift than either fact alone) rather than competing with it, and is gated by
+tonight's own `competitiveness` the same graduated way the existing rivalry
+bonus already is (added to it, not overriding it — a decided blowout
+between two marquee names still gets little to no credit). Since MLB can
+now stack two name-based bonuses the way EPL always could,
+`MLB_WATCHABILITY_EXCESS_DAMPING` was tightened to match EPL's own 0.25
+(from 0.4), for the same reason EPL's was already tighter than MLB's.
+
 ### Known scoring limitations
 
 Stated plainly rather than left silently unaddressed:

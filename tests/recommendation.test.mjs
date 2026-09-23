@@ -264,6 +264,7 @@ describe('isMarqueeFixture', () => {
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known big-club fixture'] })), true);
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known historic rivalry matchup'] })), true);
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known rivalry matchup'] })), true);
+    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known marquee-franchise fixture'] })), true);
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['season win% gap 5.0pp'] })), false);
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: [] })), false);
     assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: undefined })), false);

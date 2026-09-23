@@ -94,12 +94,41 @@ export function closenessFromSpread(absSpread, lopsidedAt) {
 // deficit reads zero. Never discounted below 2 - a leader still has real
 // stakes (a magic number to reach, a division title/home-field edge to
 // protect), just not a live race's full 10.
-export function playoffProximityScore(gamesBack, wildCardGamesBack, divisionLeadMargin) {
+//
+// `magicNumber` (also leaders only, see sport-signals.mjs's parseMagicNumber)
+// is preferred over `divisionLeadMargin` whenever the API still has one to
+// report (the leader hasn't clinched yet) - a REAL win-or-opponent-loss
+// countdown to actually clinching, already accounting for how many games
+// are even left to play, rather than today's lead margin alone, which
+// can't tell "6 games up in June" (genuinely not urgent yet) apart from "6
+// games up with a week left" (already a near-certain, imminent clinch).
+// Live case validated against real reporting (2026-09-23): Cleveland
+// Guardians @ Boston Red Sox, division lead margin only 1 (over a Chicago
+// White Sox team a single game back - real, live AL Central race per
+// contemporary coverage), magic number 5 - both read as genuinely tense,
+// and score similarly high here (0.25/point - a gentler slope than
+// divisionLeadMargin's own 0.8/point, chosen specifically so a magic
+// number this small still lands close to what the ALREADY-tuned
+// leadMargin reading gives an equally tense same-day race, rather than
+// discounting it further just for being read a different way). A
+// comfortable 6+ game leader with a SMALL magic number this late in the
+// season (a real, imminent clinch) would score as only moderately
+// discounted under lead-margin alone, when the countdown itself says the
+// story is "could clinch any day now", not "a comfortable, unremarkable
+// lead". Falls back to `divisionLeadMargin` once the leader has clinched
+// (the API stops reporting a magic number at that point - see
+// parseMagicNumber) - a clinched leader still has real, if lesser, stakes
+// (seeding, a title to be crowned with, a personal/team milestone), same
+// as before this existed.
+export function playoffProximityScore(gamesBack, wildCardGamesBack, divisionLeadMargin, magicNumber) {
   const candidates = [gamesBack, wildCardGamesBack].filter(Number.isFinite);
   if (!candidates.length) return null;
   const proximity = Math.min(...candidates);
-  if (proximity <= 0 && Number.isFinite(divisionLeadMargin) && divisionLeadMargin > 0) {
-    return clamp(Math.round(10 - divisionLeadMargin * 0.8), 2, 10);
+  if (proximity <= 0) {
+    if (Number.isFinite(magicNumber)) return clamp(Math.round(10 - Math.max(0, magicNumber - 1) * 0.25), 2, 10);
+    if (Number.isFinite(divisionLeadMargin) && divisionLeadMargin > 0) {
+      return clamp(Math.round(10 - divisionLeadMargin * 0.8), 2, 10);
+    }
   }
   return clamp(Math.round(10 - proximity * 0.8), 0, 10);
 }
@@ -323,7 +352,17 @@ export const MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS = 3;
 // instead of a blowout-on-paper being flatly unable to ever beat
 // competitiveness+3 no matter how good the two teams actually are.
 export const MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE = MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS;
-export const MLB_WATCHABILITY_EXCESS_DAMPING = 0.4;
+// Tightened from 0.4 to EPL's own 0.25 once MLB gained a second stackable
+// name-based bonus (isBigClub, alongside the existing isRivalry) - a
+// Los Angeles Dodgers @ San Francisco Giants pairing is both, so it can now
+// accumulate up to +4 of excess the same way a derby-between-two-big-clubs
+// EPL fixture can, not just the single rivalry bonus's own +2 this constant
+// was originally sized for. This is exactly the live case
+// MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS's own comment describes (a 96-60
+// Dodgers team blowing out a 64-92 Giants team) - the looser damping this
+// used to have would let that same pairing claw back MORE of a stacked
+// rivalry+big-club lift than a single rivalry bonus alone ever could.
+export const MLB_WATCHABILITY_EXCESS_DAMPING = 0.25;
 
 // NBA's own version of the same softening, same allowance (reused, same
 // reasoning as MLB's own) but a more conservative damping - see
@@ -355,6 +394,7 @@ export function computeMlbObjectiveScore({
   home,
   isPostseason,
   isRivalry,
+  isBigClub,
   oddsSpread,
   oddsOverUnder
 }) {
@@ -394,8 +434,8 @@ export function computeMlbObjectiveScore({
     10
   );
 
-  const awayProximity = playoffProximityScore(away?.gamesBack, away?.wildCardGamesBack, away?.divisionLeadMargin);
-  const homeProximity = playoffProximityScore(home?.gamesBack, home?.wildCardGamesBack, home?.divisionLeadMargin);
+  const awayProximity = playoffProximityScore(away?.gamesBack, away?.wildCardGamesBack, away?.divisionLeadMargin, away?.magicNumber);
+  const homeProximity = playoffProximityScore(home?.gamesBack, home?.wildCardGamesBack, home?.divisionLeadMargin, home?.magicNumber);
   const proximityInputs = [awayProximity, homeProximity].filter(Number.isFinite);
   let stakes = proximityInputs.length ? Math.max(...proximityInputs) : 5;
   if (proximityInputs.length) factors.push(`playoff proximity ${proximityInputs.join('/')}`);
@@ -458,10 +498,27 @@ export function computeMlbObjectiveScore({
   // fraction instead of either missing this fixture entirely (the old
   // gate's behavior below competitiveness 6) or over-crediting it at full
   // strength the moment ANY credit exists at all.
-  const marqueeCredit = isRivalry ? marqueeCreditFraction(competitiveness) : 0;
-  if (marqueeCredit > 0) {
+  //
+  // `isBigClub` (see sport-duration.mjs's MLB_BIG_CLUBS) is EPL's own
+  // isBigClub brought to MLB - direct instruction: "we prioritize star/team
+  // power". A single `marqueeCredit` fraction (purely a function of tonight's
+  // own competitiveness, not of how many reasons make this a big draw)
+  // gates BOTH bonuses identically, but each still applies its own +2 lift
+  // and stacks with the other - same "additive, not competing" reasoning as
+  // EPL's derby+big-club, and same "one flag, one bonus" flatness at the
+  // recommendation.mjs layer (see MARQUEE_FIXTURE_SCORE_BONUS's own
+  // comment) - a Yankees @ Red Sox game (both a rivalry AND two marquee
+  // franchises) gets more internal watchability lift than either fact
+  // alone, without also out-bidding a single-reason marquee fixture on the
+  // external, undiluted recommendation bonus.
+  const marqueeCredit = isRivalry || isBigClub ? marqueeCreditFraction(competitiveness) : 0;
+  if (isRivalry && marqueeCredit > 0) {
     watchability += marqueeCredit * 2;
     factors.push('known historic rivalry matchup');
+  }
+  if (isBigClub && marqueeCredit > 0) {
+    watchability += marqueeCredit * 2;
+    factors.push('known marquee-franchise fixture');
   }
   // Softer replacement for the old `Math.min(watchability, competitiveness +
   // MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS)` hard ceiling - see

@@ -240,6 +240,33 @@ export function isMlbRivalry(awayTeam, homeTeam, pairs = MLB_RIVALRY_PAIRS) {
   );
 }
 
+// MLB's own counterpart to EPL_BIG_CLUBS below - a short, deliberately
+// conservative list of the sport's biggest, most nationally-followed
+// brands, a fact about EACH club on its own (either side alone qualifies -
+// see isMlbBigClub), not about a specific pairing the way MLB_RIVALRY_PAIRS
+// is. Direct instruction: "we prioritize star/team power" - a pure win%/
+// standings-based objective score has no way to see that a marquee
+// franchise draws real, national attention essentially independent of this
+// particular season's record, the same gap MLB_RIVALRY_PAIRS already
+// covers for a specific historic pairing but not for a big name against an
+// otherwise-unremarkable opponent. Stacks additively with a genuine rivalry
+// in computeMlbObjectiveScore (a Yankees @ Red Sox game is both) rather
+// than competing with it, same as EPL's own derby+big-club stacking.
+export const MLB_BIG_CLUBS = [
+  'New York Yankees',
+  'Los Angeles Dodgers',
+  'Boston Red Sox',
+  'Chicago Cubs',
+  'San Francisco Giants',
+  'St. Louis Cardinals',
+  'Atlanta Braves',
+  'New York Mets'
+];
+
+export function isMlbBigClub(awayTeam, homeTeam, bigClubs = MLB_BIG_CLUBS) {
+  return bigClubs.includes(awayTeam) || bigClubs.includes(homeTeam);
+}
+
 export function predictNbaDurationMinutes({ awayTeam, homeTeam, broadcast }) {
   const expectedOvertimeMinutes = NBA_OVERTIME_PROBABILITY * NBA_OVERTIME_REAL_MINUTES_PER_PERIOD;
   let modifierTotal = 0;
