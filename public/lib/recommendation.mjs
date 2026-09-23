@@ -486,7 +486,22 @@ export function schedulingDurationMinutes(match) {
   // this round's own new low-enduranceScore test coverage caught (every
   // pre-existing test here happened to use a high enduranceScore, where
   // that shrink is a no-op, masking it).
-  if (match.isFinished) return match.durationMinutes;
+  //
+  // ...but never LONGER than the game's own pre-game estimate
+  // (`plannedDurationMinutes`, when the build supplied one). A finished game
+  // can't block anything that starts after it ended - it's over - so its
+  // real length only ever mattered for games that started while it was
+  // still on, and a plan already made around it shouldn't be rewritten
+  // because it ran long. Live-reported: Brewers @ Phillies ran 210 minutes
+  // against a shorter estimate, which pushed its block into the 10:10
+  // Padres @ Dodgers start, flipped that day's natural plan to a different
+  // game after the fact, and broke the variety rotation for the whole
+  // Brewers series (see computeVarietyRotation).
+  if (match.isFinished) {
+    return Number.isFinite(match.plannedDurationMinutes)
+      ? Math.min(match.durationMinutes, match.plannedDurationMinutes)
+      : match.durationMinutes;
+  }
   const timing = resolveSportTiming(match.sport);
   const overrun = DURATION_OVERRUN_BUFFER_BY_RELIABILITY[timing.durationReliability] ?? 0;
   const floorFraction = SCHEDULING_DURATION_FLOOR_BY_RELIABILITY[timing.durationReliability] ?? 0;
@@ -1325,6 +1340,13 @@ export function isUnderway(match, now = Date.now()) {
 // 09-27) - not an arbitrary number, a threshold chosen because a genuine
 // dividing line exists there in this exact data.
 //
+// Raised to 0.6, still inside that same observed gap: a game that has
+// already finished is re-scored from post-game data (the standings already
+// count its result) and can land a little further from its series' top
+// than it was pre-game - live case: Cleveland Guardians @ Boston Red Sox on
+// 9/23, 0.6 behind Brewers @ Phillies once over, which at 0.5 fell out of
+// the Brewers series' pool and flipped the rest of that series.
+//
 // Round 43: Round 41/42's model still only ever penalized the incumbent
 // once it had already won twice, handing the NEXT day to whichever single
 // alternative happened to be closest that specific day - it never gave
@@ -1347,7 +1369,7 @@ export function isUnderway(match, now = Date.now()) {
 // history), this looks at the KNOWN, ALREADY-FETCHED remainder of a real
 // multi-game series to plan the whole run's rotation at once, then each
 // individual day's render just looks up its own assignment.
-export const VARIETY_CLOSE_CALL_GAP = 0.5;
+export const VARIETY_CLOSE_CALL_GAP = 0.6;
 
 // Every match in `choice`'s own `.alternativeIds` (already gated by the
 // wider, UI-facing ALTERNATIVE_MAX_SCORE_GAP - "worth a swipe") that is ALSO
@@ -1360,7 +1382,7 @@ function closeAlternativeMatches(choice, byId) {
   const score = Number.isFinite(choice.planningScore) ? choice.planningScore : choice.effectiveScore;
   return choice.alternativeIds
     .map(id => byId.get(id))
-    .filter(m => m && score - (Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore) <= VARIETY_CLOSE_CALL_GAP);
+    .filter(m => m && score - (Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore) <= VARIETY_CLOSE_CALL_GAP + 1e-9);
 }
 
 // The one entry point: computes a whole-window rotation PLAN, without
@@ -1414,10 +1436,14 @@ export function isWeekendDayKey(dayKey) {
 //      days than close contenders, someone plays twice, and the leftover-
 //      day step above can hand it a day right next to its other one (a
 //      Thu/Fri/Sat run with two contenders came out alt/best/best);
-//   2. a stronger game on the weekend days (see WEEKEND_WEEKDAYS).
+//   2. a stronger game on the weekend days (see WEEKEND_WEEKDAYS);
+//   3. otherwise, stronger contenders on earlier days - ranked by each
+//      one's best score across the whole run (`strengthOf`), not its score
+//      on the one day, so a contender that's clearly the stronger of two
+//      over the series goes first even on a day its own number dips.
 // Only ever swaps, so every contender keeps exactly as many days as the
 // matching gave it - who gets a turn is untouched, only the ORDER changes.
-function arrangeRunDays(run, dayAssignedTo, closeMatchByDay) {
+function arrangeRunDays(run, dayAssignedTo, closeMatchByDay, fixedDayKeys = new Set(), strengthOf = () => 0) {
   const dayKeys = run.entries.map(e => e.dayKey); // consecutive, in order
   if (dayKeys.length < 2) return;
   const scoreOn = (dayKey, member) => {
@@ -1430,7 +1456,14 @@ function arrangeRunDays(run, dayAssignedTo, closeMatchByDay) {
   const better = (next, current) => {
     const r = repeats(next) - repeats(current);
     if (r !== 0) return r < 0;
-    return weekendTotal(next) > weekendTotal(current) + 1e-9; // strict, so this always terminates
+    const w = weekendTotal(next) - weekendTotal(current);
+    if (Math.abs(w) > 1e-9) return w > 0;
+    // Strict at every step, so this always terminates.
+    for (const dayKey of dayKeys) {
+      const d = strengthOf(next.get(dayKey)) - strengthOf(current.get(dayKey));
+      if (Math.abs(d) > 1e-9) return d > 0;
+    }
+    return false;
   };
 
   let improved = true;
@@ -1439,6 +1472,7 @@ function arrangeRunDays(run, dayAssignedTo, closeMatchByDay) {
     for (let i = 0; i < dayKeys.length && !improved; i += 1) {
       for (let j = i + 1; j < dayKeys.length && !improved; j += 1) {
         const [a, b] = [dayKeys[i], dayKeys[j]];
+        if (fixedDayKeys.has(a) || fixedDayKeys.has(b)) continue; // a started pick never moves
         const memberA = dayAssignedTo.get(a);
         const memberB = dayAssignedTo.get(b);
         if (memberA === memberB) continue;
@@ -1456,13 +1490,24 @@ function arrangeRunDays(run, dayAssignedTo, closeMatchByDay) {
   }
 }
 
-export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map()) {
+// `lockedByDay` (optional Map<dayKey, Set<matchId>>, see startedPlanLockIds)
+// - plan picks that have already started. A run day holding one keeps it:
+// that day is fixed to the locked matchup before anything else is decided,
+// and that matchup doesn't get a second day of the run, so the rest of the
+// series rotates around what the viewer was already shown instead of
+// re-deciding it from after-the-fact scores.
+export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(), lockedByDay = new Map()) {
   const dayKeys = [...matchesByDayKey.keys()].sort();
   const byIdByDay = new Map();
   const naturalPicksByDay = new Map();
 
   dayKeys.forEach(dayKey => {
     const dayMatches = matchesByDayKey.get(dayKey);
+    // Deliberately WITHOUT `lockedByDay`: a run is "the same matchup keeps
+    // winning its slot on its own merits", and a locked day that went to a
+    // rotation alternative would otherwise break the run apart right there
+    // and let the next day hand that same alternative a second turn. Locks
+    // are applied per run below instead (fixedDays).
     computeDayPlan(dayKey, dayMatches, pinnedChoices.get(dayKey), { scoreField: 'planningScore' });
     byIdByDay.set(dayKey, new Map(dayMatches.map(m => [m.id, m])));
     naturalPicksByDay.set(dayKey, dayMatches.filter(m => m.recommended));
@@ -1527,6 +1572,22 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
         eligibleDaysByMember.get(key).add(dayKey);
       });
     });
+    // Days already fixed by a started pick (see `lockedByDay` above): the
+    // locked match is either the run's own game or one of its direct
+    // conflicts - one in some unrelated slot that day doesn't touch this run.
+    const fixedDays = new Map(); // dayKey -> matchupKey
+    run.entries.forEach(({ dayKey, match }) => {
+      const locks = lockedByDay.get(dayKey);
+      if (!locks || !locks.size) return;
+      const locked = [...locks].map(id => byIdByDay.get(dayKey).get(id)).find(m => m && (m.id === match.id || isNearTotalOverlap(m, match)));
+      if (!locked) return;
+      const key = matchupKey(locked);
+      poolKeys.add(key);
+      closeMatchByDay.get(dayKey).set(key, locked);
+      if (!eligibleDaysByMember.has(key)) eligibleDaysByMember.set(key, new Set());
+      eligibleDaysByMember.get(key).add(dayKey);
+      fixedDays.set(dayKey, key);
+    });
     if (poolKeys.size < 2) return; // genuinely nothing else close, on any day - nothing to rotate (the real Padres @ Dodgers case)
 
     // Round 44: "if Brewer win day three outright then day one should be
@@ -1545,31 +1606,9 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     // members than days can otherwise accommodate, never merely because
     // the naive day-index happened to land on that member.
     //
-    // Members are tried SCARCEST-eligibility-first (fewest eligible days),
-    // not in pool order - the whole point is that a rarely-close
-    // alternative (eligible on only ONE day) has to claim that day before
-    // the incumbent (eligible on every day of the run) greedily takes it
-    // instead; a naive first-come assignment in pool order would let the
-    // abundant incumbent crowd out a scarce alternative's only chance.
-    // Among members tied at the SAME scarcity, though, the run's own
-    // matchupKey goes first, not alphabetically - live-observed case this
-    // matters for: Tampa Bay Rays @ Philadelphia Phillies's own 2-day run
-    // had TWO other members tied with it at "eligible both days" (Baltimore
-    // Orioles @ New York Yankees, Chicago Cubs @ Boston Red Sox) - a pool
-    // of 3 equally-scarce members for only 2 days means one of them can
-    // never be placed regardless of tie-break order, but breaking the tie
-    // alphabetically happened to be the ONE incumbent, so the actual best
-    // natural pick ended up winning NEITHER of its own two days. Giving the
-    // incumbent first claim in an equal-scarcity tie still lets a genuinely
-    // SCARCER alternative (fewer eligible days) outrank it, and still
-    // spreads the OTHER two days out normally - it just stops a same-tier
-    // three-way tie from being able to zero the incumbent out entirely.
     // Best pre-game score each member reaches on any of its eligible days -
-    // the tie-break among equally-scarce contenders before the alphabet, so
-    // when there are more contenders than days, the one left out is the
-    // weakest, not whichever name sorts last (live-observed: Rays @
-    // Phillies, tied for the day's TOP score, lost its only day to Cubs @
-    // Red Sox, 0.1 lower, on "Chicago" < "Tampa Bay" alone).
+    // what decides the order members are placed in (see membersByStrength
+    // below).
     const bestScoreByMember = new Map();
     closeMatchByDay.forEach(map =>
       map.forEach((m, key) => {
@@ -1578,30 +1617,55 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
       })
     );
     const byScoreThenName = (a, b) => (bestScoreByMember.get(b) ?? 0) - (bestScoreByMember.get(a) ?? 0) || a.localeCompare(b);
-    const membersByScarcity = [...poolKeys].sort((a, b) => {
-      const scarcityDiff = eligibleDaysByMember.get(a).size - eligibleDaysByMember.get(b).size;
-      if (scarcityDiff !== 0) return scarcityDiff;
+    // Strongest first, so when a run has more contenders than days the one
+    // left out is always the weakest. This used to go scarcest-first (fewest
+    // eligible days), which let a borderline contender that was only close
+    // on one day - live case: Cincinnati Reds @ Toronto Blue Jays, 6.45,
+    // exactly on the VARIETY_CLOSE_CALL_GAP edge - claim that day ahead of a
+    // much stronger one (Baltimore Orioles @ New York Yankees, 6.85), which
+    // then never got a day at all. A scarce contender still gets its one
+    // day whenever it's strong enough to deserve a seat: the augmenting
+    // step in tryAssign moves a more flexible, already-placed member to
+    // another of its days to make room. Ties go to the run's own matchup,
+    // then to whoever was close on more days of the run (a steadier
+    // contender - live case: Rays @ Yankees, close two days running, over
+    // Marlins @ Cubs, close once, both 6.75), then by name.
+    const membersByStrength = [...poolKeys].sort((a, b) => {
+      const scoreDiff = (bestScoreByMember.get(b) ?? 0) - (bestScoreByMember.get(a) ?? 0);
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
       if (a === run.matchupKey) return -1;
       if (b === run.matchupKey) return 1;
-      return byScoreThenName(a, b);
+      return eligibleDaysByMember.get(b).size - eligibleDaysByMember.get(a).size || a.localeCompare(b);
     });
-    const dayAssignedTo = new Map(); // dayKey -> matchupKey (the maximum-matching result so far)
+    const dayAssignedTo = new Map(fixedDays); // dayKey -> matchupKey (the maximum-matching result so far)
+    const fixedMembers = new Set(fixedDays.values());
+    const openDaysOf = member => [...eligibleDaysByMember.get(member)].filter(dayKey => !fixedDays.has(dayKey)).sort();
     function tryAssign(member, visitedDays) {
-      for (const dayKey of eligibleDaysByMember.get(member)) {
+      const days = openDaysOf(member);
+      // Takes its earliest FREE day first, and only then tries bumping
+      // someone, so members settle in strength order day by day (a run's own
+      // matchup keeps its first day when nothing else decides) instead of
+      // reshuffling earlier placements for no reason.
+      const free = days.find(dayKey => !dayAssignedTo.has(dayKey));
+      if (free) {
+        dayAssignedTo.set(free, member);
+        return true;
+      }
+      for (const dayKey of days) {
         if (visitedDays.has(dayKey)) continue;
         visitedDays.add(dayKey);
         const current = dayAssignedTo.get(dayKey);
-        // Either this day is free, or its current occupant can be bumped
-        // to a DIFFERENT one of ITS OWN eligible days (the standard
-        // augmenting-path step) - only then does `member` get to claim it.
-        if (!current || tryAssign(current, visitedDays)) {
+        // Its current occupant can be bumped to a DIFFERENT one of ITS OWN
+        // eligible days (the standard augmenting-path step) - only then
+        // does `member` get to claim it.
+        if (tryAssign(current, visitedDays)) {
           dayAssignedTo.set(dayKey, member);
           return true;
         }
       }
       return false;
     }
-    membersByScarcity.forEach(member => tryAssign(member, new Set()));
+    membersByStrength.filter(member => !fixedMembers.has(member)).forEach(member => tryAssign(member, new Set()));
 
     // The matching above can only ever cover min(days, pool members) of
     // the run's own days - if the pool is BIGGER than the run (as in the
@@ -1625,7 +1689,7 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
       winCount.set(chosen, winCount.get(chosen) + 1);
     });
 
-    arrangeRunDays(run, dayAssignedTo, closeMatchByDay);
+    arrangeRunDays(run, dayAssignedTo, closeMatchByDay, new Set(fixedDays.keys()), member => bestScoreByMember.get(member) ?? 0);
 
     // Every day of a rotated run is forced - INCLUDING the days the
     // incumbent keeps. Leaving those "to happen naturally" assumed the

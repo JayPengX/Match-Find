@@ -624,7 +624,7 @@ Philadelphia Phillies (skill 8) had several genuinely comparable
 alternatives in its own time slot every day it repeated, so a skill-based
 bar wrongly exempted it anyway. The criterion was switched to the real
 score *margin* over the closest rival — exempt only past
-`VARIETY_CLOSE_CALL_GAP` (0.5), a threshold chosen to sit directly between
+`VARIETY_CLOSE_CALL_GAP` (now 0.6, originally 0.5), a threshold chosen to sit directly between
 the real, live-measured ranges: Brewers @ Phillies's own margin over its
 closest rival was 0.15-0.45, while San Diego Padres @ Los Angeles Dodgers's
 was 0.75-1.0 — despite both technically having an `.alternativeIds` entry
@@ -653,12 +653,51 @@ unlike the earlier cross-day penalty, which only ever looked backward:
    was actually close on that specific day), covering as many *distinct*
    members as the run's own days can support, rather than a fixed
    `day i → pool[i]` rotation that can't adapt when a later day's own
-   assignment turns out infeasible. Members are tried
-   scarcest-eligibility-first (a rarely-close alternative, eligible on only
-   one day, has to claim it before the incumbent — eligible every day of
-   the run — crowds it out); among members tied at the same scarcity, the
-   incumbent goes first, so a same-tier multi-way tie can't zero the actual
-   best pick out of its own run entirely.
+   assignment turns out infeasible. Members are placed strongest-first
+   (best score on any day of the run; ties go to the run's own matchup,
+   then to whoever was close on more days), so when a run has more
+   contenders than days, the one left out is always the weakest. A
+   contender that's close on only one day still gets it when it's strong
+   enough, because the matching moves a more flexible member to another day
+   to make room. This used to go scarcest-first, which let a borderline
+   one-day contender (Cincinnati Reds @ Toronto Blue Jays, 6.45, right on
+   the gap's edge) take Saturday from Baltimore Orioles @ New York Yankees
+   (6.85), which then got no day at all.
+4. Arrange the days: fewest back-to-back repeats first, then the strongest
+   game on Fri/Sat/Sun, then stronger contenders on earlier days.
+
+For 2026-09-23 to 09-27 (Taipei) this gives the lineup the rotation was
+built for: Wed Guardians @ Red Sox, Thu Rays @ Yankees, Fri Brewers @
+Phillies (the series' best, on the weekend), Sat Rays @ Phillies, Sun
+Orioles @ Yankees.
+
+**Games that already happened can't reshape a series.** Three things kept
+moving that lineup after the fact, each from a game that had already
+finished:
+
+- A finished game was re-scored from post-game data, with no pre-game line
+  and standings that already counted the result. Guardians @ Red Sox on
+  9/23 ended up 0.6 behind the series' top, fell out of the pool at 0.5,
+  and flipped Wed/Thu. The build now also looks up the pre-game line for
+  finished games, not just live ones. `app.js` saves every fixture's
+  pre-game scoring in localStorage (`matchfind-pregame-scoring`), separately
+  from the match snapshot, so it survives an app update. On the first load
+  after an update it also recovers that scoring from the old snapshot
+  before throwing the snapshot away. The gap is now 0.6, still inside the
+  observed dividing line, to absorb that post-game drift.
+- A finished game that ran long had its whole real length reserved on the
+  schedule. Brewers @ Phillies ran 210 minutes, its block ran into the
+  10:10 Padres @ Dodgers start, and that day's natural plan changed.
+  `schedulingDurationMinutes` now caps a finished game at its pre-game
+  estimate (`plannedDurationMinutes`). A game that's over can't block
+  anything that starts after it anyway.
+- Picks that already started are passed to `computeVarietyRotation` as
+  fixed days (see "Games that already started are locked into the day's
+  plan" above). The rest of the series rotates around them, without giving
+  a locked matchup a second day. Plans are only recorded, and live picks
+  only made sticky, once the full window has loaded. The first
+  couple-of-days render can't see a whole series, so its pick can be a
+  stopgap.
 
 **Two further corrections were needed once this shipped and was tested
 against live data.** First: "if Brewer win day three outright then day one

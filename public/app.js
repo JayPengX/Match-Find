@@ -111,7 +111,7 @@ import {
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
-import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, PREGAME_SCORING_FIELDS, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // UI copy/locale layer - see that module's own top comment. Every piece of
 // genuine UI chrome (labels, hints, status text, aria-labels) goes through
 // t() rather than a hardcoded literal, so this file itself never has to
@@ -804,12 +804,25 @@ function saveDayPlanHistory() {
   }
 }
 state.dayPlanHistory = loadDayPlanHistory();
+// Every day's locks at once, for computeVarietyRotation - a series spans
+// several days, and a started pick on one of them fixes that day's turn.
+function lockedIdsByDay() {
+  return new Map(state.days.map(day => [day.key, lockedIdsForDay(day.key)]));
+}
 function lockedIdsForDay(dayKey) {
   return startedPlanLockIds(state.dayPlanHistory.get(dayPlanHistoryKey(dayKey, state.activeSport)), applySportFilter(matchesForDay(dayKey)));
 }
 // Pins are left out: a pin is already its own hard override, and recording
 // it here would keep it locked in even after the viewer swipes it away.
+//
+// Only once the full window has loaded: the instant-paint snapshot and the
+// near-term tier render first with only a couple of days in hand, which
+// cuts a multi-day variety-rotation series short (see
+// computeVarietyRotation), so their plan for today can differ from the real
+// one - and recording it would lock that stopgap pick in the moment it
+// starts.
 function recordRenderedDayPlan(dayKey, dayPlan) {
+  if (!state.fullWindowLoaded) return;
   const ids = dayPlan.filter(m => !m.isPreferred).map(m => m.id);
   const next = recordDayPlan(state.dayPlanHistory, dayPlanHistoryKey(dayKey, state.activeSport), ids, oldestPlanHistoryDayKey());
   if (next === state.dayPlanHistory) return;
@@ -1445,7 +1458,7 @@ function invalidateVarietyRotation() {
 }
 function getVarietyRotation() {
   if (varietyRotationCache) return varietyRotationCache;
-  varietyRotationCache = computeVarietyRotation(rotationMatchesByDayKey(), state.pinnedChoices);
+  varietyRotationCache = computeVarietyRotation(rotationMatchesByDayKey(), state.pinnedChoices, lockedIdsByDay());
   return varietyRotationCache;
 }
 
@@ -1595,7 +1608,7 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   }
   const rotationWithoutThisSlot = rotationRespectingLivePicks(
     dayKey,
-    computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot).get(dayKey)
+    computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot, lockedIdsByDay()).get(dayKey)
   );
   const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
@@ -2796,6 +2809,10 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 // never changes the plan it was chosen in, so this render stays as it is;
 // it only stops later renders from swapping that pick out.
 function stickLivePicks(dayPlan) {
+  // Same reason as recordRenderedDayPlan: a plan rendered before the full
+  // window loaded can be a stopgap, and making its live pick sticky would
+  // outlast it.
+  if (!state.fullWindowLoaded) return;
   let changed = false;
   dayPlan.forEach(match => {
     if (match.isPreferred || state.liveStickyIds.has(match.id) || !isUnderway(match)) return;
@@ -3120,7 +3137,10 @@ function mergeFreshMatches(freshMatches) {
     // duration it was planned with all day, instead of being re-scored from
     // ESPN's in-progress feed (which no longer carries the pre-game line) -
     // see freezeStartedMatchScoring's own comment.
-    freezeStartedMatchScoring(m, previous);
+    // Falls back to the pre-game scoring this browser saved for the fixture
+    // (see state.pregameScoring) when it isn't in memory - a fresh page load
+    // after an app update, or a reopen after the snapshot expired.
+    freezeStartedMatchScoring(m, previous || state.pregameScoring.get(m.id));
     if (previous?.live && !m.isFinished) {
       m.live = previous.live;
       m.durationMinutes = previous.durationMinutes;
@@ -3223,6 +3243,66 @@ const MATCH_SNAPSHOT_MAX_AGE_MS = 30 * 60_000;
 // carries that same placeholder back, so the check always passes.
 const APP_BUILD_ID = '__BUILD_ID__';
 
+// Pre-game scoring per fixture (Map<id, {startTimeUtc, ...PREGAME_SCORING_
+// FIELDS}>), kept apart from the snapshot above so it survives an app update
+// (which throws the snapshot away - see APP_BUILD_ID) and a reopen hours
+// later. mergeFreshMatches hands it to freezeStartedMatchScoring when a
+// fixture's previous version isn't in memory. Without it, a game that had
+// already started or finished was re-scored from ESPN's post-game data on
+// the first load after an update - a different score than the one it was
+// recommended with, which moved it in or out of a variety-rotation pool
+// and reshuffled the rest of its series (see computeVarietyRotation).
+const PREGAME_SCORING_STORAGE_KEY = 'matchfind-pregame-scoring';
+function pickPregameScoring(match) {
+  const entry = { startTimeUtc: match.startTimeUtc };
+  PREGAME_SCORING_FIELDS.forEach(field => {
+    if (field in match) entry[field] = match[field];
+  });
+  return entry;
+}
+function loadPregameScoring() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PREGAME_SCORING_STORAGE_KEY));
+    if (!raw || typeof raw !== 'object') return new Map();
+    return new Map(Object.entries(raw).filter(([, entry]) => entry && Number.isFinite(entry.score) && typeof entry.startTimeUtc === 'string'));
+  } catch {
+    return new Map();
+  }
+}
+function savePregameScoring() {
+  try {
+    localStorage.setItem(PREGAME_SCORING_STORAGE_KEY, JSON.stringify(Object.fromEntries(state.pregameScoring)));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+// Called after every merge: by then a started fixture already carries its
+// frozen pre-game values (freezeStartedMatchScoring), so storing whatever
+// every retained fixture currently has is exactly right. Anything no longer
+// retained is dropped with it.
+function rememberPregameScoring(rawMatches) {
+  state.pregameScoring = new Map(rawMatches.filter(m => Number.isFinite(m.score)).map(m => [m.id, pickPregameScoring(m)]));
+  savePregameScoring();
+}
+// A snapshot from a previous deploy is never painted (see loadMatchSnapshot),
+// but the pre-game scoring in it is still the best record of what its
+// fixtures were recommended with - carried over once, for fixtures this
+// browser has no entry for yet, before the snapshot is thrown away.
+function harvestPregameScoring(snapshotMatches) {
+  let added = false;
+  snapshotMatches.forEach(m => {
+    if (!m || typeof m.id !== 'string' || !Number.isFinite(m.score) || state.pregameScoring.has(m.id)) return;
+    state.pregameScoring.set(m.id, pickPregameScoring(m));
+    added = true;
+  });
+  if (added) savePregameScoring();
+}
+// Loaded here rather than with the other stored state near the top of the
+// file: PREGAME_SCORING_STORAGE_KEY is a `const`, so reading it any earlier
+// would throw (same TDZ as PINNED_CHOICES_STORAGE_KEY). Nothing reads
+// state.pregameScoring before init() runs.
+state.pregameScoring = loadPregameScoring();
+
 function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
   try {
     // `.live` is stripped - it's pollLiveMatches's own poll-tier detail
@@ -3256,6 +3336,7 @@ function loadMatchSnapshot() {
     // later load that also fails to overwrite it (e.g. one that errors out
     // before applyFreshBuild's own saveMatchSnapshot call is reached).
     if (snapshot.buildId !== APP_BUILD_ID) {
+      harvestPregameScoring(snapshot.rawMatches);
       localStorage.removeItem(MATCH_SNAPSHOT_STORAGE_KEY);
       return null;
     }
@@ -3266,7 +3347,7 @@ function loadMatchSnapshot() {
   }
 }
 
-// Which in-progress fixtures a build should look up the pre-game line for
+// Which in-progress or finished fixtures a build should look up the pre-game line for
 // (see match-builder.mjs's espnCoreOddsUrl) - only ones this browser has no
 // pre-game line for yet (never seen, or first seen already underway), and
 // only once per fixture per page load, so a game that genuinely never had a
@@ -3334,6 +3415,7 @@ function applyFreshBuild(matches, generatedAt) {
   state.allRawMatches = rawMatches;
   applyEnabledSportsAndRender();
   saveMatchSnapshot(rawMatches, tbdMatches, generatedAt || new Date().toISOString());
+  rememberPregameScoring(rawMatches);
 }
 
 // Filters state.allRawMatches down to the sports currently enabled in

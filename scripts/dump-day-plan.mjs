@@ -79,7 +79,17 @@ for (const match of matches) {
 // forced ids.
 const allDayKeysSorted = [...matchesByDayKey.keys()].sort();
 allDayKeysSorted.forEach(dayKey => applyLiveExcitementBonus(matchesByDayKey.get(dayKey)));
-const rotation = computeVarietyRotation(matchesByDayKey);
+// Planned from pre-game scores on copies, exactly like app.js's
+// rotationMatchesByDayKey - a live bonus must not steer the rotation.
+const rotation = computeVarietyRotation(
+  new Map(
+    allDayKeysSorted.map(dayKey => {
+      const copies = matchesByDayKey.get(dayKey).map(m => ({ ...m }));
+      applyLiveExcitementBonus(copies, null, { live: false });
+      return [dayKey, copies];
+    })
+  )
+);
 allDayKeysSorted.forEach(dayKey => {
   const dayMatches = matchesByDayKey.get(dayKey);
   const forcedIds = rotation.get(dayKey);

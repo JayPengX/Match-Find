@@ -533,8 +533,21 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       const isPostseason = event.season?.type === 3;
       const oddsSignal = parseOddsSignal(competition);
       const id = `${league.id}-${event.id}`;
+      const pregameEstimateMinutes = computeDurationMinutes(
+        league,
+        away,
+        home,
+        competition.venue?.fullName || '',
+        broadcast || '',
+        oddsSignal.overUnder
+      );
+      // Finished fixtures too, not just live ones: ESPN's post-game entry
+      // drops the line as well, and a finished game re-scored without it
+      // moved its score after the fact - enough to change which contenders
+      // count as close in a variety-rotation run (see recommendation.mjs's
+      // computeVarietyRotation) and reshuffle days that hadn't happened yet.
       if (
-        isLive &&
+        (isLive || isFinished) &&
         oddsSignal.spread == null &&
         oddsSignal.overUnder == null &&
         (!needsPregameOdds || needsPregameOdds(id))
@@ -565,19 +578,13 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         oddsWinPctHome: null,
         oddsWinPctDraw: null,
         oddsFavorites: null,
-        durationMinutes: (() => {
-          const pregameEstimateMinutes = computeDurationMinutes(
-            league,
-            away,
-            home,
-            competition.venue?.fullName || '',
-            broadcast || '',
-            oddsSignal.overUnder
-          );
-          return isFinished
-            ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label, pregameEstimateMinutes)
-            : pregameEstimateMinutes;
-        })(),
+        durationMinutes: isFinished
+          ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label, pregameEstimateMinutes)
+          : pregameEstimateMinutes,
+        // The pre-game estimate, kept even once the game is over - what the
+        // plan was made with (see recommendation.mjs's
+        // schedulingDurationMinutes for how a finished game uses it).
+        plannedDurationMinutes: pregameEstimateMinutes,
         venue: competition.venue?.fullName || '',
         broadcast: broadcast || '',
         logo: '',
@@ -601,7 +608,10 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         if (!odds || !match) return;
         match.oddsSpread = odds.spread;
         match.oddsOverUnder = odds.overUnder;
-        match.durationMinutes = computeDurationMinutes(league, away, home, venue, broadcast, odds.overUnder);
+        match.plannedDurationMinutes = computeDurationMinutes(league, away, home, venue, broadcast, odds.overUnder);
+        // A finished game's duration is its real observed length (see
+        // finishedDurationMinutes), not a pre-game estimate.
+        if (!match.isFinished) match.durationMinutes = match.plannedDurationMinutes;
       })
     );
   }
@@ -684,6 +694,7 @@ async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
         oddsWinPctDraw: null,
         oddsFavorites: null,
         durationMinutes,
+        plannedDurationMinutes: pregameEstimateMinutes,
         venue,
         broadcast: broadcast || '',
         logo: F1_LOGO,
@@ -859,7 +870,8 @@ export const PREGAME_SCORING_FIELDS = [
   'score',
   'confidence',
   'oddsSpread',
-  'oddsOverUnder'
+  'oddsOverUnder',
+  'plannedDurationMinutes'
 ];
 
 // Once a fixture has actually started, a fresh rebuild must NOT re-score it

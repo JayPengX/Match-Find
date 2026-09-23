@@ -1725,3 +1725,97 @@ describe('started plan picks are locked (a finished game must not reshuffle the 
     assert.deepEqual(plan.map(m => m.id), ['a', 'later2']);
   });
 });
+
+describe('variety rotation: strongest contenders first, started picks fixed (the 9/23-9/27 lineup)', () => {
+  const teams = (a, b) => [{ name: a }, { name: b }];
+  const game = (id, dayKey, planningScore, away, home) =>
+    makeMatch({ id: `${id}-${dayKey}`, planningScore, competitors: teams(away, home) });
+
+  // Wed-Fri: one Brewers @ Phillies series with three close rivals; Sat-Sun:
+  // one Rays @ Phillies series with a borderline one-day contender (Reds @
+  // Blue Jays, exactly VARIETY_CLOSE_CALL_GAP below) that used to claim
+  // Saturday ahead of a far stronger Orioles @ Yankees.
+  function week({ raysPhillies = 6.95, orioles = 6.85, guardiansWed = 6.8 } = {}) {
+    return new Map([
+      ['2026-09-23', [
+        game('brewers', '2026-09-23', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies'),
+        game('guardians', '2026-09-23', guardiansWed, 'Cleveland Guardians', 'Boston Red Sox'),
+        game('raysNyy', '2026-09-23', 6.75, 'Tampa Bay Rays', 'New York Yankees'),
+        game('marlins', '2026-09-23', 6.75, 'Miami Marlins', 'Chicago Cubs')
+      ]],
+      ['2026-09-24', [
+        game('brewers', '2026-09-24', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies'),
+        game('guardians', '2026-09-24', 6.8, 'Cleveland Guardians', 'Boston Red Sox'),
+        game('raysNyy', '2026-09-24', 6.75, 'Tampa Bay Rays', 'New York Yankees')
+      ]],
+      ['2026-09-25', [game('brewers', '2026-09-25', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies')]],
+      ['2026-09-26', [
+        game('raysPhi', '2026-09-26', raysPhillies, 'Tampa Bay Rays', 'Philadelphia Phillies'),
+        game('orioles', '2026-09-26', orioles, 'Baltimore Orioles', 'New York Yankees'),
+        game('cubs', '2026-09-26', 6.75, 'Chicago Cubs', 'Boston Red Sox'),
+        game('reds', '2026-09-26', raysPhillies - 0.5, 'Cincinnati Reds', 'Toronto Blue Jays')
+      ]],
+      ['2026-09-27', [
+        game('raysPhi', '2026-09-27', raysPhillies, 'Tampa Bay Rays', 'Philadelphia Phillies'),
+        game('orioles', '2026-09-27', orioles, 'Baltimore Orioles', 'New York Yankees'),
+        game('cubs', '2026-09-27', 6.75, 'Chicago Cubs', 'Boston Red Sox')
+      ]]
+    ]);
+  }
+  const winners = rotation => Object.fromEntries([...rotation].map(([dayKey, ids]) => [dayKey, [...ids][0].split('-')[0]]));
+
+  test('the reported lineup: each series\' best on the weekend, strongest contenders first, the weakest left out', () => {
+    assert.deepEqual(winners(computeVarietyRotation(week())), {
+      '2026-09-23': 'guardians',
+      '2026-09-24': 'raysNyy',
+      '2026-09-25': 'brewers',
+      '2026-09-26': 'raysPhi',
+      '2026-09-27': 'orioles'
+    });
+  });
+
+  test('the same lineup once Wednesday\'s finished Guardians game is re-scored 0.6 behind the series\' top', () => {
+    assert.deepEqual(winners(computeVarietyRotation(week({ guardiansWed: 6.5 }))), {
+      '2026-09-23': 'guardians',
+      '2026-09-24': 'raysNyy',
+      '2026-09-25': 'brewers',
+      '2026-09-26': 'raysPhi',
+      '2026-09-27': 'orioles'
+    });
+  });
+
+  test('a tie at the top of a weekend series (the reported 6.85/6.85) keeps the series\' own matchup on its first day', () => {
+    // The real data behind "6.85, tied top" - Rays @ Phillies ahead by float
+    // noise only (see the exact-tie test above).
+    const result = winners(computeVarietyRotation(week({ raysPhillies: 6.85, orioles: 6.849999999999999 })));
+    assert.equal(result['2026-09-26'], 'raysPhi');
+    assert.equal(result['2026-09-27'], 'orioles');
+  });
+
+  test('a started pick fixes its day, and the rest of the series rotates around it without repeating it', () => {
+    const locked = new Map([['2026-09-23', new Set(['marlins-2026-09-23'])]]);
+    const result = winners(computeVarietyRotation(week(), new Map(), locked));
+    assert.equal(result['2026-09-23'], 'marlins');
+    assert.equal(result['2026-09-25'], 'brewers');
+    assert.notEqual(result['2026-09-24'], 'marlins');
+    assert.equal(result['2026-09-24'], 'guardians'); // the strongest one still without a day
+  });
+});
+
+describe('a finished game that ran long keeps the block it was planned with', () => {
+  test('schedulingDurationMinutes caps a finished game at its pre-game estimate, but still uses a shorter real length', () => {
+    const ranLong = makeMatch({ isFinished: true, durationMinutes: 210, plannedDurationMinutes: 180 });
+    const ranShort = makeMatch({ isFinished: true, durationMinutes: 150, plannedDurationMinutes: 180 });
+    const noEstimate = makeMatch({ isFinished: true, durationMinutes: 210 });
+    assert.equal(schedulingDurationMinutes(ranLong), 180);
+    assert.equal(schedulingDurationMinutes(ranShort), 150);
+    assert.equal(schedulingDurationMinutes(noEstimate), 210);
+  });
+
+  test('an overrun into the next planned game no longer drops that game from the finished day', () => {
+    const first = makeMatch({ id: 'first', isFinished: true, startTimeUtc: '2026-09-23T10:00:00.000Z', durationMinutes: 210, plannedDurationMinutes: 180, effectiveScore: 7 });
+    const next = makeMatch({ id: 'next', startTimeUtc: '2026-09-23T13:30:00.000Z', durationMinutes: 170, effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-23', [first, next]);
+    assert.deepEqual(plan.map(m => m.id), ['first', 'next']);
+  });
+});
