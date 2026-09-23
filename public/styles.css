@@ -676,13 +676,36 @@ main#app {
    tag nor a score - the .team-name-en rule above still reserves 104px for
    both anyway, since it has no way to know which sibling elements are
    actually hidden in any given row. Live-reported bug this fixes: a real
-   race name ("Qatar Airways Azerbaijan Grand Prix") was clipped to barely
-   more than half the card's width, with its own Chinese name below it left
-   almost no room at all, because ~75px of that 104px budget was being
-   reserved for a side tag and score that were never there to begin with.
-   Only the logo (21px) and its own trailing gap (8px) are real here. */
+   race name ("Qatar Airways Azerbaijan Grand Prix Qualifying") was clipped
+   to barely more than half the card's width.
+   A first attempt just shrank the reserved budget down to the logo's own
+   real width (37px) and left the English/Chinese names competing for the
+   SAME single line, same as the two-team row above - which fixed the
+   clipping but immediately broke the Chinese name instead: with a real
+   F1 name (sponsor prefix + circuit + session suffix, routinely 35-50
+   characters) filling nearly the entire loosened budget on its own, the
+   Chinese name had only single-digit pixels of the row left and
+   effectively vanished (0-width, not merely truncated) - confirmed live.
+   A two-team row rarely hits this because team names are short; an F1
+   name hitting it is closer to the common case than the exception.
+   Fixed properly by giving the Chinese name its OWN full-width row
+   instead of making it compete with the English name at all - there's no
+   second competitor row here whose height this one has to match, so
+   nothing is lost by letting it wrap. */
+.team-row.is-solo {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
 .team-row.is-solo .team-name-en {
-  max-width: calc(100% - 37px);
+  max-width: calc(100% - 29px);
+}
+.team-row.is-solo .team-name-zh {
+  flex-basis: 100%;
+  /* Matches the left margin below so the two together never exceed the
+     row's own width - a plain 100% here, alongside a nonzero margin,
+     would overflow the card by exactly the margin's own width. */
+  max-width: calc(100% - 29px);
+  margin-left: 29px;
 }
 .team-name-zh {
   flex: 0 1 auto;
