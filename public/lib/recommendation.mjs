@@ -1002,31 +1002,42 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   // just ONE of them - confirmed against real fetched data (see README).
   // Pairwise-only exclusion is correct; the actual "swipe stack" bug this
   // was chasing was in `alternatives` below, not here.
+  // Shared by both forcing passes below (a real pin, and a started-pick
+  // lock): claim `match`'s own slot outright and exclude every OTHER
+  // candidate that directly (isNearTotalOverlap) conflicts with it from
+  // ever being scheduled elsewhere. Checked against the FULL candidate list
+  // rather than just `match`'s own conflict cluster - equivalent, since a
+  // direct near-total-overlap edge always puts both matches in the same
+  // cluster to begin with (see groupIntoSlots), but one shared definition
+  // of "force this in" instead of two separately maintained copies of it.
   const forcedIds = new Set();
   const excludedIds = new Set();
-  clusters.forEach(cluster => {
-    // `pinnedForDay` is a Set<matchId> (see public/lib/preferences.mjs) - a
-    // pin is looked up by the PINNED MATCH'S OWN id, never by a hash of the
-    // cluster it happened to belong to at pin time. This used to be keyed
-    // by slotKeyFromMembers(cluster.members) instead - which silently
-    // orphaned a real pin the moment the cluster's own shape changed from
-    // under it (a live duration correction nudging a near-total-overlap
-    // boundary, a routine 15-minute data refresh reshuffling which
-    // fixtures exist, or simply the viewer having pinned this match while
-    // a sport filter was narrowing which candidates counted toward the
-    // cluster in the first place) - live-reported as "swiping to a
-    // preference doesn't stick, reloading wipes it back to 推薦": the pin
-    // was still sitting in localStorage the whole time, just under a key
-    // that no longer matched anything computeDayPlan could ever look up
-    // again. A match's own id is stable regardless of which cluster shape
-    // currently contains it - even a cluster that split into several
-    // smaller ones (or one that grew) still finds its pin correctly here.
-    const pinnedMatch = pinnedForDay && cluster.members.find(m => pinnedForDay.has(m.id));
-    if (!pinnedMatch) return;
-    forcedIds.add(pinnedMatch.id);
-    cluster.members.forEach(m => {
-      if (m.id !== pinnedMatch.id && isNearTotalOverlap(m, pinnedMatch)) excludedIds.add(m.id);
+  function forceIntoPlan(match) {
+    forcedIds.add(match.id);
+    candidates.forEach(m => {
+      if (m.id !== match.id && !forcedIds.has(m.id) && isNearTotalOverlap(m, match)) excludedIds.add(m.id);
     });
+  }
+
+  // `pinnedForDay` is a Set<matchId> (see public/lib/preferences.mjs) - a
+  // pin is looked up by the PINNED MATCH'S OWN id, never by a hash of the
+  // cluster it happened to belong to at pin time. This used to be keyed
+  // by slotKeyFromMembers(cluster.members) instead - which silently
+  // orphaned a real pin the moment the cluster's own shape changed from
+  // under it (a live duration correction nudging a near-total-overlap
+  // boundary, a routine 15-minute data refresh reshuffling which
+  // fixtures exist, or simply the viewer having pinned this match while
+  // a sport filter was narrowing which candidates counted toward the
+  // cluster in the first place) - live-reported as "swiping to a
+  // preference doesn't stick, reloading wipes it back to 推薦": the pin
+  // was still sitting in localStorage the whole time, just under a key
+  // that no longer matched anything computeDayPlan could ever look up
+  // again. A match's own id is stable regardless of which cluster shape
+  // currently contains it - even a cluster that split into several
+  // smaller ones (or one that grew) still finds its pin correctly here.
+  clusters.forEach(cluster => {
+    const pinnedMatch = pinnedForDay && cluster.members.find(m => pinnedForDay.has(m.id));
+    if (pinnedMatch) forceIntoPlan(pinnedMatch);
   });
 
   const pinnedIds = new Set(forcedIds);
@@ -1043,10 +1054,7 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
       .forEach(locked => {
         if (forcedIds.has(locked.id) || excludedIds.has(locked.id)) return;
         if (pinnedMatches.some(p => clashes(p, locked))) return;
-        forcedIds.add(locked.id);
-        candidates.forEach(m => {
-          if (m.id !== locked.id && !forcedIds.has(m.id) && isNearTotalOverlap(m, locked)) excludedIds.add(m.id);
-        });
+        forceIntoPlan(locked);
       });
   }
 
