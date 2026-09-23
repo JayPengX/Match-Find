@@ -10,7 +10,7 @@
 // deploy workflow always running on UTC-default GitHub-hosted runners.
 process.env.TZ = 'UTC';
 
-import { test, describe } from 'node:test';
+import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   bestMatchScore,
@@ -53,12 +53,14 @@ import {
   slotKeyFromMembers,
   liveExcitementBonus,
   LIVE_EXCITEMENT_MAX_BONUS,
+  LIVE_PICK_STICKY_BONUS,
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
   computeVarietyRotation,
   mergeVarietyForcedIds,
   clearRotationIsPreferred,
-  VARIETY_CLOSE_CALL_GAP
+  VARIETY_CLOSE_CALL_GAP,
+  isWeekendDayKey
 } from '../public/lib/recommendation.mjs';
 
 // A local noon kickoff, expressed in UTC, so isQuietHours' local-hour check
@@ -441,6 +443,15 @@ describe('computeDayPlan', () => {
     assert.equal(plan[0].id, 'a'); // higher effectiveScore wins the slot
     assert.equal(a.recommended, true);
     assert.equal(b.recommended, false);
+    assert.deepEqual(a.alternativeIds, ['b']);
+  });
+
+  test('a finished fixture is never offered as a swipe alternative to an unfinished pick', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 60, effectiveScore: 7 });
+    const done = makeMatch({ id: 'done', startTimeUtc: '2026-09-19T19:55:00.000Z', durationMinutes: 60, effectiveScore: 8, isFinished: true });
+    computeDayPlan('2026-09-19', [a, b, done]);
+    assert.equal(a.recommended, true);
     assert.deepEqual(a.alternativeIds, ['b']);
   });
 
@@ -1417,15 +1428,35 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
       // Which SPECIFIC day keeps the incumbent isn't fixed (both are
       // equally valid solutions to this symmetric case - see the
       // incumbent-tie-break comment in recommendation.mjs) - what matters
-      // is that exactly one of the two days is untouched (the incumbent's
-      // own turn) and the other forces the rival in, never both touched or
-      // neither.
-      const day1Forced = rotation.get('2026-09-23');
-      const day2Forced = rotation.get('2026-09-24');
-      assert.equal(!day1Forced !== !day2Forced, true); // exactly one of the two days has a forced entry
-      const forcedDay = day1Forced || day2Forced;
-      assert.equal(forcedDay.size, 1);
-      assert.ok([...forcedDay][0].startsWith('rival-'));
+      // is that both days are held (so the render can't drift back to a
+      // repeat) and they hold different matchups: one incumbent, one rival.
+      const forced = ['2026-09-23', '2026-09-24'].map(dayKey => rotation.get(dayKey));
+      forced.forEach(set => assert.equal(set?.size, 1));
+      const kinds = forced.map(set => [...set][0].split('-')[0]).sort();
+      assert.deepEqual(kinds, ['inc', 'rival']);
+    });
+
+    test('an exact tie broken differently at render time still never repeats a matchup on consecutive days', () => {
+      // The live 9/26-9/27 case: the incumbent led by ~1e-15 when the
+      // rotation planned, but a render that sees an exact tie can break it
+      // the other way - an unforced incumbent day then went to the rival
+      // that was already forced in the day before.
+      const days = new Map();
+      for (const dayKey of ['2026-09-26', '2026-09-27']) {
+        const incumbent = makeMatch({ id: `rays-${dayKey}`, planningScore: 6.85, competitors: teams('Tampa Bay Rays', 'Philadelphia Phillies') });
+        const rival = makeMatch({ id: `orioles-${dayKey}`, planningScore: 6.849999999999999, competitors: teams('Baltimore Orioles', 'New York Yankees') });
+        days.set(dayKey, day([incumbent, rival]));
+      }
+      const rotation = computeVarietyRotation(days);
+      const winners = [...days.keys()].map(dayKey => {
+        // Render-time scores: the same two fixtures, now exactly tied - the
+        // scheduler resolves an exact tie toward the rival here, so an
+        // unforced incumbent day would go to the rival.
+        const rendered = days.get(dayKey).map(m => ({ ...m, planningScore: 6.85 }));
+        computeDayPlan(dayKey, rendered, mergeVarietyForcedIds(null, rotation.get(dayKey)), { scoreField: 'planningScore' });
+        return rendered.find(m => m.recommended).id.split('-')[0];
+      });
+      assert.equal(new Set(winners).size, 2);
     });
 
     test('end-to-end: a 3-day run with 3 real close contenders gives each of them exactly one win, all correctly labeled 推薦', () => {
@@ -1480,6 +1511,75 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
       assert.equal(new Set(winners).size, 2); // still real variety - the two days aren't identical
     });
 
+    describe('saving the best contender for the weekend', () => {
+      const winnersFor = (days, rotation) =>
+        Object.fromEntries(
+          [...days.keys()].map(dayKey => {
+            const dayMatches = days.get(dayKey);
+            computeDayPlan(dayKey, dayMatches, mergeVarietyForcedIds(null, rotation.get(dayKey)), { scoreField: 'planningScore' });
+            return [dayKey, dayMatches.find(m => m.recommended).id.split('-')[0]];
+          })
+        );
+
+      test('isWeekendDayKey is Fri/Sat/Sun by the local calendar date', () => {
+        assert.deepEqual(
+          ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28'].map(isWeekendDayKey),
+          [false, true, true, true, false]
+        );
+      });
+
+      test('a Wed-Fri run gives Friday to the strongest contender', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-23', '2026-09-24', '2026-09-25']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `brewers-${dayKey}`, planningScore: 7.2, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') }),
+              makeMatch({ id: `guardians-${dayKey}`, planningScore: 7.0, competitors: teams('Cleveland Guardians', 'Boston Red Sox') }),
+              makeMatch({ id: `rays-${dayKey}`, planningScore: 6.9, competitors: teams('Tampa Bay Rays', 'New York Yankees') })
+            ])
+          );
+        }
+        const winners = winnersFor(days, computeVarietyRotation(days));
+        assert.equal(winners['2026-09-25'], 'brewers');
+        assert.equal(new Set(Object.values(winners)).size, 3); // still one day each
+      });
+
+      test('a Thu-Fri run whose incumbent would land on Thursday is swapped so the better game is on Friday', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `best-${dayKey}`, planningScore: 7.2, competitors: teams('A', 'B') }),
+              makeMatch({ id: `alt-${dayKey}`, planningScore: 6.9, competitors: teams('C', 'D') })
+            ])
+          );
+        }
+        const winners = winnersFor(days, computeVarietyRotation(days));
+        assert.deepEqual(winners, { '2026-09-24': 'alt', '2026-09-25': 'best' });
+      });
+
+      test('never trades variety for the weekend - no back-to-back repeat even when the best game has two turns', () => {
+        // Thu/Fri/Sat, two contenders: the best one gets two of the three
+        // days, but Fri+Sat would repeat it back to back, so it has to be
+        // Thu+Sat with the alternative on Fri.
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25', '2026-09-26']) {
+          days.set(
+            dayKey,
+            day([
+              makeMatch({ id: `best-${dayKey}`, planningScore: 7.2, competitors: teams('A', 'B') }),
+              makeMatch({ id: `alt-${dayKey}`, planningScore: 6.9, competitors: teams('C', 'D') })
+            ])
+          );
+        }
+        const winners = Object.values(winnersFor(days, computeVarietyRotation(days)));
+        winners.forEach((w, i) => i > 0 && assert.notEqual(w, winners[i - 1]));
+        assert.equal(winners[2], 'best'); // Saturday
+      });
+    });
+
     test('a real gap day (no matches at all) breaks a run instead of silently joining two separate repeats across it', () => {
       const before = makeMatch({ id: 'before', planningScore: 7, competitors: teams('A', 'B') });
       const beforeRival = makeMatch({ id: 'beforeRival', planningScore: 6.8, competitors: teams('C', 'D') });
@@ -1522,3 +1622,55 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
   });
 });
 
+
+describe('live-pick stickiness', () => {
+  // applyLiveExcitementBonus reads the clock itself - pinned to an hour
+  // after NOON_UTC so these fixtures are always mid-game and never land in
+  // quiet hours, whenever the suite runs.
+  beforeEach(() => mock.timers.enable({ apis: ['Date'], now: Date.parse(NOON_UTC) + 60 * 60_000 }));
+  afterEach(() => mock.timers.reset());
+  const liveStart = () => NOON_UTC;
+
+  test('a sticky pick gets the bonus only while it is underway', () => {
+    const live = makeMatch({ id: 'live', startTimeUtc: liveStart(), effectiveScore: 6 });
+    const upcoming = makeMatch({ id: 'up', startTimeUtc: '2026-09-19T16:00:00.000Z', effectiveScore: 6 });
+    const done = makeMatch({ id: 'done', startTimeUtc: liveStart(), effectiveScore: 6, isFinished: true });
+    applyLiveExcitementBonus([live, upcoming, done], new Set(['live', 'up', 'done']));
+    assert.equal(live.liveStickyBonus, LIVE_PICK_STICKY_BONUS);
+    assert.equal(live.planningScore, 6 + LIVE_PICK_STICKY_BONUS);
+    assert.equal(upcoming.liveStickyBonus, 0);
+    assert.equal(done.liveStickyBonus, 0);
+  });
+
+  test('outweighs any live-excitement swing, but not a viewer pin', () => {
+    const start = liveStart();
+    const sticky = makeMatch({ id: 'sticky', startTimeUtc: start, durationMinutes: 190, effectiveScore: 6 });
+    // A tied game deep in its run earns close to the full excitement bonus.
+    const rival = makeMatch({
+      id: 'rival',
+      startTimeUtc: start,
+      durationMinutes: 70,
+      effectiveScore: 6.5,
+      competitors: [{ score: '3' }, { score: '3' }]
+    });
+    const day = [sticky, rival];
+    applyLiveExcitementBonus(day, new Set(['sticky']));
+    assert.ok(rival.liveExcitementBonus > 0);
+    const dayKey = start.slice(0, 10);
+    computeDayPlan(dayKey, day, null, { scoreField: 'planningScore' });
+    assert.equal(sticky.recommended, true);
+    assert.equal(rival.recommended, false);
+    computeDayPlan(dayKey, day, new Set(['rival']), { scoreField: 'planningScore' });
+    assert.equal(rival.recommended, true);
+  });
+
+  test('stickiness does not push close alternatives out of the swipe stack', () => {
+    const start = liveStart();
+    const sticky = makeMatch({ id: 'sticky', startTimeUtc: start, durationMinutes: 190, effectiveScore: 6 });
+    const alt = makeMatch({ id: 'alt', startTimeUtc: start, durationMinutes: 190, effectiveScore: 5 });
+    const day = [sticky, alt];
+    applyLiveExcitementBonus(day, new Set(['sticky']));
+    computeDayPlan(start.slice(0, 10), day, null, { scoreField: 'planningScore' });
+    assert.deepEqual(sticky.alternativeIds, ['alt']);
+  });
+});

@@ -92,7 +92,7 @@ export default {
   conflictNote: '與「{name}」{clause}',
 
   // ---- Swipeable match stack ----
-  matchStackHint: '⟷ 這個時段只能擇一收看，點選切換要看哪一場',
+  matchStackHint: '⟷ 同時段只能擇一，點選切換',
   prevMatchAria: '上一場',
   nextMatchAria: '下一場',
   switchToAria: '切換到{name}',

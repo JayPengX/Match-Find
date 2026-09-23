@@ -286,6 +286,32 @@ function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
   return datesParam ? `${base}?dates=${datesParam}` : base;
 }
 
+// ESPN's per-event odds resource on its "core" API - a small (~12KB) list of
+// every provider's line for one fixture. Unlike the scoreboard (which drops
+// `odds` entirely the moment a game goes in-progress), this keeps the
+// provider's pre-game closing line as its own entry, alongside a separate
+// "<provider> - Live Odds" entry for the in-game line.
+export function espnCoreOddsUrl(sportKey, leagueKey, eventId) {
+  return `https://sports.core.api.espn.com/v2/sports/${sportKey}/leagues/${leagueKey}/events/${eventId}/competitions/${eventId}/odds`;
+}
+
+// The pre-game {spread, overUnder} from an espnCoreOddsUrl response - the
+// first provider entry that ISN'T a live in-game line - or null when none
+// is posted. Same {spread, overUnder} shape as parseOddsSignal.
+export function parsePregameCoreOdds(json) {
+  for (const item of json?.items || []) {
+    if (/live/i.test(item?.provider?.name || '')) continue;
+    const spread = Number(item.spread);
+    const overUnder = Number(item.overUnder);
+    if (!Number.isFinite(spread) && !Number.isFinite(overUnder)) continue;
+    return {
+      spread: Number.isFinite(spread) ? spread : null,
+      overUnder: Number.isFinite(overUnder) ? overUnder : null
+    };
+  }
+  return null;
+}
+
 function yyyymmddUtc(date) {
   return `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
 }
@@ -405,7 +431,7 @@ export function parseOddsSignal(competition) {
   };
 }
 
-async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson) {
+async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds) {
   // Queries `now`'s own UTC date AND the two days before it - not just
   // `now` onward. This script runs on a schedule/on push, at whatever UTC
   // instant that happens to be, and ESPN's own `dates=YYYYMMDD` scoreboard
@@ -444,6 +470,9 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
   );
 
   const matches = [];
+  // In-progress fixtures whose scoreboard entry has no line any more (see
+  // espnCoreOddsUrl) - backfilled with their pre-game line after the loop.
+  const pregameBackfills = [];
   const seenIds = new Set();
   for (const result of results) {
     if (result.status !== 'fulfilled') continue;
@@ -503,9 +532,18 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       // computeMatchObjectiveScore below), not just Gemini's own context.
       const isPostseason = event.season?.type === 3;
       const oddsSignal = parseOddsSignal(competition);
+      const id = `${league.id}-${event.id}`;
+      if (
+        isLive &&
+        oddsSignal.spread == null &&
+        oddsSignal.overUnder == null &&
+        (!needsPregameOdds || needsPregameOdds(id))
+      ) {
+        pregameBackfills.push({ id, eventId: event.id, away, home, venue: competition.venue?.fullName || '', broadcast: broadcast || '' });
+      }
 
       matches.push({
-        id: `${league.id}-${event.id}`,
+        id,
         sport: league.label,
         name: `${away.name} @ ${home.name}`,
         nameZh: away.nameZh && home.nameZh ? `${away.nameZh} @ ${home.nameZh}` : '',
@@ -550,6 +588,22 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
           oddsContext(competition)
       });
     }
+  }
+
+  // Best-effort: a failed or empty lookup just leaves the fixture scored
+  // without a line, exactly as before this existed.
+  if (pregameBackfills.length) {
+    const byId = new Map(matches.map(m => [m.id, m]));
+    await Promise.allSettled(
+      pregameBackfills.map(async ({ id, eventId, away, home, venue, broadcast }) => {
+        const odds = parsePregameCoreOdds(await fetchJson(espnCoreOddsUrl(league.sportKey, league.leagueKey, eventId)));
+        const match = byId.get(id);
+        if (!odds || !match) return;
+        match.oddsSpread = odds.spread;
+        match.oddsOverUnder = odds.overUnder;
+        match.durationMinutes = computeDurationMinutes(league, away, home, venue, broadcast, odds.overUnder);
+      })
+    );
   }
   return matches;
 }
@@ -789,6 +843,54 @@ export function buildObjectiveReasonZh(factors) {
 // Exported so app.js can also call this directly, standalone, as its own
 // fast-follow pass after a build already returned - see buildMatches' own
 // `enrichOdds` option below for why.
+// Every field buildMatches' own scoring loop (below) derives from a
+// fixture's PRE-GAME data - its own objective score, the reason built from
+// it, and the ESPN spread/over-under that feeds both that score and the
+// pre-game duration estimate (computeDurationMinutes' own `oddsOverUnder`).
+export const PREGAME_SCORING_FIELDS = [
+  'competitiveness',
+  'watchability',
+  'enduranceScore',
+  'broadcastQuality',
+  'skill',
+  'reason',
+  'objectiveFactors',
+  'marqueeCredit',
+  'score',
+  'confidence',
+  'oddsSpread',
+  'oddsOverUnder'
+];
+
+// Once a fixture has actually started, a fresh rebuild must NOT re-score it
+// from scratch - ESPN's own scoreboard stops reporting a pre-game line the
+// moment a game goes in-progress (or swaps in a live, in-game one), so
+// every 60s/5min refresh after kickoff recomputed that fixture's score and
+// pre-game duration WITHOUT the odds signal it was scored with all
+// morning. That silently moved its score (and its scheduling interval)
+// right as it went live, which in turn reshuffled the day's plan -
+// live-reported as "recommended match changes when it all goes live".
+// Keeps `previous`'s own pre-game scoring fields (and its duration, unless
+// the fixture has since finished - see mergeFreshMatches' own finished-
+// duration handling) on `fresh` instead. A genuinely rescheduled fixture
+// (different start time) is left alone: that's new pre-game data, not a
+// live-feed artifact. Mutates and returns `fresh`.
+export function freezeStartedMatchScoring(fresh, previous, now = Date.now()) {
+  if (!previous || !Number.isFinite(previous.score)) return fresh;
+  if (fresh.startTimeUtc !== previous.startTimeUtc) return fresh;
+  if (Date.parse(fresh.startTimeUtc) > now) return fresh;
+  // `previous` was itself scored after kickoff with no line, but this build
+  // backfilled the real pre-game one (see espnCoreOddsUrl) - `fresh` is the
+  // better pre-game score, so it becomes the one kept from here on.
+  const hasLine = m => m.oddsSpread != null || m.oddsOverUnder != null;
+  if (!hasLine(previous) && hasLine(fresh)) return fresh;
+  PREGAME_SCORING_FIELDS.forEach(field => {
+    if (field in previous) fresh[field] = previous[field];
+  });
+  if (!fresh.isFinished && Number.isFinite(previous.durationMinutes)) fresh.durationMinutes = previous.durationMinutes;
+  return fresh;
+}
+
 export async function enrichWithPolymarketOdds(matches, fetchJson) {
   const sportsNeeded = new Set();
   matches.forEach(m => {
@@ -877,7 +979,11 @@ export async function buildMatches({
   daysAhead = DEFAULT_DAYS_AHEAD,
   fetchJson,
   enabledSports = null,
-  enrichOdds = true
+  enrichOdds = true,
+  // Optional (id) => boolean - which in-progress fixtures missing a line
+  // should have their pre-game line looked up (one extra small request
+  // each; see espnCoreOddsUrl). Left null, every such fixture is looked up.
+  needsPregameOdds = null
 }) {
   if (typeof fetchJson !== 'function') {
     throw new TypeError('buildMatches requires a fetchJson(url) function - see this file\'s own top comment');
@@ -911,7 +1017,7 @@ export async function buildMatches({
   const [teamMatchLists, f1Matches] = await Promise.all([
     Promise.all(
       leagues.map(league =>
-        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson).catch(error => {
+        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds).catch(error => {
           console.warn(`Failed to fetch ${league.label}: ${error.message}`);
           return [];
         })

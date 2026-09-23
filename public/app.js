@@ -67,6 +67,8 @@ import {
   slotKeyFromMembers,
   groupIntoSlots,
   isQuietHours,
+  isUnderway,
+  schedulingInterval,
   computeOverlapRange,
   isNearTotalOverlap,
   applyLiveExcitementBonus,
@@ -99,7 +101,7 @@ import {
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
-import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // UI copy/locale layer - see that module's own top comment. Every piece of
 // genuine UI chrome (labels, hints, status text, aria-labels) goes through
 // t() rather than a hardcoded literal, so this file itself never has to
@@ -332,7 +334,7 @@ const state = {
   // sitting untouched in localStorage the whole time (savePinnedChoices
   // still worked fine mid-session), just never read back on the load path.
   pinnedChoices: new Map(),
-  // Map<dayKey, Map<slotKey, Set<matchId>>> - which members a swipeable
+  // Map<dayKey, Map<slotKey, Array<Set<matchId>>>> - which members a swipeable
   // card stack actually shows, frozen the first time each day+slot renders
   // - see renderRecommendedSection's own comment for why this exists:
   // computeDayPlan's alternativeIds is recomputed per CHOICE, and a big
@@ -740,19 +742,89 @@ function savePinnedChoices() {
 // STORAGE_KEY's own TDZ), same pattern as state.priorityOrder's assignment
 // right after loadPriorityOrder above.
 state.pinnedChoices = loadPinnedChoices();
+
+// Live picks the plan itself recommended once they were underway - see
+// recommendation.mjs's applyLiveExcitementBonus/LIVE_PICK_STICKY_BONUS.
+// Persisted so a reload mid-game doesn't let a close game elsewhere swap
+// out what the viewer is already watching. Stored as a plain id list;
+// entries for fixtures that are finished or no longer fetched are dropped
+// by pruneLiveStickyIds.
+const LIVE_STICKY_STORAGE_KEY = 'matchfind-live-sticky-ids';
+function loadLiveStickyIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(LIVE_STICKY_STORAGE_KEY));
+    return new Set(Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveLiveStickyIds() {
+  try {
+    localStorage.setItem(LIVE_STICKY_STORAGE_KEY, JSON.stringify([...state.liveStickyIds]));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+state.liveStickyIds = loadLiveStickyIds();
+function pruneLiveStickyIds() {
+  if (!state.allRawMatches.length) return;
+  const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
+  const kept = new Set([...state.liveStickyIds].filter(id => byId.has(id) && !byId.get(id).isFinished));
+  if (kept.size !== state.liveStickyIds.size) {
+    state.liveStickyIds = kept;
+    saveLiveStickyIds();
+  }
+}
 // Called on every applyEnabledSportsAndRender (a fresh data load, or a
 // sport toggle) - state.days moves forward with the fetched window, and a
 // pin for a day that's fallen off the back of it, or simply passed, can
 // never be looked up by computeDayPlan again either way.
+// One-time cleanup (per browser) of pins left on an already-finished game by
+// the old swipe stack, which offered finished games as swipe targets. Such a
+// pin rendered as a plain, unswipeable 已結束 card and blocked every live
+// game it overlapped out of the plan until the day rolled over, with no way
+// to undo it from the UI. New pins can't land on a finished game anymore
+// (see computeDayPlan's alternatives filter), so this only needs to run once.
+const FINISHED_PIN_CLEANUP_STORAGE_KEY = 'matchfind-finished-pin-cleanup-v1';
+function dropPinsOnFinishedMatchesOnce() {
+  try {
+    if (localStorage.getItem(FINISHED_PIN_CLEANUP_STORAGE_KEY) || !state.allRawMatches.length) return false;
+    localStorage.setItem(FINISHED_PIN_CLEANUP_STORAGE_KEY, '1');
+  } catch {
+    return false;
+  }
+  const finishedIds = new Set(state.allRawMatches.filter(m => m.isFinished).map(m => m.id));
+  let changed = false;
+  const next = new Map();
+  state.pinnedChoices.forEach((daySet, dayKey) => {
+    const kept = new Set([...daySet].filter(id => !finishedIds.has(id)));
+    if (kept.size !== daySet.size) changed = true;
+    if (kept.size) next.set(dayKey, kept);
+  });
+  if (changed) state.pinnedChoices = next;
+  return changed;
+}
+
 function prunePinnedChoices() {
   const { pinnedChoices, changed } = pruneStalePinnedChoices(state.pinnedChoices, localDateKey(new Date()));
   state.pinnedChoices = pinnedChoices;
-  if (changed) savePinnedChoices();
+  const droppedFinished = dropPinsOnFinishedMatchesOnce();
+  pruneLiveStickyIds();
+  if (changed || droppedFinished) savePinnedChoices();
 }
 
 function recomputeAndRender() {
   if (!state.rawMatches.length) return;
   state.matches = resolveViewingPlan(state.rawMatches, state.priorityOrder, state.myServiceIds);
+  // Every caller (a live poll's new scores/durations, a priority or owned-
+  // service change) just changed the scores/intervals the cached rotation
+  // plan was computed from. Leaving it cached meant the RENDER kept forcing
+  // a stale rotation pick while pinSlotChoice (which always recomputes
+  // rotation fresh) disagreed about what the slot's natural pick was - so
+  // swiping to that card was treated as "back to default", cleared nothing,
+  // and the stale force put the old card right back: live-reported as
+  // cards becoming unable to swipe once games go live.
+  invalidateVarietyRotation();
   renderSections();
 }
 
@@ -1306,7 +1378,7 @@ function dayLabelFor(date, { short = false } = {}) {
 // render doesn't re-derive it from scratch on every single call.
 function baseDayCandidates(dayKey) {
   const dayCandidates = applySportFilter(matchesForDay(dayKey));
-  applyLiveExcitementBonus(dayCandidates);
+  applyLiveExcitementBonus(dayCandidates, state.liveStickyIds);
   return dayCandidates;
 }
 
@@ -1323,15 +1395,33 @@ function invalidateVarietyRotation() {
 }
 function getVarietyRotation() {
   if (varietyRotationCache) return varietyRotationCache;
-  const matchesByDayKey = new Map();
-  // Every day in state.days, even one with zero candidates for the
-  // current sport filter - computeVarietyRotation's own comment explains
-  // why an empty day still has to be PRESENT (as an empty array) rather
-  // than simply missing, so a real gap day correctly breaks a run instead
-  // of silently stitching two separate repeats together across it.
-  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
-  varietyRotationCache = computeVarietyRotation(matchesByDayKey, state.pinnedChoices);
+  varietyRotationCache = computeVarietyRotation(rotationMatchesByDayKey(), state.pinnedChoices);
   return varietyRotationCache;
+}
+
+// Variety rotation is a cross-day plan made from PRE-GAME scores alone -
+// no live-excitement bonus and no live-pick stickiness. Feeding it
+// planningScore (as an earlier version did) let a sticky live pick's
+// bonus make it look like a runaway winner with no close alternatives,
+// which silently switched the rotation off for that day, and let a live
+// scoreline flip a close call mid-game. Runs on shallow COPIES, since both
+// this and computeVarietyRotation's own computeDayPlan calls write fields
+// (planningScore, recommended, ...) that the render's own real candidates
+// must keep.
+//
+// Every day in state.days, even one with zero candidates for the current
+// sport filter - computeVarietyRotation's own comment explains why an empty
+// day still has to be PRESENT (as an empty array) rather than simply
+// missing, so a real gap day correctly breaks a run instead of silently
+// stitching two separate repeats together across it.
+function rotationMatchesByDayKey() {
+  const matchesByDayKey = new Map();
+  state.days.forEach(day => {
+    const copies = applySportFilter(matchesForDay(day.key)).map(m => ({ ...m }));
+    applyLiveExcitementBonus(copies, null, { live: false });
+    matchesByDayKey.set(day.key, copies);
+  });
+  return matchesByDayKey;
 }
 
 // The exact same day-candidate preparation renderRecommendedSection needs
@@ -1356,7 +1446,32 @@ function dayCandidatesForPlan(dayKey) {
 // state.pinnedChoices directly, so rotation and a genuine swipe-to-pin are
 // always resolved together, consistently.
 function pinnedForDayWithRotation(dayKey) {
-  return mergeVarietyForcedIds(state.pinnedChoices.get(dayKey), getVarietyRotation().get(dayKey));
+  return mergeVarietyForcedIds(state.pinnedChoices.get(dayKey), rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)));
+}
+
+// A rotation force is a hard pin, so without this it would still beat a
+// live pick the viewer is already watching (see state.liveStickyIds) if the
+// rotation's own assignment for today ever changed mid-game - e.g. a later
+// day's fixtures shifting how a multi-day run gets shared out. Drops any
+// rotation force whose scheduled time clashes with an underway sticky pick
+// that day; the live game keeps its slot and the rotation simply skips it.
+function rotationRespectingLivePicks(dayKey, forcedIds) {
+  if (!forcedIds || !forcedIds.size || !state.liveStickyIds.size) return forcedIds;
+  const dayMatches = matchesForDay(dayKey);
+  const locked = dayMatches.filter(m => state.liveStickyIds.has(m.id) && isUnderway(m));
+  if (!locked.length) return forcedIds;
+  const byId = new Map(dayMatches.map(m => [m.id, m]));
+  const clashes = (a, b) => {
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    return ai.start < bi.end && bi.start < ai.end;
+  };
+  return new Set(
+    [...forcedIds].filter(id => {
+      const forced = byId.get(id);
+      return !forced || !locked.some(live => live.id !== id && clashes(forced, live));
+    })
+  );
 }
 
 // The actual "I will watch this" commitment (see buildMatchStack) - records
@@ -1425,9 +1540,10 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
     if (nextDaySet.size) pinnedChoicesWithoutThisSlot.set(dayKey, nextDaySet);
     else pinnedChoicesWithoutThisSlot.delete(dayKey);
   }
-  const matchesByDayKey = new Map();
-  state.days.forEach(day => matchesByDayKey.set(day.key, baseDayCandidates(day.key)));
-  const rotationWithoutThisSlot = computeVarietyRotation(matchesByDayKey, pinnedChoicesWithoutThisSlot).get(dayKey);
+  const rotationWithoutThisSlot = rotationRespectingLivePicks(
+    dayKey,
+    computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot).get(dayKey)
+  );
   const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
     scoreField: 'planningScore'
@@ -2522,7 +2638,17 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // page scroll, not a swipe - let go of it entirely (touch-action:
       // pan-y already told Safari the same thing) rather than fighting it.
       if (Math.abs(dy) > Math.abs(dx)) {
-        activePointerId = null;
+        // resetDragState, not just `activePointerId = null` - the latter
+        // left isTrackingSwipe set, so unless the browser happened to also
+        // fire pointercancel (it doesn't for a mouse drag, or a short
+        // vertical jitter below its own pan threshold), the shared
+        // activeSwipeCount never came back down and renderSections deferred
+        // itself forever: every later swipe/tap pinned nothing visible and
+        // live scores stopped updating. No transform has been applied yet
+        // (isHorizontalDrag is still false), so there's no style to reset.
+        const pointerId = activePointerId;
+        resetDragState();
+        try { card.releasePointerCapture(pointerId); } catch { /* already released */ }
         return;
       }
       isHorizontalDrag = true;
@@ -2567,7 +2693,10 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     resetDrag();
   });
   card.addEventListener('lostpointercapture', () => {
-    if (activePointerId != null) resetDrag();
+    // isTrackingSwipe too, not just activePointerId - a gesture whose
+    // pointer id was already cleared must still release its hold on
+    // activeSwipeCount (see pointermove's vertical-drag branch).
+    if (activePointerId != null || isTrackingSwipe) resetDrag();
     activePointerId = null;
   });
 
@@ -2606,6 +2735,22 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   return wrapper;
 }
 
+// Marks every underway pick the plan chose ON ITS OWN (not a viewer's
+// 偏好 pin - that's already a hard pin, and making it sticky would bias
+// what "the natural pick" means for pinSlotChoice's swipe-back check) as
+// sticky - see state.liveStickyIds. Raising an already-chosen pick's score
+// never changes the plan it was chosen in, so this render stays as it is;
+// it only stops later renders from swapping that pick out.
+function stickLivePicks(dayPlan) {
+  let changed = false;
+  dayPlan.forEach(match => {
+    if (match.isPreferred || state.liveStickyIds.has(match.id) || !isUnderway(match)) return;
+    state.liveStickyIds.add(match.id);
+    changed = true;
+  });
+  if (changed) saveLiveStickyIds();
+}
+
 function renderRecommendedSection() {
   const dayKey = state.selectedDayKey;
   // A day with no data yet at all (see isDayPending) gets an honest
@@ -2634,7 +2779,8 @@ function renderRecommendedSection() {
   // bug that got Gemini's forced override removed). Put the correct 推薦
   // label back on anything ONLY rotation forced in, never touching an id
   // that's ALSO a real pin.
-  clearRotationIsPreferred(dayCandidates, getVarietyRotation().get(dayKey), state.pinnedChoices.get(dayKey));
+  clearRotationIsPreferred(dayCandidates, rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)), state.pinnedChoices.get(dayKey));
+  stickLivePicks(dayPlan);
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {
@@ -2665,25 +2811,15 @@ function renderRecommendedSection() {
     dayMembership = new Map();
     state.stackMembershipByDay.set(dayKey, dayMembership);
   }
-  // How many recommended picks sharing this render's `slotKey` we've
-  // already turned into a stack, so two separate stacks from the SAME
-  // transitive cluster (see computeDayPlan's own comment on `slotKey`: "a
-  // cluster of 3+ near-total-overlapping matches where the scheduler
-  // independently recommends more than one of them... renders as TWO
-  // separate swipeable stacks... both part of the same underlying conflict
-  // cluster") get their OWN frozen membership entry below instead of
-  // colliding on one shared `dayMembership` key. Live-verified 9/23 case:
-  // a single 15-match MLB cluster (every game between 06:35-10:10 chained
-  // together by transitive near-overlap) produced two independent picks,
-  // 06:35 Blue Jays/Orioles and 09:40 Angels/Athletics - both carry the
-  // exact same `slotKey` (the whole cluster). Without this counter, the
-  // second stack's `dayMembership.get(slotKey)` found the FIRST stack's
-  // already-frozen members (Brewers/Phillies, Cardinals/Pirates, etc. -
-  // none of which overlap the 09:40 game at all) and showed those as its
-  // own "alternatives", exactly the "bunch of nonexistent cards" reported:
-  // swiping the second stack flipped between games with zero real time
-  // conflict with what was actually in that slot.
-  const stackOccurrenceBySlotKey = new Map();
+  // Each slotKey maps to a LIST of frozen member sets, not one, so two
+  // separate stacks from the SAME transitive cluster (see computeDayPlan's
+  // own comment on `slotKey`: a 3+-member cluster can produce two
+  // independent picks, each its own stack) never share one frozen list.
+  // Live-verified 9/23 case: one 15-match MLB cluster produced two picks,
+  // 06:35 Blue Jays/Orioles and 09:40 Angels/Athletics, both carrying the
+  // same `slotKey`; with a single shared entry the second stack showed the
+  // first stack's members - games with no real time conflict with it.
+  const claimedFreezeSets = new Set();
   // Existing plain cards from this SAME container's previous render, up for
   // reuse below (see getOrBuildMatchCard's own comment) - captured once,
   // up front, before this render starts moving any of them into `fragment`.
@@ -2710,16 +2846,20 @@ function renderRecommendedSection() {
     if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = match.slotKey || slotKeyFromMembers(members);
-      // Composite key: which OCCURRENCE of this shared cluster slotKey this
-      // is within THIS render's chronological pass, not the bare slotKey -
-      // see the comment on stackOccurrenceBySlotKey above for why a bare
-      // slotKey collides across a cluster's separate stacks.
-      const occurrence = stackOccurrenceBySlotKey.get(slotKey) || 0;
-      stackOccurrenceBySlotKey.set(slotKey, occurrence + 1);
-      const freezeKey = `${slotKey}::${occurrence}`;
-      const knownIds = dayMembership.get(freezeKey);
+      // Which of this slotKey's frozen sets belongs to THIS stack - matched
+      // by CONTENT (the frozen set that already contains this
+      // stack's primary), not by render position: pinCurrentOrNext and a
+      // pin can both reorder the plan, and a position-based key then handed
+      // one stack's frozen members to a different stack - live-reported as
+      // "all live cards disappear, leaving me swiping not-started matches"
+      // (a not-started stack inheriting the live stack's frozen list).
+      // `claimedFreezeSets` keeps two stacks in one render from sharing a set.
+      const freezeSets = dayMembership.get(slotKey) || [];
+      const knownIds = freezeSets.find(set => set.has(match.id) && !claimedFreezeSets.has(set));
       if (knownIds) {
-        // Never `.recommended` (besides `match` itself) - a frozen member
+        claimedFreezeSets.add(knownIds);
+        // Never finished (see computeDayPlan's own alternatives filter), and
+        // never `.recommended` (besides `match` itself) - a frozen member
         // that ended up independently recommended elsewhere this render
         // has to stay excluded here too, same invariant computeDayPlan's
         // own alternativeIds already enforces (docs/
@@ -2727,12 +2867,14 @@ function renderRecommendedSection() {
         // recommended and someone else's alternative).
         const stable = [...knownIds]
           .map(id => byId.get(id))
-          .filter(m => m && (m.id === match.id || !m.recommended));
-        if (!knownIds.has(match.id)) stable.push(match);
+          .filter(m => m && (m.id === match.id || (!m.recommended && !m.isFinished)));
         members = stable;
         alternatives = members.filter(m => m.id !== match.id);
       } else {
-        dayMembership.set(freezeKey, new Set(members.map(m => m.id)));
+        const created = new Set(members.map(m => m.id));
+        freezeSets.push(created);
+        dayMembership.set(slotKey, freezeSets);
+        claimedFreezeSets.add(created);
       }
       if (!alternatives.length) {
         const card = getOrBuildMatchCard(match, existingCardsById);
@@ -2916,6 +3058,11 @@ function mergeFreshMatches(freshMatches) {
     // put it back. Live-reported as "live states sometimes show then
     // disappear again" - this is that cycle.
     const previous = byId.get(m.id);
+    // A fixture that's already underway keeps the pre-game score/odds/
+    // duration it was planned with all day, instead of being re-scored from
+    // ESPN's in-progress feed (which no longer carries the pre-game line) -
+    // see freezeStartedMatchScoring's own comment.
+    freezeStartedMatchScoring(m, previous);
     if (previous?.live && !m.isFinished) {
       m.live = previous.live;
       m.durationMinutes = previous.durationMinutes;
@@ -3059,6 +3206,20 @@ function loadMatchSnapshot() {
   } catch {
     return null;
   }
+}
+
+// Which in-progress fixtures a build should look up the pre-game line for
+// (see match-builder.mjs's espnCoreOddsUrl) - only ones this browser has no
+// pre-game line for yet (never seen, or first seen already underway), and
+// only once per fixture per page load, so a game that genuinely never had a
+// line posted doesn't cost an extra request on every 60s refresh.
+const pregameOddsLookedUp = new Set();
+function needsPregameOdds(id) {
+  if (pregameOddsLookedUp.has(id)) return false;
+  const previous = state.allRawMatches.find(m => m.id === id);
+  if (previous && (previous.oddsSpread != null || previous.oddsOverUnder != null)) return false;
+  pregameOddsLookedUp.add(id);
+  return true;
 }
 
 // Applies a freshly-built match list to the page - called by both refresh
@@ -3237,7 +3398,8 @@ async function refreshNearTerm() {
       daysAhead: NEAR_TERM_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
-      enrichOdds: false
+      enrichOdds: false,
+      needsPregameOdds
     });
     // Set BEFORE applyFreshBuild, not after - applyFreshBuild's own render
     // reads this (via isDayPending) to decide whether today/tomorrow are
@@ -3398,7 +3560,8 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
       daysAhead: DEFAULT_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
-      enrichOdds: false
+      enrichOdds: false,
+      needsPregameOdds
     });
     // Set BEFORE applyFreshBuild, not after - see refreshNearTerm's own
     // comment on state.nearTermLoaded for why the render this triggers
@@ -3608,8 +3771,13 @@ async function pollLiveMatches() {
           detail: update.shortDetail,
           situation: update.situation
         });
-        if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
-        if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        // Pre-game lines only - once underway, ESPN's spread/over-under is an
+        // in-game line, not the pre-game signal this fixture was scored and
+        // planned with (see freezeStartedMatchScoring).
+        if (Date.parse(match.startTimeUtc) > Date.now()) {
+          if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
+          if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+        }
         if (update.isFinished && !match.isFinished) {
           match.isFinished = true;
           changed = true;

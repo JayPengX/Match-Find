@@ -217,6 +217,7 @@ export function skillFromWinPct(winPct) {
 // closenessFromSpread's own comment for why this varies by sport rather
 // than being one shared constant.
 export const MLB_SPREAD_LOPSIDED_AT = 3;
+export const MLB_STANDARD_RUN_LINE = 1.5;
 export const NBA_SPREAD_LOPSIDED_AT = 15;
 
 // ---- Guardrails against a famous name/decided race overriding a real blowout ----
@@ -370,7 +371,15 @@ export function computeMlbObjectiveScore({
     factors.push(`last 10: ${away.lastTen.wins}-${away.lastTen.losses} vs ${home.lastTen.wins}-${home.lastTen.losses}`);
   }
 
-  const oddsCloseness = closenessFromSpread(oddsSpread, MLB_SPREAD_LOPSIDED_AT);
+  // The standard ±1.5 run line is what nearly every MLB game is posted at,
+  // favorite or not (the real price lives in the moneyline), so it says
+  // nothing about THIS matchup - blending it in only dragged every game
+  // whose line happened to be posted toward the same constant (a 6), which
+  // made a game's score drop by up to a point the day its line appeared
+  // and reshuffled a plan the viewer had already seen the day before. Only
+  // a non-standard run line is treated as a real signal.
+  const isStandardRunLine = Number.isFinite(oddsSpread) && Math.abs(oddsSpread) === MLB_STANDARD_RUN_LINE;
+  const oddsCloseness = isStandardRunLine ? null : closenessFromSpread(oddsSpread, MLB_SPREAD_LOPSIDED_AT);
   if (Number.isFinite(oddsCloseness)) factors.push(`odds spread ${oddsSpread}`);
 
   const competitiveness = clamp(

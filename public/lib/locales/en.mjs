@@ -83,7 +83,7 @@ export default {
   overlapHoursMinutes: '{hours}h {mins}m overlap',
   conflictNote: 'Overlaps with "{name}" — {clause}',
 
-  matchStackHint: '⟷ Only one match in this time slot can be watched — tap to switch',
+  matchStackHint: '⟷ Same time slot — tap to switch',
   prevMatchAria: 'Previous match',
   nextMatchAria: 'Next match',
   switchToAria: 'Switch to {name}',
