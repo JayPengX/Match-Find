@@ -114,7 +114,7 @@ for (const dayKey of dayKeys) {
       console.log(
         `${match.recommended ? '[PICKED]' : '[      ]'} id=${match.id} sport=${match.sport} name="${match.name}" ` +
           `start="${localStart}" durationMinutes=${match.durationMinutes} isFinished=${match.isFinished} ` +
-          `skill=${match.skill} competitiveness=${match.competitiveness} watchability=${match.watchability} ` +
+          `skill=${match.skill} competitiveness=${match.competitiveness} watchability=${match.watchability} stakes=${match.stakes} ` +
           `enduranceScore=${match.enduranceScore} broadcastQuality=${match.broadcastQuality} score=${match.score} planningScore=${round(match.planningScore)} ` +
           `alternativeIds=${JSON.stringify(match.alternativeIds || [])} reason="${match.reason || ''}"`
       );
