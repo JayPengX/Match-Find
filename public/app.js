@@ -3446,6 +3446,13 @@ function applyFreshBuild(matches, generatedAt) {
     // unhidden for it to actually show up.
     appEl.hidden = !state.tbdMatches.length;
     emptyState.hidden = !!state.tbdMatches.length;
+    // A genuine build (even an empty one) means the fetch itself didn't
+    // fail - clear any stale error message a PRIOR failed refresh left up,
+    // same as the non-empty branch below already does. Without this, a
+    // failed refresh's error state could sit on screen forever after a
+    // later refresh legitimately came back empty (e.g. a real quiet
+    // stretch with nothing scheduled), showing both messages together.
+    errorState.hidden = true;
     return;
   }
 
@@ -4243,6 +4250,15 @@ async function init() {
     // instead of leaving both up at once. The scheduled retries below can
     // still recover this once network/the proxy comes back.
     if (loadingStateEl) loadingStateEl.hidden = true;
+    // A genuinely-empty snapshot (no matches, no TBD fixtures either) can
+    // have already shown #empty-state via applyFreshBuild's own empty
+    // branch above, BEFORE this refresh went on to fail outright - without
+    // this, both messages ("no matches right now" and "couldn't load
+    // data") stayed up together, live-reported as exactly that (a real
+    // screenshot showing both). The error is the more specific, more
+    // actionable of the two here (it explains WHY nothing loaded, and the
+    // scheduled retries below are what can actually fix it), so it wins.
+    emptyState.hidden = true;
     errorState.hidden = false;
   }
   scheduleNearTermRefresh();

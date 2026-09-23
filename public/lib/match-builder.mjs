@@ -1180,38 +1180,77 @@ export async function buildMatches({
   // rightful slot, not silently dropped from the lineup), rather than a
   // plan that keeps shrinking to "only what's still ahead" depending purely
   // on when it happens to be loaded.
+  // Wrapped per-fixture, deliberately - every OTHER real-world-data call in
+  // this pipeline (every fetchXStandings above, enrichWithPolymarketOdds,
+  // parseXResponse) already degrades to an empty/null signal on a bad
+  // response instead of throwing, specifically so one league's bad day
+  // never costs the whole build. This loop was the one place that
+  // contract didn't hold: computeMatchObjectiveScore runs the FULL
+  // per-sport scoring pipeline (season/recent form, odds, stakes,
+  // rivalry/national-broadcast lookups, Polymarket win%) synchronously
+  // over real, live-fetched data for every fixture in the window, and any
+  // single one of those - now several signals deep after this week's
+  // scoring rewrites - throwing on a real fixture's unexpected shape took
+  // the ENTIRE match list down with it: buildMatches rejects, the caller's
+  // own catch runs, and every league's already-successfully-fetched
+  // fixtures are discarded, not just the one that broke. Live-reported as
+  // the app showing "no matches" and "couldn't load data" at once - the
+  // empty-snapshot and fetch-failed states both up together, which is what
+  // a rejected buildMatches on a cold load with no usable cached snapshot
+  // looks like from the UI's side.
   for (const match of matches) {
-    const objective = computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity });
-    match.competitiveness = clamp(Math.round(objective.competitiveness), 1, 10);
-    match.watchability = clamp(Math.round(objective.watchability), 1, 10);
-    match.stakes = Number.isFinite(objective.stakes) ? clamp(Math.round(objective.stakes), 0, 10) : null;
-    match.enduranceScore = clamp(Math.round(objective.enduranceScore), 1, 10);
-    match.broadcastQuality = clamp(Math.round(objective.broadcastQuality), 1, 10);
-    match.skill = Number.isFinite(objective.skill) ? objective.skill : null;
-    // A real broadcaster's own editorial choice, never a guess - see this
-    // function's own comment on why EPL's stays false (no unbiased UK
-    // broadcast data exists to compute it from). Consumed by
-    // recommendation.mjs's computeVarietyRotation to exempt a fixture a
-    // real network already chose to air nationally from being rotated away
-    // for a same-slot rival, the same standing an uncontested "no
-    // alternative" incumbent already has.
-    match.isNationalBroadcast = Boolean(objective.isNationalBroadcast);
-    // A locally-built, data-grounded reason - real and specific to this
-    // fixture's actual numbers, not a placeholder.
-    match.reason = buildObjectiveReasonZh(objective.factors);
-    // Always the hardcoded rule, never an AI guess - see that function's
-    // own comment.
-    match.whereToWatchTw = resolveWhereToWatchTw(match);
-    match.objectiveFactors = objective.factors;
-    // `score` still displayed/stored as a rough two-axis summary (how good
-    // is it, how mainstream a draw is it) - recommendation.mjs's own
-    // bestMatchScore is the real ranking (see BEST_MATCH_WEIGHTS there),
-    // this is just the plain build-time composite `resolveViewingPlan`
-    // falls back to when NEITHER of those axes is set at all.
-    match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
-    // How much this score should actually be trusted - see
-    // computeConfidence's own comment for what it's grounded in.
-    match.confidence = computeConfidence(match);
+    try {
+      const objective = computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity });
+      match.competitiveness = clamp(Math.round(objective.competitiveness), 1, 10);
+      match.watchability = clamp(Math.round(objective.watchability), 1, 10);
+      match.stakes = Number.isFinite(objective.stakes) ? clamp(Math.round(objective.stakes), 0, 10) : null;
+      match.enduranceScore = clamp(Math.round(objective.enduranceScore), 1, 10);
+      match.broadcastQuality = clamp(Math.round(objective.broadcastQuality), 1, 10);
+      match.skill = Number.isFinite(objective.skill) ? objective.skill : null;
+      // A real broadcaster's own editorial choice, never a guess - see this
+      // function's own comment on why EPL's stays false (no unbiased UK
+      // broadcast data exists to compute it from). Consumed by
+      // recommendation.mjs's computeVarietyRotation to exempt a fixture a
+      // real network already chose to air nationally from being rotated away
+      // for a same-slot rival, the same standing an uncontested "no
+      // alternative" incumbent already has.
+      match.isNationalBroadcast = Boolean(objective.isNationalBroadcast);
+      // A locally-built, data-grounded reason - real and specific to this
+      // fixture's actual numbers, not a placeholder.
+      match.reason = buildObjectiveReasonZh(objective.factors);
+      // Always the hardcoded rule, never an AI guess - see that function's
+      // own comment.
+      match.whereToWatchTw = resolveWhereToWatchTw(match);
+      match.objectiveFactors = objective.factors;
+      // `score` still displayed/stored as a rough two-axis summary (how good
+      // is it, how mainstream a draw is it) - recommendation.mjs's own
+      // bestMatchScore is the real ranking (see BEST_MATCH_WEIGHTS there),
+      // this is just the plain build-time composite `resolveViewingPlan`
+      // falls back to when NEITHER of those axes is set at all.
+      match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
+      // How much this score should actually be trusted - see
+      // computeConfidence's own comment for what it's grounded in.
+      match.confidence = computeConfidence(match);
+    } catch (error) {
+      // Same neutral-midpoint fallback weightedAverage/closenessFromX
+      // already return when a real signal is simply missing (5 on every
+      // 1-10 axis) - this fixture still shows, just as an unremarkable,
+      // average one instead of vanishing (or taking every other fixture in
+      // the window down with it).
+      console.warn(`Scoring failed for ${match.id} (${match.sport}): ${error.message} - falling back to a neutral score`);
+      match.competitiveness = 5;
+      match.watchability = 5;
+      match.stakes = null;
+      match.enduranceScore = 5;
+      match.broadcastQuality = 5;
+      match.skill = null;
+      match.isNationalBroadcast = false;
+      match.reason = '';
+      match.whereToWatchTw = null;
+      match.objectiveFactors = [];
+      match.score = 5;
+      match.confidence = computeConfidence(match);
+    }
   }
 
   matches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
