@@ -190,22 +190,27 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
       assert.equal(computeMatchObjectiveScore(match, {}).isNationalBroadcast, true);
     });
 
-    // Direct instruction: "make sure EPL has no American bias." ESPN's own
-    // soccer scoreboard API - the only broadcast data this pipeline can
-    // fetch for EPL - only ever reports the US rights-holder feed (NBC/
-    // NBCSN/Peacock/USA Network/Universo; verified live, 2026-09: a
-    // `region=gb`/`lang=en-gb` query returns an EMPTY broadcasts list, not
-    // real Sky Sports/TNT Sports/BBC data). Reusing NBA's own
-    // isNationalBroadcast helper against that feed would silently encode
-    // "which fixture NBC finds marketable to an American audience" as if
-    // it were a real producer's pick - so this stays false unconditionally
-    // for EPL, however "national" the US broadcast label looks (`Peacock`
-    // and `NBC` are both genuinely in NBA's own national-network list).
-    test('Premier League: NEVER sets it true, even for a broadcast label that IS a flagship network for other sports', () => {
-      const peacock = { sport: 'Premier League', broadcast: 'Peacock', competitors: [{ record: null }, { record: null }] };
+    // Direct instruction: "make sure EPL has no American bias" - checked
+    // live (see sport-duration.mjs's own EPL_NATIONAL_BROADCAST_NETWORKS
+    // comment for the full investigation across a real 6-matchweek
+    // sample), and scoped deliberately narrow rather than excluded
+    // outright: only the plain `NBC`/`NBCSN` broadcast-network tier, which
+    // traced back to the Premier League's own real standalone-showcase-
+    // kickoff-slot choice, not to nationality. The wider `Peacock`/`USA
+    // Network` tier - confirmed confounded with NBC's own domestic
+    // scheduling noise, not reliable real-world signal - stays excluded.
+    test('Premier League: the narrow NBC/NBCSN tier sets it true (the real Premier-League-chosen showcase slot)', () => {
       const nbc = { sport: 'Premier League', broadcast: 'NBC', competitors: [{ record: null }, { record: null }] };
+      const nbcsn = { sport: 'Premier League', broadcast: 'NBCSN', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(nbc, {}).isNationalBroadcast, true);
+      assert.equal(computeMatchObjectiveScore(nbcsn, {}).isNationalBroadcast, true);
+    });
+
+    test('Premier League: the wider US cable/streaming tier (Peacock, USA Network) stays false - excluded as unreliable, not just "not national"', () => {
+      const peacock = { sport: 'Premier League', broadcast: 'Peacock', competitors: [{ record: null }, { record: null }] };
+      const usaNet = { sport: 'Premier League', broadcast: 'USA Net', competitors: [{ record: null }, { record: null }] };
       assert.equal(computeMatchObjectiveScore(peacock, {}).isNationalBroadcast, false);
-      assert.equal(computeMatchObjectiveScore(nbc, {}).isNationalBroadcast, false);
+      assert.equal(computeMatchObjectiveScore(usaNet, {}).isNationalBroadcast, false);
     });
   });
 

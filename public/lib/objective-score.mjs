@@ -548,7 +548,17 @@ export function computeNbaObjectiveScore({
 // genuine gap, not silently pretended away.
 export const EPL_STAKES_UNIT_POINTS = 3;
 
-export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, isDerby, isBigClub, oddsSpread, oddsOverUnder }) {
+export function computeEplObjectiveScore({
+  awayWinPct,
+  homeWinPct,
+  away,
+  home,
+  isDerby,
+  isBigClub,
+  isNationalBroadcast,
+  oddsSpread,
+  oddsOverUnder
+}) {
   const factors = [];
   const seasonCloseness = closenessFromWinPctGap(
     Number.isFinite(awayWinPct) && Number.isFinite(homeWinPct) ? awayWinPct - homeWinPct : null
@@ -605,6 +615,18 @@ export function computeEplObjectiveScore({ awayWinPct, homeWinPct, away, home, i
   if (isBigClub) {
     watchability += 2;
     factors.push('known big-club fixture');
+  }
+  // A real broadcaster's own editorial choice - see sport-duration.mjs's
+  // own EPL_NATIONAL_BROADCAST_NETWORKS comment for exactly which real
+  // signal this is (a standalone showcase kickoff slot the Premier
+  // League/Sky Sports/TNT Sports themselves chose to single a fixture out
+  // for, inherited by NBC's own flagship broadcast placement - never the
+  // wider US cable/streaming tier, which live-checked evidence showed is
+  // confounded by NBC's own domestic scheduling and doesn't reliably track
+  // real magnitude the same clean way). Same +1 increment as MLB/NBA's own.
+  if (isNationalBroadcast) {
+    watchability += 1;
+    factors.push('national broadcast');
   }
   watchability = clamp(watchability, 1, 10);
 

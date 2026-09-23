@@ -680,6 +680,36 @@ describe('computeEplObjectiveScore', () => {
     assert.ok(derbyAndBigClub.factors.includes('known big-club fixture'));
   });
 
+  // Direct instruction: "make sure EPL has no American bias" - checked
+  // live against a real 6-matchweek sample of ESPN's own US-market EPL
+  // broadcast feed (the only broadcast data this pipeline can fetch for
+  // EPL) before adding this at all. See sport-duration.mjs's own
+  // EPL_NATIONAL_BROADCAST_NETWORKS comment for the full investigation:
+  // the plain NBC/NBCSN broadcast-network tier traced back to the Premier
+  // League/Sky Sports/TNT Sports' own real standalone-showcase-kickoff-slot
+  // choice, not to which club has an American player (a real
+  // counter-example ruled that out - Crystal Palace, with a USMNT player,
+  // got the LOWEST US tier in that same sample). This function itself
+  // doesn't know which broadcast label is which - match-builder.mjs is
+  // what narrows the real network list to just NBC/NBCSN before calling
+  // in - this test only verifies the scoring math treats the flag the same
+  // way MLB/NBA's own isNationalBroadcast already does.
+  describe('isNationalBroadcast (a real network choosing to air this specific game)', () => {
+    test('raises watchability over an otherwise-identical fixture with no national placement', () => {
+      const plain = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: false, isBigClub: false, isNationalBroadcast: false });
+      const national = computeEplObjectiveScore({ awayWinPct: 0.55, homeWinPct: 0.45, isDerby: false, isBigClub: false, isNationalBroadcast: true });
+      assert.ok(national.watchability > plain.watchability);
+      assert.ok(national.factors.includes('national broadcast'));
+    });
+
+    test('stacks with derby/big-club rather than competing with them', () => {
+      const base = { awayWinPct: 0.55, homeWinPct: 0.45, isDerby: true, isBigClub: true };
+      const withoutBroadcast = computeEplObjectiveScore({ ...base, isNationalBroadcast: false });
+      const withBroadcast = computeEplObjectiveScore({ ...base, isNationalBroadcast: true });
+      assert.ok(withBroadcast.watchability > withoutBroadcast.watchability);
+    });
+  });
+
   test('a real relegation six-pointer between two mid-table-looking teams scores high stakes, unlike before', () => {
     // A moderate, not-maxed-out win% gap - both teams sit right on the
     // relegation cutoff, real current stakes a bare win% record has no way

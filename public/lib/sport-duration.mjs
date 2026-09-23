@@ -362,6 +362,43 @@ export function isEplBigClub(awayTeam, homeTeam, bigClubs = EPL_BIG_CLUBS) {
   return bigClubs.includes(awayTeam) || bigClubs.includes(homeTeam);
 }
 
+// EPL's own counterpart to MLB/NBA's own national-broadcast networks -
+// investigated, and deliberately scoped MUCH narrower than either, after a
+// direct instruction to check for and avoid American bias turned up a real,
+// mixed picture in ESPN's own US-market EPL feed (the only broadcast data
+// this pipeline can fetch at all - no Sky Sports/TNT Sports/BBC data
+// exists here, see this file's own git history for the live check,
+// including a `region=gb`/`lang=en-gb` query that came back with an EMPTY
+// broadcasts list rather than real UK data).
+//
+// Cross-checked against real kickoff times across 6 real fetched
+// matchweeks (2026-08-23 through 2026-09-20): the plain `NBC`/`NBCSN`
+// (broadcast-network) tier consistently lined up with the week's own
+// STANDALONE kickoff slot - the one time window with no other match played
+// anywhere that week (Sunday 16:30/Monday 20:00 UK time, the Premier
+// League/Sky Sports/TNT Sports' own real "Super Sunday"/Monday Night
+// Football showcase slot) - not with which club happened to have an
+// American player. Live case that looked suspicious at first (a
+// newly-promoted Coventry City @ Nottingham Forest, neither club remotely
+// a global brand, getting flagship NBC billing) turned out to be exactly
+// this: Coventry's own standalone 16:30 UK kickoff that week, the same
+// real showcase slot Manchester City @ Manchester United and Manchester
+// United @ Fulham also held on their own weeks - not, as first suspected,
+// NBC elevating Coventry for Haji Wright (the club's own real USMNT
+// signing that season). A genuine counter-example ruled favoritism-by-
+// nationality out further: Crystal Palace (Chris Richards, USMNT) got the
+// LOWEST tier (`Peacock`-only) in this same sample, not an elevated one.
+//
+// The WIDER `USA Network`/cable tier is a different story - confirmed
+// confounded with NBC's own domestic Saturday programming calendar (which
+// Saturdays it has an open slot at all) as much as with real magnitude,
+// and where it does track anything, it's redundant with `EPL_BIG_CLUBS`
+// already above, not new signal. Deliberately excluded here rather than
+// risk baking in either kind of noise. Only the flagship broadcast-network
+// tier - the one that reliably traces back to the Premier League's OWN
+// real scheduling choice, not an NBC-only judgment call - counts.
+export const EPL_NATIONAL_BROADCAST_NETWORKS = ['NBC', 'NBCSN'];
+
 export function predictEplDurationMinutes({ awayTeam, homeTeam }) {
   const modifierTotal = isEplDerby(awayTeam, homeTeam) ? EPL_MODIFIERS.derbyHighFoulMatch : 0;
   const predicted = EPL_BASELINE_MINUTES + modifierTotal;

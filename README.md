@@ -422,21 +422,40 @@ out-of-market game ever, not a producer's choice) and `ESPN Unlmtd` (a
 bundled streaming tier seen on ordinary games with nothing special about
 them, unlike plain `ESPN`).
 
-**Deliberately NOT extended to Premier League — direct instruction: "make
-sure EPL has no American bias."** ESPN's own soccer scoreboard API — the
-only broadcast data this pipeline can fetch for EPL at all — only ever
-reports the US rights-holder feed (`NBC`, `NBCSN`, `Peacock`, `USA
-Network`, `Universo`; verified live, 2026-09: a `region=gb`/`lang=en-gb`
-query param returns an *empty* `broadcasts` list, not real data), never the
-actual British broadcasters (Sky Sports, TNT Sports, BBC) who really decide
-EPL's own "Super Sunday"/Monday Night Football marquee picks. Reusing
-`isNationalBroadcast` against that US-only feed would silently encode
-"which fixture NBC finds marketable to an American audience" as if it were
-a real producer's pick — exactly the bias ruled out — so `computeMatchObjectiveScore`
-never even computes it for `Premier League` (see `match-builder.mjs`'s own
-switch statement); `isDerby`/`isBigClub` (real UK football-culture
-facts — the Big Six, historic derbies — with no American proxy involved)
-stay EPL's whole fame signal, same as before.
+**Extended to Premier League too, but deliberately much narrower — direct
+instruction: "make sure EPL has no American bias," then, after an initial
+"exclude it entirely" pass, "check it one more time if bias is small enough
+but implement it."** ESPN's own soccer scoreboard API — the only broadcast
+data this pipeline can fetch for EPL at all — only ever reports the US
+rights-holder feed (`NBC`, `NBCSN`, `Peacock`, `USA Network`, `Universo`;
+verified live, 2026-09: a `region=gb`/`lang=en-gb` query param returns an
+*empty* `broadcasts` list, never real Sky Sports/TNT Sports/BBC data), so
+there's no way to ask the actual British broadcasters who really decide
+EPL's own "Super Sunday"/Monday Night Football marquee picks. The
+re-check, live, against a real 6-matchweek sample (2026-08-23 through
+2026-09-20) with real kickoff times cross-referenced: the plain
+`NBC`/`NBCSN` broadcast-*network* tier consistently lined up with that
+week's own STANDALONE kickoff slot — the one time window nothing else
+played that week (the real Sky Sports/TNT Sports showcase slot) — not with
+which club had an American player. A fixture that looked suspicious at
+first glance (newly-promoted Coventry City @ Nottingham Forest, neither
+club a global brand, getting flagship `NBC` billing) turned out to be
+exactly that: Coventry's own standalone 16:30 UK kickoff that week, the
+same real showcase slot Manchester City @ Manchester United and Manchester
+United @ Fulham also held on their own weeks — not NBC elevating Coventry
+for Haji Wright (the club's own real USMNT signing that season). A genuine
+counter-example ruled nationality-based favoritism out further: Crystal
+Palace (Chris Richards, USMNT) got the *lowest* tier (`Peacock`-only) in
+this same sample, not an elevated one. The *wider* `USA Network`/`Peacock`
+tier is a different story — confirmed confounded with NBC's own domestic
+Saturday programming calendar (which Saturdays it even has a broadcast-network
+slot open) as much as with real magnitude, and where it does track
+anything, it's redundant with `EPL_BIG_CLUBS` already above, not new
+signal. `EPL_NATIONAL_BROADCAST_NETWORKS` (`sport-duration.mjs`) is
+therefore just `['NBC', 'NBCSN']` — the narrow tier that traces back to
+the league's own real scheduling choice, excluding the wider one that
+doesn't reliably mean anything. `isDerby`/`isBigClub` (real UK
+football-culture facts) remain EPL's other two fame factors, unchanged.
 
 ### Known scoring limitations
 
@@ -906,13 +925,12 @@ Dodgers.
 
 Extended to NBA (`isNationalBroadcast` already existed there for scoring;
 this is the same real ESPN/ABC/TNT/NBA TV/Prime Video/Peacock signal, now
-also read by the rotation). **Deliberately NOT extended to Premier
-League** — see [`national broadcast — MLB's own gap`](#the-bestmatchscore-blend)
-above for why no unbiased broadcast data exists to compute it from at all;
-EPL's `match.isNationalBroadcast` stays permanently `false`, so this
-exemption simply never fires for it (the mechanism is sport-agnostic and
-would apply the moment real, unbiased data existed) rather than firing on a
-fabricated, US-audience-biased proxy.
+also read by the rotation) and, more narrowly, to Premier League — see
+[`national broadcast`](#the-bestmatchscore-blend) above for the live
+investigation behind `EPL_NATIONAL_BROADCAST_NETWORKS`'s own narrow
+`NBC`/`NBCSN`-only scope. The exemption mechanism itself is the same for
+every sport; what differs per sport is only which real broadcast labels
+`isNationalBroadcast` is willing to trust as a genuine editorial pick.
 
 ### Pinning: "Prefer"
 

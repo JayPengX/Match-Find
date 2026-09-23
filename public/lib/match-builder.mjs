@@ -97,6 +97,7 @@ import {
   isNbaRivalry,
   isEplDerby,
   isEplBigClub,
+  EPL_NATIONAL_BROADCAST_NETWORKS,
   isNationalBroadcast
 } from './sport-duration.mjs';
 // The deterministic, API-data-based scoring engine - see that module's own
@@ -787,22 +788,21 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
       });
       break;
     case 'Premier League':
-      // Deliberately NEVER computes a real isNationalBroadcast signal here -
-      // ESPN's own soccer scoreboard API (the only broadcast data this
-      // pipeline can fetch for EPL) only ever reports the US rights-holder
-      // feed (`NBC`/`NBCSN`/`Peacock`/`USA Network`/`Universo` - verified
-      // live, 2026-09; a `region=gb`/`lang=en-gb` query param returns an
-      // EMPTY broadcasts list, not real UK data), never Sky Sports/TNT
-      // Sports/BBC - the actual British broadcasters who really decide
-      // EPL's own "Super Sunday"/Monday Night Football marquee picks.
-      // Reusing NBA's isNationalBroadcast helper against that US-only feed
-      // would silently encode which fixture NBC finds marketable to an
-      // American audience as if it were "what a producer thinks is the
-      // biggest match", exactly the American-bias direct instruction ruled
-      // out - so EPL's own watchability stays exactly what it already was
-      // (isDerby/isBigClub, both real, UK-football-culture facts - the
-      // Big Six, historic derbies - already free of this bias) rather than
-      // gaining a fabricated proxy. isNationalBroadcastPick stays false.
+      // Deliberately NARROWER than MLB/NBA's own, not absent - see
+      // sport-duration.mjs's own EPL_NATIONAL_BROADCAST_NETWORKS comment
+      // for the live investigation this came from (direct instruction:
+      // check whether the US broadcast feed's American bias is small
+      // enough to use, rather than assume either way). Only the plain
+      // `NBC`/`NBCSN` broadcast-network tier counts - verified, across a
+      // real 6-matchweek sample, to trace back to the Premier League's own
+      // real standalone-showcase-kickoff-slot choice (Sky Sports/TNT
+      // Sports' own editorial pick), not to which club has an American
+      // player (a real counter-example ruled that out: Crystal Palace,
+      // with a USMNT player, got the LOWEST tier that same sample). The
+      // wider USA Network/Peacock tier is excluded - confirmed confounded
+      // with NBC's own domestic scheduling noise and redundant with
+      // EPL_BIG_CLUBS below, not reliable, additional real-world signal.
+      isNationalBroadcastPick = isNationalBroadcast(match.broadcast, EPL_NATIONAL_BROADCAST_NETWORKS);
       result = computeEplObjectiveScore({
         awayWinPct,
         homeWinPct,
@@ -810,6 +810,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         home: eplStandings?.get(home?.name) || null,
         isDerby: isEplDerby(away?.name, home?.name),
         isBigClub: isEplBigClub(away?.name, home?.name),
+        isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });
