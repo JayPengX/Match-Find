@@ -1169,6 +1169,34 @@ cluster). This keeps every stack small and locally coherent — a real "pick
 one of these 2-3 games actually airing at the same time" choice — without
 suppressing any other game the chain happened to also transitively touch.
 
+### iOS Safari: the "every tap needs two taps" bug
+
+**Symptom:** on iOS Safari (browser and Home Screen app — desktop Chrome
+was fine), after one swipe on a card stack, every later tap on any button
+needed two taps, until the app was backgrounded and reopened.
+
+**Fix:** empty, passive, document-level `touchstart`/`touchend`/
+`touchcancel`/`pointerdown`/`pointerup`/`pointercancel` listeners near the
+top of `app.js` (search for `DO NOT REMOVE - iOS Safari`). They do nothing;
+their existence is the fix. iOS WebKit handles a tap differently depending
+on whether the touched spot has touch listeners, and with listeners only on
+the swipeable cards, a swipe left that handling stuck and swallowed the
+next tap elsewhere. **Don't remove them.**
+
+**How it was found:** three guessed fixes (explicit
+`releasePointerCapture`, deferring the re-render with `setTimeout(0)`,
+switching finger swipes to Touch Events) all failed — headless
+Chromium/Playwright never reproduces iOS WebKit tap bugs, even with real CDP
+touch input. What cracked it was the hidden tap log (below): the bug
+vanished whenever the log was on, which pointed straight at its
+document-level listeners.
+
+**Next time something only breaks on iPhone,** start with the tap log
+instead of guessing: tap the "Data last updated" line at the bottom of the
+page 5 times (or open with `?debug=taps`), reproduce, then use **Copy** and
+paste the result. If the bug disappears while the log is on, that alone is
+a strong clue (see above).
+
 ## Sport Priority & Settings
 
 `priorityOrder` nudges a match's `effectiveScore` up or down slightly
@@ -1206,6 +1234,12 @@ still works fine against a `matches.json`-shaped copy saved any other way
 [Getting Started](#getting-started)). Settings now shows only what an
 ordinary viewer would actually use — sport priority, enabled sports, and
 one 立即重新整理 (refresh now) button.
+
+The one exception is a **hidden** on-screen tap log (`lib/tap-log.mjs`) for
+debugging iPhone-only input bugs, where there are no devtools. It's never
+shown unless someone taps the "Data last updated" line 5 times (or opens
+the page with `?debug=taps`), and its own **Off** button removes it. See
+[iOS Safari: the "every tap needs two taps" bug](#ios-safari-the-every-tap-needs-two-taps-bug).
 
 ## Duration & Broadcast-Source Resolution
 
@@ -1830,6 +1864,8 @@ public/
     color.mjs                team-color contrast utilities
     team-names.mjs           Traditional Chinese team-name lookup table
     preferences.mjs          localStorage preference read/write helpers
+    tap-log.mjs              hidden on-screen touch/tap event log for
+                            iPhone-only bugs (tap "Data last updated" 5x)
 scripts/
   build-data.mjs            Node CLI wrapper around buildMatches, for local
                             dev tooling (writes public/data/matches.json)

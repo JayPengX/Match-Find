@@ -11,6 +11,12 @@
 // scroll events (a stuck momentum scroll swallows taps), plus app-level
 // markers that app.js reports through tapLog() (swipe start/end, renders).
 // "Copy" puts the whole log on the clipboard so it can be pasted anywhere.
+//
+// Heads-up: turning the log on is NOT side-effect free. Its document-level
+// listeners change how iOS WebKit routes taps, so it can make a bug
+// disappear. That's a clue, not a dead end - it's exactly how the iOS
+// "every tap needs two taps after a swipe" bug was found (see the
+// "DO NOT REMOVE - iOS Safari" listeners near the top of app.js).
 
 const STORAGE_KEY = 'matchfind-tap-log-enabled';
 const MAX_LINES = 300;

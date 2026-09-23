@@ -594,19 +594,45 @@ const generatedNote = document.getElementById('generated-note');
 // Hidden on-screen input debugger - tap this line 5 times (see lib/tap-log.mjs).
 installTapLog(generatedNote);
 
-// Empty, passive, page-wide touch/pointer listeners - intentionally no-ops.
-// Live-reported on iOS Safari (browser and Home Screen app): after ONE swipe
-// on a match stack, every later tap on any button needed two taps, until
-// the app was backgrounded and reopened. Found with the tap log above: the
-// bug vanished whenever the log was on, and the only thing the log changes
-// that iOS cares about is that it listens for touch/pointer events on the
-// whole document. iOS WebKit handles a tap differently depending on
-// whether the spot being touched has touch listeners; with listeners only
-// on the swipeable cards, a swipe there left that tap handling in a stuck
-// state that swallowed the next tap anywhere else. Listening on the whole
-// document makes every tap go down the same path, so there's no switch to
-// get stuck on. Passive, so they never block scrolling. Mirrors exactly
-// what the tap log registers, since that's the set confirmed to fix it.
+// ============================================================================
+// DO NOT REMOVE - iOS Safari "every tap needs two taps" fix.
+// ============================================================================
+// Empty, passive, page-wide touch/pointer listeners. They do nothing on
+// purpose; their mere EXISTENCE is the fix.
+//
+// Symptom (iOS Safari and the Home Screen app; desktop Chrome was fine):
+// after ONE swipe on a match stack, every later tap on ANY button (day
+// tabs, settings, filter chips) needed two taps. It stayed that way until
+// the app was swiped away to the background and reopened.
+//
+// Cause, as best we can tell: iOS WebKit handles a tap differently
+// depending on whether the spot being touched has touch/pointer listeners.
+// With listeners only on the swipeable cards, a swipe there left WebKit's
+// native tap handling stuck in the wrong state, and the next tap anywhere
+// without listeners was used up just clearing it. Backgrounding the app
+// resets WebKit's gesture state, which is why reopening "fixed" it. With
+// listeners on the whole document, every tap goes down the same path, so
+// there's nothing to get stuck. Passive, so they never block scrolling.
+//
+// How it was actually found (after three wrong guesses - see below): the
+// hidden tap log (lib/tap-log.mjs, tap "Data last updated" 5 times) made
+// the bug disappear whenever it was on. The log's only iOS-relevant side
+// effect is registering document-level listeners, so copying just its
+// touch/pointer ones here fixed it for good (confirmed on a real iPhone).
+//
+// What did NOT fix it, and is not the reason it works now (each is still
+// in buildMatchStack and harmless, but don't mistake them for the fix):
+//   1. Explicit releasePointerCapture before the card is removed.
+//   2. Deferring choose()'s re-render with setTimeout(0).
+//   3. Switching finger swipes from Pointer Events to passive Touch Events.
+// None of these could be verified here - Chromium/Playwright never
+// reproduces iOS WebKit tap bugs, even with real CDP touch input.
+//
+// Next time something only breaks on iPhone: turn on the tap log FIRST,
+// reproduce, and paste its Copy output (or note if the bug vanishes with
+// the log on - that itself narrows it to a listener-registration effect,
+// like this one). If this bug ever comes back, try adding the log's other
+// document-level listeners here too (mouseover/mousedown/mouseup/click).
 ['touchstart', 'touchend', 'touchcancel', 'pointerdown', 'pointerup', 'pointercancel'].forEach(type => {
   document.addEventListener(type, () => {}, { capture: true, passive: true });
 });
@@ -2660,26 +2686,13 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const chosen = ordered[clamped];
     if (!chosen || chosen.id === primary.id) return;
     tapLog(`[app] choose index=${clamped}`);
-    // Deferred one tick (setTimeout 0), not called synchronously - the
-    // actual work (pinSlotChoice -> renderSections) tears out and rebuilds
-    // a large chunk of the page's DOM (this whole stack, the rest of the
-    // day's cards). Every caller of choose() (a dot/arrow tap, and
-    // endDrag's own commit branch below) runs from INSIDE a touch-derived
-    // event handler (click or pointerup) that iOS WebKit itself is still
-    // in the middle of resolving - live-reported, confirmed on BOTH Safari
-    // AND Chrome for iOS (same underlying WebKit engine on iOS either way,
-    // Chromium/Blink on desktop couldn't reproduce it at all under
-    // simulated mouse OR real synthesized touch input): after any single
-    // swipe, EVERY later tap anywhere on the page - not just this card -
-    // needed two taps to register, persisting for the rest of the session.
-    // Consistent with a known WebKit-specific bug class: a large synchronous
-    // DOM mutation triggered from inside a touch event handler can leave
-    // WebKit's own touch/gesture dispatch pipeline confused until some
-    // later tap consumes/clears it, rather than the mutation itself
-    // breaking anything - Blink doesn't share this behavior, which is
-    // exactly why it never reproduced outside real iOS. Yielding back to
-    // the browser first, so WebKit fully closes out THIS event before the
-    // DOM changes, is the standard workaround for that bug class.
+    // Deferred one tick (setTimeout 0) so the big DOM rebuild
+    // (pinSlotChoice -> renderSections) runs after the touch/click event
+    // that triggered it has fully finished, not inside it. Added as an
+    // attempted fix for the iOS "every tap needs two taps after a swipe"
+    // bug - it did NOT fix that; the page-wide listeners near the top of this file ("DO NOT REMOVE - iOS
+    // Safari") are the real fix. Kept because
+    // rebuilding outside the input event is still the safer order.
     setTimeout(() => pinSlotChoice(dayKey, slotKey, chosen.id), 0);
   }
 
@@ -2779,21 +2792,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     activeInputKind = null;
     isHorizontalDrag = false;
     dragDx = 0;
-    // Explicit, not just implicit-on-pointerup: on a COMMIT specifically
-    // (endDrag's own commit branch below), choose() tears this exact card
-    // out of the DOM SYNCHRONOUSLY, in the same call stack as the pointerup
-    // event that's still being handled - before this fix, capture release
-    // relied entirely on the browser's own implicit "pointerup releases
-    // capture" behavior settling BEFORE that removal, with no guarantee it
-    // does. Live-reported as every click anywhere on the page (day tabs,
-    // settings, filter chips - not just this card) needing two taps after
-    // any single swipe, persisting for the rest of the session: consistent
-    // with WebKit's touch/gesture recognizer being left in a confused state
-    // when the element it still considers "captured" disappears out from
-    // under it mid-gesture-teardown, needing one throwaway tap anywhere to
-    // reset itself. Releasing here, before resetDragState's caller does
-    // anything else (including a synchronous DOM removal), closes that
-    // race instead of hoping the browser's own cleanup wins it.
+    // Explicit capture release (mouse/pen path only), before a commit
+    // removes this card from the DOM, rather than trusting the browser's
+    // implicit release on pointerup. Added as an attempted fix for the iOS
+    // "every tap needs two taps after a swipe" bug - it did NOT fix that;
+    // the page-wide listeners near the top of this file ("DO NOT REMOVE - iOS
+    // Safari") are the real fix. Kept as cheap hygiene.
     if (pointerId != null && inputKind === 'pointer') {
       try { card.releasePointerCapture(pointerId); } catch { /* already released, or node already gone */ }
     }
@@ -2878,22 +2882,18 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   // ---- Finger input: plain Touch Events, all passive ----
   //
-  // Live-reported: on iOS Safari (only - Chrome was fine), after ONE swipe
-  // on a stack, every later tap anywhere on the page needed two taps, until
-  // the app was swiped away to the background and reopened. Two earlier
-  // fixes (explicit releasePointerCapture, deferring choose() a tick) didn't
-  // help. Backgrounding cancels every in-flight touch and resets WebKit's
-  // own native gesture recognizers, so the stuck state lives in WebKit's
-  // touch/gesture layer, not in this file's JS state. The finger path used
-  // to drive that layer in its least-tested way: preventDefault() on a
-  // TOUCH pointerdown plus an explicit setPointerCapture, on a card that is
-  // then removed from the DOM. Neither is needed for a finger: a touch is
-  // already implicitly bound to the element it started on, and the native
-  // image-drag preventDefault() guarded against is mouse-only. So a finger
-  // now uses plain passive Touch Events - no preventDefault, no capture -
-  // the most battle-tested input path WebKit has, and one that leaves its
-  // native tap recognition completely alone. touch-action: pan-y (styles.css)
-  // still keeps a horizontal drag from scrolling or zooming the page.
+  // A finger uses plain passive Touch Events - no preventDefault(), no
+  // setPointerCapture. Neither is needed for a finger: a touch is already
+  // bound to the element it started on, and the native image-drag that
+  // preventDefault() guards against is mouse-only. touch-action: pan-y
+  // (styles.css) still keeps a horizontal drag from scrolling the page.
+  //
+  // This split was the third attempted fix for the iOS "every tap needs
+  // two taps after a swipe" bug (finger swipes used to go through Pointer
+  // Events like the mouse path below). It did NOT fix that; the page-wide
+  // listeners near the top of this file ("DO NOT REMOVE - iOS Safari") are
+  // the real fix. Kept because it's the simpler, more standard way to
+  // handle a finger drag on iOS.
   function findTouch(list) {
     for (const touch of list) if (touch.identifier === activePointerId) return touch;
     return null;
