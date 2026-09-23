@@ -1781,18 +1781,13 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
     dayKey,
     computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot, lockedIdsByDay()).get(dayKey)
   );
-  const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   // Asked of THIS match directly, not "which member does the slot pick" -
   // a big transitive cluster (a real MLB slate) can have several members
   // recommended at once, and picking whichever one sorted first there
   // turned tapping 設為偏好 on the game a pin had just displaced into a new
   // 偏好 pin instead of restoring its 推薦. Rotation's forced picks are
   // already in `pinnedForDay`, so this also covers the rotation case.
-  const unpinnedPlan = computeDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedForDay, {
-    scoreField: 'planningScore',
-    lockedIds: lockedIdsForDay(dayKey),
-    priorityPinnedIds: pinnedChoicesWithoutThisSlot.get(dayKey)
-  });
+  const unpinnedPlan = stableDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   const unpinnedResultId = unpinnedPlan.some(m => m.id === matchId) ? matchId : null;
   state.pinnedChoices = applySlotSwipe(basePinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
@@ -1801,6 +1796,30 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   // plan has to be thrown away, not just this one day's own candidates.
   invalidateVarietyRotation();
   renderSections();
+}
+
+// The day's plan with the viewer's own pins applied as a LOCAL change: the
+// plan the day would have with none of them (`baseline`) is locked in via
+// computeDayPlan's lockedIds, so a pin only displaces the picks it actually
+// clashes with (a lock yields to a pin) and the freed time gets refilled -
+// the rest of the day stays exactly as it was. Without this, every pin
+// re-ran the scheduler over the whole day around it, pulling unrelated,
+// previously greyed-out games into the plan, and swiping back to an
+// original pick then snapped the whole day back again - reported as
+// "I chose one match to prefer, a bunch of greyed-out matches also get
+// featured... it's illogical".
+//
+// `viewerPins` goes in as priorityPinnedIds too - a genuine viewer swipe/
+// tap must always win a slot over the variety rotation's own separately-
+// forced pick for it when both land in the SAME cluster (see that option's
+// own comment in computeDayPlan).
+function stableDayPlan(dayKey, dayCandidates, viewerPins, rotationForced) {
+  const options = { scoreField: 'planningScore', lockedIds: lockedIdsForDay(dayKey) };
+  if (viewerPins && viewerPins.size) {
+    const baseline = computeDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), mergeVarietyForcedIds(null, rotationForced), options);
+    options.lockedIds = new Set([...options.lockedIds, ...baseline.map(m => m.id)]);
+  }
+  return computeDayPlan(dayKey, dayCandidates, mergeVarietyForcedIds(viewerPins, rotationForced), { ...options, priorityPinnedIds: viewerPins });
 }
 
 // Lets a viewer promote ANY not-currently-recommended candidate straight
@@ -2952,19 +2971,12 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const dayPlan = computeDayPlan(dayKey, dayCandidates, pinnedForDayWithRotation(dayKey), {
-    scoreField: 'planningScore',
-    lockedIds: lockedIdsForDay(dayKey),
-    // A genuine viewer swipe/tap must always win a slot over the variety
-    // rotation's own separately-forced pick for it, when both land in the
-    // SAME cluster (pinnedForDayWithRotation above unions the two into one
-    // set with no way to tell them apart by the time computeDayPlan sees
-    // it) - see that function's own comment on priorityPinnedIds for the
-    // live-reported bug this fixes (a swipe/tap that visibly re-rendered
-    // but always snapped straight back to rotation's own pick). Passed as
-    // the viewer's OWN un-merged pins specifically, not the merged set.
-    priorityPinnedIds: state.pinnedChoices.get(dayKey)
-  });
+  const dayPlan = stableDayPlan(
+    dayKey,
+    dayCandidates,
+    state.pinnedChoices.get(dayKey),
+    rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey))
+  );
   // computeDayPlan's own forcedIds mechanism marks every forced pick as
   // .isPreferred (indistinguishable from a real viewer pin) - correct for
   // a genuine pin, wrong for a rotation-forced one (see
