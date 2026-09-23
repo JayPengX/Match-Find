@@ -1173,7 +1173,11 @@ export function naturalSlotChoice(dayKey, dayMatches, slotKey, pinnedForDay = nu
   const withoutThisSlot = new Set(pinnedForDay ? [...pinnedForDay].filter(id => !clusterMemberIds.has(id)) : []);
   const clone = dayMatches.map(m => ({ ...m }));
   const picks = computeDayPlan(dayKey, clone, withoutThisSlot, options);
-  const picked = picks.find(m => m.slotKey === slotKey);
+  // Matched by member id, not `m.slotKey` - computeDayPlan only sets
+  // slotKey on a pick whose cluster has 2+ members, so a single-member slot
+  // (app.js's preferMatch on a card with no stack-mates) always came back
+  // null here and got pinned as 偏好 even when it's the natural pick.
+  const picked = picks.find(m => clusterMemberIds.has(m.id));
   return picked ? picked.id : null;
 }
 

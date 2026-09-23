@@ -128,6 +128,19 @@ export function applySlotSwipe(pinnedChoices, dayKey, slotKey, matchId, naturalM
   return next;
 }
 
+// Removes `ids` from `dayKey`'s pin set - used by app.js's pinSlotChoice to
+// drop pins a new choice supersedes (see its own comment). Pure; returns
+// the SAME map by reference when nothing was actually pinned.
+export function removePins(pinnedChoices, dayKey, ids) {
+  const daySet = pinnedChoices.get(dayKey);
+  if (!daySet || !ids.some(id => daySet.has(id))) return pinnedChoices;
+  const nextDaySet = new Set([...daySet].filter(id => !ids.includes(id)));
+  const next = new Map(pinnedChoices);
+  if (nextDaySet.size) next.set(dayKey, nextDaySet);
+  else next.delete(dayKey);
+  return next;
+}
+
 // ---- Day plan history (locks what's already started) ------------------------
 //
 // state.dayPlanHistory (Map<historyKey, string[]>) - the ids of the last

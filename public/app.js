@@ -85,6 +85,7 @@ import {
   deserializePinnedChoices,
   pruneStalePinnedChoices,
   applySlotSwipe,
+  removePins,
   dayPlanHistoryKey,
   serializeDayPlanHistory,
   deserializeDayPlanHistory,
@@ -1747,19 +1748,32 @@ function rotationRespectingLivePicks(dayKey, forcedIds) {
 // - not always but inconsistently and often" - it only showed up on days
 // where some OTHER slot's rotation assignment actually depended on this
 // one, which is exactly why it looked random rather than every time.
+//
+// A pin in a DIFFERENT cluster whose scheduling window still clashes with
+// `matchId` (a partial overlap - not near-total, so not a stack-mate) is
+// superseded by this choice too: the viewer can't watch both, and leaving
+// it pinned both forced the two overlapping games into the plan together
+// and kept `matchId` from ever counting as its slot's natural pick.
+// Live-reported: "in the full game list, Prefer another game, then Prefer
+// the recommended game back - its label goes 偏好, not back to 推薦" - the
+// other game's pin was what had displaced it in the first place, so
+// dropping that pin is exactly what makes it 推薦 again.
 function pinSlotChoice(dayKey, slotKey, matchId) {
   const dayCandidates = dayCandidatesForPlan(dayKey);
   const clusterMemberIds = new Set(slotKey.split('|'));
-  const daySet = state.pinnedChoices.get(dayKey);
+  const target = dayCandidates.find(m => m.id === matchId);
+  const clashes = (a, b) => {
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    return ai.start < bi.end && bi.start < ai.end;
+  };
+  const supersededPins = target
+    ? dayCandidates.filter(m => !clusterMemberIds.has(m.id) && state.pinnedChoices.get(dayKey)?.has(m.id) && clashes(m, target)).map(m => m.id)
+    : [];
+  const basePinnedChoices = removePins(state.pinnedChoices, dayKey, supersededPins);
+  const daySet = basePinnedChoices.get(dayKey);
   const ownPinInCluster = daySet ? [...daySet].find(id => clusterMemberIds.has(id)) : undefined;
-  let pinnedChoicesWithoutThisSlot = state.pinnedChoices;
-  if (ownPinInCluster !== undefined) {
-    const nextDaySet = new Set(daySet);
-    nextDaySet.delete(ownPinInCluster);
-    pinnedChoicesWithoutThisSlot = new Map(state.pinnedChoices);
-    if (nextDaySet.size) pinnedChoicesWithoutThisSlot.set(dayKey, nextDaySet);
-    else pinnedChoicesWithoutThisSlot.delete(dayKey);
-  }
+  const pinnedChoicesWithoutThisSlot = ownPinInCluster !== undefined ? removePins(basePinnedChoices, dayKey, [ownPinInCluster]) : basePinnedChoices;
   const rotationWithoutThisSlot = rotationRespectingLivePicks(
     dayKey,
     computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot, lockedIdsByDay()).get(dayKey)
@@ -1771,7 +1785,7 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   });
   const rotationForcedId = [...(rotationWithoutThisSlot || [])].find(id => clusterMemberIds.has(id));
   const unpinnedResultId = rotationForcedId || naturalMatchId;
-  state.pinnedChoices = applySlotSwipe(state.pinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
+  state.pinnedChoices = applySlotSwipe(basePinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
   // A pin can change which matchup naturally wins a day, which can change
   // a rotation run's own shape (see computeVarietyRotation) - the cached

@@ -1309,6 +1309,29 @@ describe('naturalSlotChoice (what the algorithm would pick absent THIS pin)', ()
   });
 });
 
+describe('Prefer another game, then Prefer the displaced recommended game back', () => {
+  // a/b only PARTLY overlap (different clusters, not stack-mates), so b's
+  // pin displaces a through the scheduler alone - app.js's pinSlotChoice
+  // must drop b's pin when a is preferred back, or a never counts as its
+  // slot's natural pick and gets pinned (偏好) instead of reverting to 推薦.
+  const a = makeMatch({ id: 'a', sport: 'Premier League', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 9 });
+  const b = makeMatch({ id: 'b', sport: 'Premier League', startTimeUtc: '2026-09-19T19:00:00.000Z', durationMinutes: 115, enduranceScore: 10, effectiveScore: 5 });
+
+  test('a and b are separate clusters whose scheduling windows clash', () => {
+    assert.equal(isNearTotalOverlap(a, b), false);
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    assert.ok(ai.start < bi.end && bi.start < ai.end);
+  });
+
+  test('with b still pinned, a is not its own natural pick; with b\'s pin dropped, it is', () => {
+    const plan = computeDayPlan('2026-09-19', [a, b].map(m => ({ ...m })), new Set(['b']));
+    assert.deepEqual(plan.map(m => m.id), ['b']);
+    assert.notEqual(naturalSlotChoice('2026-09-19', [a, b], 'a', new Set(['b'])), 'a');
+    assert.equal(naturalSlotChoice('2026-09-19', [a, b], 'a', new Set()), 'a');
+  });
+});
+
 describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)', () => {
   function teams(a, b) {
     return [{ name: a }, { name: b }];

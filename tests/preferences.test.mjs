@@ -9,6 +9,7 @@ import {
   deserializePinnedChoices,
   pruneStalePinnedChoices,
   applySlotSwipe,
+  removePins,
   dayPlanHistoryKey,
   serializeDayPlanHistory,
   deserializeDayPlanHistory,
@@ -194,5 +195,25 @@ describe('day plan history', () => {
     const history = new Map([['2026-09-17|all', ['x']], ['2026-09-19|all', ['a']]]);
     const next = recordDayPlan(history, '2026-09-19|all', ['a'], '2026-09-18');
     assert.deepEqual([...next.keys()], ['2026-09-19|all']);
+  });
+});
+
+describe('removePins (dropping pins a new choice supersedes)', () => {
+  test('removes only the given ids, keeping the rest of the day', () => {
+    const pinned = new Map([['2026-09-23', new Set(['a', 'b'])]]);
+    const next = removePins(pinned, '2026-09-23', ['b']);
+    assert.deepEqual([...next.get('2026-09-23')], ['a']);
+    assert.deepEqual([...pinned.get('2026-09-23')], ['a', 'b']); // never mutates
+  });
+
+  test('drops the day entirely once its last pin is removed', () => {
+    const next = removePins(new Map([['2026-09-23', new Set(['b'])]]), '2026-09-23', ['b']);
+    assert.equal(next.has('2026-09-23'), false);
+  });
+
+  test('returns the SAME map when none of the ids are pinned', () => {
+    const pinned = new Map([['2026-09-23', new Set(['a'])]]);
+    assert.equal(removePins(pinned, '2026-09-23', ['z']), pinned);
+    assert.equal(removePins(pinned, '2026-09-24', ['a']), pinned);
   });
 });
