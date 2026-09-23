@@ -1900,7 +1900,7 @@ describe('planStackAlternativeIds (a preferred game joins the stack it displaces
   const DAY = '2026-09-19';
   const mk = (id, time, score) =>
     makeMatch({ id, sport: 'Premier League', startTimeUtc: `2026-09-19T${time}:00.000Z`, durationMinutes: 115, enduranceScore: 10, effectiveScore: score });
-  const matches = () => [mk('A', '06:00', 9), mk('B', '06:02', 8.5), mk('C', '08:40', 9), mk('X', '07:20', 2)];
+  const matches = () => [mk('A', '06:00', 9), mk('B', '06:02', 8.5), mk('C', '08:40', 9), mk('X', '07:10', 2)];
   function plans(pins) {
     const baseline = computeDayPlan(DAY, matches(), null);
     const allowed = new Set([...baseline.map(m => m.id), ...pins]);
@@ -1911,25 +1911,24 @@ describe('planStackAlternativeIds (a preferred game joins the stack it displaces
     return { baseline, plan };
   }
 
-  test('a pin that displaces TWO picks gets one merged stack, and nothing else is pulled in', () => {
+  test('a pin that displaces TWO picks joins only the one it overlaps most - exactly one card added', () => {
     const { baseline, plan } = plans(new Set(['X']));
     assert.deepEqual(baseline.map(m => m.id), ['A', 'C']);
     assert.deepEqual(plan.map(m => m.id), ['X']);
-    const alts = planStackAlternativeIds(plan, baseline, new Set(['X']));
-    assert.deepEqual([...alts.get('X')].sort(), ['A', 'B', 'C']);
+    const before = planStackAlternativeIds(baseline, baseline, new Set()).get('A');
+    const alts = planStackAlternativeIds(plan, baseline, new Set(['X'])).get('X');
+    assert.deepEqual(alts, ['A', ...before]); // A's own stack, plus X on top
+    assert.equal(alts.includes('C'), false);
   });
 
-  test('swiping from the pin to EITHER displaced pick clears the pin and restores both', () => {
+  test('swiping from the pin back to the host pick clears the pin and restores BOTH displaced picks', () => {
     const { baseline, plan } = plans(new Set(['X']));
     const members = [plan[0].id, ...planStackAlternativeIds(plan, baseline, new Set(['X'])).get('X')];
     const slotKey = members.slice().sort().join('|');
-    for (const target of ['A', 'C']) {
-      const unpinned = plans(new Set()).plan;
-      const natural = unpinned.some(m => m.id === target) ? target : null;
-      const next = applySlotSwipe(new Map([[DAY, new Set(['X'])]]), DAY, slotKey, target, natural);
-      assert.equal(next.has(DAY), false, `swipe to ${target}`);
-      assert.deepEqual(plans(next.get(DAY) || new Set()).plan.map(m => m.id), ['A', 'C']);
-    }
+    const natural = plans(new Set()).plan.some(m => m.id === 'A') ? 'A' : null;
+    const next = applySlotSwipe(new Map([[DAY, new Set(['X'])]]), DAY, slotKey, 'A', natural);
+    assert.equal(next.has(DAY), false);
+    assert.deepEqual(plans(new Set()).plan.map(m => m.id), ['A', 'C']);
   });
 
   test('swiping to a displaced pick\'s alternative replaces the pin, and the other displaced pick comes back', () => {

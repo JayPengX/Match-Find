@@ -1944,29 +1944,48 @@ export function resolveViewingPlan(matches, priorityOrder = [], myServiceIds = n
 // Which alternatives each pick in `plan` shows in its swipe stack, given
 // the unpinned `baseline` plan (see app.js's stableDayPlan): an ordinary
 // pick keeps its baseline alternatives, and a viewer pin that isn't itself
-// a baseline pick takes over the stack(s) of every baseline pick it
-// displaced - the displaced picks plus their own alternatives, so the pin
-// is the only card added. A pin that displaced TWO picks gets both of
-// their stacks merged into one. Returns Map<matchId, matchId[]>, unfiltered
-// (the caller drops anything recommended/finished/missing).
+// a baseline pick joins exactly ONE displaced pick's stack - the one it
+// overlaps most (earliest on a tie) - as that stack's one added card: the
+// displaced pick plus that pick's own alternatives. Any other pick the pin
+// displaced just drops out for continuation; it isn't merged in (merging
+// every displaced stack was live-reported as "the dots increase
+// significantly - you added a bunch"). Swiping back to the displaced pick
+// clears the pin, which restores every pick it displaced.
+// Returns Map<matchId, matchId[]>, unfiltered (the caller drops anything
+// recommended/finished/missing).
 export function planStackAlternativeIds(plan, baseline, viewerPins) {
   const planIds = new Set(plan.map(m => m.id));
   const baselineById = new Map(baseline.map(m => [m.id, m]));
-  const clashes = (a, b) => {
-    const ai = schedulingInterval(a);
-    const bi = schedulingInterval(b);
-    return ai.start < bi.end && bi.start < ai.end;
-  };
   const result = new Map();
   plan.forEach(match => {
     let ids;
     if (viewerPins && viewerPins.has(match.id) && !baselineById.has(match.id)) {
-      const displaced = baseline.filter(b => !b.isFinished && !planIds.has(b.id) && clashes(b, match));
-      ids = displaced.flatMap(b => [b.id, ...(b.alternativeIds || [])]);
+      const host = displacedStackHost(match, baseline, planIds);
+      ids = host ? [host.id, ...(host.alternativeIds || [])] : [];
     } else {
       ids = (baselineById.get(match.id) || match).alternativeIds || [];
     }
     result.set(match.id, [...new Set(ids)].filter(id => id !== match.id));
   });
   return result;
+}
+
+// The displaced baseline pick whose stack a pin joins - see
+// planStackAlternativeIds.
+export function displacedStackHost(pin, baseline, planIds) {
+  let host = null;
+  let best = 0;
+  baseline
+    .filter(b => !b.isFinished && !planIds.has(b.id))
+    .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc))
+    .forEach(b => {
+      const pi = schedulingInterval(pin);
+      const bi = schedulingInterval(b);
+      const overlap = Math.min(pi.end, bi.end) - Math.max(pi.start, bi.start);
+      if (overlap > best) {
+        best = overlap;
+        host = b;
+      }
+    });
+  return host;
 }

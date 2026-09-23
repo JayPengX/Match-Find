@@ -3087,11 +3087,19 @@ function renderRecommendedSection() {
       // Not frozen (see dayMembership below) - this stack exists only while
       // the pin does, and freezing it would leave the pinned game behind in
       // the original stack after the viewer swipes off it.
+      // Exactly the cards the host stack was showing (its frozen
+      // membership, when there is one) plus this pin - one extra dot.
+      const host = alternatives[0];
+      const hostKey = (baselineById.get(host.id) || host).slotKey;
+      const frozen = hostKey && (dayMembership.get(hostKey) || []).find(set => set.has(host.id));
+      if (frozen) {
+        alternatives = [host, ...[...frozen].map(id => byId.get(id)).filter(m => m && m !== host && m.id !== match.id && !m.recommended && !m.isFinished)];
+      }
       const members = [match, ...alternatives];
-      // The WHOLE merged stack is the slot a swipe acts on - a pin that
-      // displaced two picks (A and C) has both of their stacks in here, and
-      // a narrower slotKey (the pin's own conflict cluster, which may hold
-      // only A) would leave the pin behind when the viewer swipes to C.
+      // The whole stack is the slot a swipe acts on - the pin's own
+      // conflict cluster may not contain the host stack's other cards, and
+      // a narrower slotKey would leave the pin behind when the viewer
+      // swipes to one of them.
       match.slotKey = slotKeyFromMembers(members);
       members.forEach(m => featuredIds.add(m.id));
       fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0));
