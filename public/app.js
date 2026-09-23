@@ -117,6 +117,7 @@ import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, PREG
 // t() rather than a hardcoded literal, so this file itself never has to
 // change again to add a third language, only ./lib/i18n.mjs does.
 import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
+import { installTapLog, tapLog } from './lib/tap-log.mjs';
 
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
@@ -590,6 +591,8 @@ const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
+// Hidden on-screen input debugger - tap this line 5 times (see lib/tap-log.mjs).
+installTapLog(generatedNote);
 const nextUpdateNote = document.getElementById('next-update-note');
 const tbdSection = document.getElementById('tbd-section');
 const tbdListEl = document.getElementById('tbd-list');
@@ -2492,6 +2495,7 @@ function renderDayScroller() {
     btn.setAttribute('aria-selected', String(day.key === state.selectedDayKey));
     btn.innerHTML = `<span class="day-pill-label">${dayLabelFor(day.date, { short: day.key !== localDateKey(new Date()) })}</span>`;
     btn.addEventListener('click', () => {
+      tapLog(`[app] day tab handler ${day.key}`);
       state.selectedDayKey = day.key;
       renderDayScroller();
       renderDayLabels();
@@ -2638,6 +2642,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
     const clamped = Math.min(ordered.length - 1, Math.max(0, index));
     const chosen = ordered[clamped];
     if (!chosen || chosen.id === primary.id) return;
+    tapLog(`[app] choose index=${clamped}`);
     // Deferred one tick (setTimeout 0), not called synchronously - the
     // actual work (pinSlotChoice -> renderSections) tears out and rebuilds
     // a large chunk of the page's DOM (this whole stack, the rest of the
@@ -2790,6 +2795,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // Shared by both input paths below (Pointer Events for a mouse, Touch
   // Events for a finger) - `id` is a pointerId or a Touch.identifier.
   function beginDrag(kind, id, x, y) {
+    tapLog(`[app] swipe begin ${kind} activeSwipeCount=${activeSwipeCount}`);
     activeInputKind = kind;
     activePointerId = id;
     dragStartX = x;
@@ -2812,10 +2818,12 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       // activeSwipeCount comes back down too - otherwise renderSections
       // defers itself forever. No transform applied yet, so no style reset.
       if (Math.abs(dy) > Math.abs(dx)) {
+        tapLog('[app] swipe -> vertical, released');
         resetDragState();
         return;
       }
       isHorizontalDrag = true;
+      tapLog('[app] swipe -> horizontal');
     }
     dragDx = dx;
     setDragTransform(dx);
@@ -2823,6 +2831,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   function endDrag() {
     const committedDx = isHorizontalDrag ? dragDx : 0;
+    tapLog(`[app] swipe end dx=${Math.round(committedDx)}`);
     const wasHorizontalDrag = isHorizontalDrag;
 
     if (!wasHorizontalDrag || Math.abs(committedDx) < SWIPE_COMMIT_PX) {
@@ -2893,6 +2902,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
 
   card.addEventListener('touchcancel', event => {
     if (activeInputKind !== 'touch' || !findTouch(event.changedTouches)) return;
+    tapLog('[app] swipe cancelled');
     resetDrag();
   }, { passive: true });
 
@@ -3191,9 +3201,11 @@ function renderSections() {
   // capture - gets removed out from under it). Deferred, not dropped:
   // stopTrackingSwipe runs this for real the moment the gesture ends.
   if (activeSwipeCount > 0) {
+    tapLog(`[app] render DEFERRED activeSwipeCount=${activeSwipeCount}`);
     rerenderPendingAfterSwipe = true;
     return;
   }
+  tapLog('[app] render');
   rerenderPendingAfterSwipe = false;
   renderRecommendedSection();
   renderAllMatchesSection();
