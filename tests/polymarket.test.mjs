@@ -390,7 +390,33 @@ describe('fetchAllPolymarketEvents', () => {
     };
     const events = await fetchAllPolymarketEvents(100381, fetchJson);
     assert.equal(events.length, POLYMARKET_EVENTS_PAGE_SIZE + 1);
-    assert.equal(calls, 2);
+    assert.equal(events.at(-1).id, 'last');
+    assert.ok(calls >= 2);
+  });
+  test('requests every page after a full first one in parallel, merging in page order up to the first short page', async () => {
+    const pages = [
+      Array.from({ length: POLYMARKET_EVENTS_PAGE_SIZE }, (_, i) => ({ id: `a${i}` })),
+      Array.from({ length: POLYMARKET_EVENTS_PAGE_SIZE }, (_, i) => ({ id: `b${i}` })),
+      [{ id: 'c0' }],
+      [{ id: 'never-merged' }]
+    ];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchJson = async url => {
+      const page = Number(new URL(url).searchParams.get('offset')) / POLYMARKET_EVENTS_PAGE_SIZE;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Later pages resolve FIRST - order must still come from page index.
+      await new Promise(resolve => setTimeout(resolve, 10 - page));
+      inFlight -= 1;
+      return pages[page] || [];
+    };
+    const events = await fetchAllPolymarketEvents(100381, fetchJson);
+    assert.equal(events.length, POLYMARKET_EVENTS_PAGE_SIZE * 2 + 1);
+    assert.equal(events[0].id, 'a0');
+    assert.equal(events[POLYMARKET_EVENTS_PAGE_SIZE].id, 'b0');
+    assert.equal(events.at(-1).id, 'c0');
+    assert.ok(maxInFlight > 1);
   });
   test('stops on an empty or malformed page rather than looping/throwing', async () => {
     const events = await fetchAllPolymarketEvents(100381, async () => []);

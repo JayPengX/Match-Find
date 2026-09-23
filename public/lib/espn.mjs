@@ -207,3 +207,34 @@ export function extractF1LiveUpdates(scoreboardJson) {
   }
   return updates;
 }
+
+// ESPN serves every team/league logo as a 500px PNG (20-45KB each, live-
+// measured) while this page only ever draws them at 16-22px - so a first
+// visit spent most of its image bandwidth on pixels nobody sees, and the
+// crests visibly popped in seconds after the cards themselves. ESPN's own
+// `combiner` resizer (the same CDN host) returns the same image at any size
+// (a 64px copy is 2-5KB), so every logo is requested through it instead.
+// 64px covers a 21px slot on a 3x display. A URL that isn't on
+// a.espncdn.com is returned untouched.
+export function sizedEspnLogoUrl(url, px = 64) {
+  if (!url) return url;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (parsed.hostname !== 'a.espncdn.com') return url;
+  if (parsed.pathname === '/combiner/i') {
+    if (!parsed.searchParams.get('img')) return url;
+  } else {
+    const img = parsed.pathname;
+    parsed = new URL('https://a.espncdn.com/combiner/i');
+    parsed.searchParams.set('img', img);
+  }
+  parsed.searchParams.set('w', String(px));
+  parsed.searchParams.set('h', String(px));
+  // `img` stays a readable path (the combiner accepts it unescaped, and
+  // that's the form ESPN's own site uses).
+  return parsed.toString().replace(/img=([^&]*)/, (_, v) => `img=${decodeURIComponent(v)}`);
+}

@@ -94,16 +94,28 @@ const MAX_EVENT_PAGES = 5;
 
 // Pages through every currently-open event for one tag (see
 // POLYMARKET_EVENTS_PAGE_SIZE's own comment for why this endpoint can't
-// just be asked for "all of them" in one request) - stops the moment a
-// page comes back short of a full page (nothing more to fetch) or empty.
+// just be asked for "all of them" in one request). The first page alone
+// answers most tags (NBA/EPL/F1 each fit in one); only when it comes back
+// full are the remaining pages requested - all at once, not one after
+// another. MLB (300+ open events, live-checked) used to cost four
+// back-to-back round trips here, which is most of why odds visibly
+// trailed the cards on load; now it's two. Merging still stops at the
+// first short/empty page, so an over-fetched trailing page is just an
+// empty response, never duplicated or out-of-order events.
 // `fetchJson` is the same shape every other fetch in this codebase takes
 // (a URL in, parsed JSON out) - Node's own direct fetch in
 // match-builder.mjs, or a browser's fetch-through-the-shared-proxy wrapper
 // in app.js - so this stays usable from both without knowing which.
 export async function fetchAllPolymarketEvents(tagId, fetchJson) {
-  const all = [];
-  for (let page = 0; page < MAX_EVENT_PAGES; page++) {
-    const events = await fetchJson(polymarketEventsByTagUrl(tagId, { offset: page * POLYMARKET_EVENTS_PAGE_SIZE }));
+  const pageUrl = page => polymarketEventsByTagUrl(tagId, { offset: page * POLYMARKET_EVENTS_PAGE_SIZE });
+  const first = await fetchJson(pageUrl(0));
+  if (!Array.isArray(first) || !first.length) return [];
+  if (first.length < POLYMARKET_EVENTS_PAGE_SIZE) return [...first];
+  const rest = await Promise.all(
+    Array.from({ length: MAX_EVENT_PAGES - 1 }, (_, i) => fetchJson(pageUrl(i + 1)))
+  );
+  const all = [...first];
+  for (const events of rest) {
     if (!Array.isArray(events) || !events.length) break;
     all.push(...events);
     if (events.length < POLYMARKET_EVENTS_PAGE_SIZE) break;

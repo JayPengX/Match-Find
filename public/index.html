@@ -46,6 +46,11 @@
 <meta name="twitter:title" content="Match Find — 今晚看什麼" />
 <meta name="twitter:description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <meta name="twitter:image" content="./og-image.png" />
+<!-- Opens the connections every first load needs while app.js is still
+     downloading: the sports proxy (every match/odds request - crossorigin,
+     since those are CORS fetches) and ESPN's image CDN (every logo). -->
+<link rel="preconnect" href="https://sports-proxy.pengzjay.workers.dev" crossorigin />
+<link rel="preconnect" href="https://a.espncdn.com" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -174,7 +179,7 @@
   <template id="team-row-template">
     <div class="team-row">
       <span class="team-side"></span>
-      <img class="team-logo" alt="" loading="lazy" decoding="sync" referrerpolicy="no-referrer" />
+      <img class="team-logo" alt="" decoding="sync" referrerpolicy="no-referrer" />
       <span class="team-name-en"></span>
       <span class="team-name-zh"></span>
       <span class="team-score" hidden></span>

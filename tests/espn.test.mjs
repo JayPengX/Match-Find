@@ -7,7 +7,7 @@
 // extractF1LiveUpdates's own competitor/leaderboard shape).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractLiveUpdates, extractF1LiveUpdates, liveScoreboardUrls } from '../public/lib/espn.mjs';
+import { extractLiveUpdates, extractF1LiveUpdates, liveScoreboardUrls, sizedEspnLogoUrl } from '../public/lib/espn.mjs';
 
 describe('liveScoreboardUrls', () => {
   test('builds TWO single-date requests, never one range request', () => {
@@ -247,5 +247,30 @@ describe('extractF1LiveUpdates', () => {
       interval: '+2.341'
     });
     assert.deepEqual(update.leaderboard[1], { name: 'L. Norris', position: 2, flagUrl: '', flagAlt: '', interval: null });
+  });
+});
+
+describe('sizedEspnLogoUrl', () => {
+  test('routes a plain ESPN logo path through the combiner resizer', () => {
+    assert.equal(
+      sizedEspnLogoUrl('https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/cle.png'),
+      'https://a.espncdn.com/combiner/i?img=/i/teamlogos/nba/500/scoreboard/cle.png&w=64&h=64'
+    );
+    assert.equal(
+      sizedEspnLogoUrl('https://a.espncdn.com/guid/abc/logos/default.png', 48),
+      'https://a.espncdn.com/combiner/i?img=/guid/abc/logos/default.png&w=48&h=48'
+    );
+  });
+  test('adds a size to an existing combiner URL without nesting it', () => {
+    assert.equal(
+      sizedEspnLogoUrl('https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png'),
+      'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png&w=64&h=64'
+    );
+  });
+  test('leaves non-ESPN, empty, and malformed URLs untouched', () => {
+    assert.equal(sizedEspnLogoUrl('https://example.com/x.png'), 'https://example.com/x.png');
+    assert.equal(sizedEspnLogoUrl(''), '');
+    assert.equal(sizedEspnLogoUrl(undefined), undefined);
+    assert.equal(sizedEspnLogoUrl('not a url'), 'not a url');
   });
 });

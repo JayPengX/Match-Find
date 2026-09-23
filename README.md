@@ -1572,6 +1572,15 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   are actually kept on. Turning a sport back on immediately kicks off a
   full-window refresh in the background, so it backfills right away
   instead of waiting for whichever refresh tier happens to fire next.
+- **Odds and logos arrive with the first paint, not after it** —
+  Polymarket's `/events` pages are fetched through the proxy's
+  `&trim=polymarket-events` mode (only the fields `public/lib/polymarket.mjs`
+  reads: 11.5MB → ~0.45MB per MLB page), pages 2+ are requested in
+  parallel, and the download starts alongside the ESPN fetch instead of
+  after the match list has painted. Team/league logos are requested through
+  ESPN's own resizer at 64px (`sizedEspnLogoUrl` in `public/lib/espn.mjs` —
+  2-5KB instead of a 20-45KB 500px PNG drawn at 21px), and each one starts
+  downloading as soon as the scoreboard naming it arrives.
 
 ### The Shared Proxy Architecture
 

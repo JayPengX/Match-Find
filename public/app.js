@@ -94,7 +94,8 @@ import {
   liveScoreboardUrls,
   extractLiveUpdates,
   f1LiveScoreboardUrl,
-  extractF1LiveUpdates
+  extractF1LiveUpdates,
+  sizedEspnLogoUrl
 } from './lib/espn.mjs';
 import { pickReadableTeamColor } from './lib/color.mjs';
 import {
@@ -199,7 +200,14 @@ const PROXY_FETCH_TIMEOUT_MS = 12_000;
 // classic HTTP/1.1 per-host connection cap - conservative enough that even
 // a connection that can't multiplex (no HTTP/2) never queues at the browser
 // level on top of this queue too.
-const PROXY_FETCH_MAX_CONCURRENCY = 6;
+//
+// Raised from 6 to 12: the proxy is served over HTTP/2 (workers.dev), so
+// these multiplex over one connection rather than competing for the
+// browser's per-host HTTP/1.1 pool - and at 6, the ~60-request full window
+// ran as ~10 back-to-back waves, which is most of the initial spinner time.
+// 12 halves that while still being nowhere near the unbounded 50+ burst
+// described above.
+const PROXY_FETCH_MAX_CONCURRENCY = 12;
 let proxyFetchActiveCount = 0;
 const proxyFetchWaitQueue = [];
 
@@ -222,16 +230,24 @@ function releaseProxyFetchSlot() {
   else proxyFetchActiveCount--;
 }
 
-async function proxyFetchJson(url) {
-  const cached = proxyFetchCache.get(url);
+// `trim` asks the proxy for a reduced response (see
+// polymarketFetchJson below) - part of the cache key, since a trimmed and
+// a full body for the same upstream URL aren't interchangeable.
+function sportsProxyRequestUrl(url, trim) {
+  return `${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}${trim ? `&trim=${trim}` : ''}`;
+}
+
+async function proxyFetchJson(url, { trim = null } = {}) {
+  const key = trim ? `${trim}|${url}` : url;
+  const cached = proxyFetchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
-  const pending = proxyFetchInFlight.get(url);
+  const pending = proxyFetchInFlight.get(key);
   if (pending) return pending;
   const request = (async () => {
     await acquireProxyFetchSlot();
     let response;
     try {
-      response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+      response = await fetch(sportsProxyRequestUrl(url, trim), {
         cache: 'no-store',
         signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
       });
@@ -240,15 +256,38 @@ async function proxyFetchJson(url) {
     }
     if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
     const data = await response.json();
-    proxyFetchCache.set(url, { data, expiresAt: Date.now() + PROXY_FETCH_CACHE_TTL_MS });
+    proxyFetchCache.set(key, { data, expiresAt: Date.now() + PROXY_FETCH_CACHE_TTL_MS });
+    warmTeamLogos(url, data);
     return data;
   })();
-  proxyFetchInFlight.set(url, request);
+  proxyFetchInFlight.set(key, request);
   try {
     return await request;
   } finally {
-    proxyFetchInFlight.delete(url);
+    proxyFetchInFlight.delete(key);
   }
+}
+
+// Starts downloading every team crest the moment the scoreboard that names
+// it arrives, rather than only once its card is rendered - the rest of the
+// window's requests (and the scoring) are still running at that point, so
+// by first paint the logos are already in the browser's HTTP cache and
+// show up together with the card instead of popping in afterwards. Same
+// downsized URL updateTeamRow requests (see sizedEspnLogoUrl), so it's the
+// exact same cache entry; each URL is only ever requested once per tab.
+const warmedLogoUrls = new Set();
+function warmTeamLogos(url, data) {
+  if (!url.startsWith('https://site.api.espn.com/') || !Array.isArray(data?.events)) return;
+  data.events.forEach(event => {
+    (event.competitions?.[0]?.competitors || []).forEach(competitor => {
+      const src = sizedEspnLogoUrl(competitor.team?.logo);
+      if (!src || warmedLogoUrls.has(src)) return;
+      warmedLogoUrls.add(src);
+      const img = new Image();
+      img.referrerPolicy = 'no-referrer';
+      img.src = src;
+    });
+  });
 }
 
 // The same proxy passthrough as proxyFetchJson above, but deliberately
@@ -258,13 +297,42 @@ async function proxyFetchJson(url) {
 // genuinely is a different URL anyway (a different `offset`) but still
 // shouldn't be served from a stale cache entry left over from an earlier
 // poll tick.
-async function proxyFetchJsonUncached(url) {
-  const response = await fetch(`${state.proxyUrl}/sports-proxy?url=${encodeURIComponent(url)}`, {
+async function proxyFetchJsonUncached(url, { trim = null } = {}) {
+  const response = await fetch(sportsProxyRequestUrl(url, trim), {
     cache: 'no-store',
     signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`${url} -> HTTP ${response.status}`);
   return response.json();
+}
+
+// Polymarket's /events pages are enormous - one 100-event MLB page was
+// live-measured at 11.5MB (~1MB gzipped), and MLB needs 3-4 of them -
+// almost all of it market metadata ./lib/polymarket.mjs never reads. The
+// proxy can strip each page down to just the fields that module uses
+// (~0.45MB, see shared-proxy's sports-proxy-worker.js,
+// trimPolymarketEvents), which is what lets odds land with the first paint
+// instead of trickling in seconds later (and keeps the 30s live-odds poll
+// from re-downloading megabytes every tick). If the trimmed request fails
+// for any reason (e.g. an older proxy deploy, or that Worker-side parse
+// failing), this falls back to the plain full passthrough, so odds are
+// never lost to it - only slower.
+const POLYMARKET_TRIM = 'polymarket-events';
+async function polymarketFetchJson(url) {
+  try {
+    return await proxyFetchJson(url, { trim: POLYMARKET_TRIM });
+  } catch (error) {
+    console.warn('trimmed Polymarket fetch failed, retrying untrimmed', error);
+    return proxyFetchJson(url);
+  }
+}
+async function polymarketFetchJsonUncached(url) {
+  try {
+    return await proxyFetchJsonUncached(url, { trim: POLYMARKET_TRIM });
+  } catch (error) {
+    console.warn('trimmed Polymarket fetch failed, retrying untrimmed', error);
+    return proxyFetchJsonUncached(url);
+  }
 }
 
 // `deploy.yml`'s own cache-busting step (see index.html's own `?v=` query
@@ -462,7 +530,7 @@ function buildSportIcon(sport) {
   wrap.className = 'sport-icon';
   if (LEAGUE_LOGOS[sport]) {
     const img = document.createElement('img');
-    img.src = LEAGUE_LOGOS[sport];
+    img.src = sizedEspnLogoUrl(LEAGUE_LOGOS[sport]);
     img.alt = '';
     img.decoding = 'sync';
     // Deliberately no loading="lazy" - these are tiny (16-22px) icons, so
@@ -1750,13 +1818,15 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
     });
   }
   if (logo) {
+    // Downsized - see sizedEspnLogoUrl's own comment.
+    const src = sizedEspnLogoUrl(logo);
     // Only touches `src` when the URL actually changed - this IS the fix
     // for the reported team-logo flash: an unconditional `img.src = logo`
     // every render (even to the exact same URL a reused node already has
     // loaded and painted) still restarts that image's decode, which
     // visibly blanks it for a frame on every routine background refresh.
-    if (img.getAttribute('src') !== logo) {
-      img.src = logo;
+    if (img.getAttribute('src') !== src) {
+      img.src = src;
       // A new URL deserves a fresh chance - most relevant for a service
       // logo whose fallback state (see updateMatchCard's watch-badge
       // section) can genuinely change source over a match's lifetime, but
@@ -3350,6 +3420,7 @@ function applyFreshBuild(matches, generatedAt) {
 
   state.tbdMatches = tbdMatches;
   if (generatedAt) {
+    state.lastGeneratedAt = generatedAt;
     const generated = new Date(generatedAt);
     generatedNote.textContent = t('generatedNote', {
       day: localDayFormatter().format(generated),
@@ -3505,10 +3576,39 @@ let nextFullRefreshAt = null;
 // renders from anymore, same harmless race pollLiveMatches already
 // tolerates.
 function enrichOddsInBackground() {
-  enrichWithPolymarketOdds(state.allRawMatches, proxyFetchJson)
-    .then(() => recomputeAndRender())
+  enrichWithPolymarketOdds(state.allRawMatches, polymarketFetchJson)
+    .then(() => {
+      recomputeAndRender();
+      // The snapshot applyFreshBuild saved went out BEFORE these odds
+      // existed - re-save so the next visit's instant paint already has
+      // its odds bars instead of drawing them in a moment later.
+      saveMatchSnapshot(state.allRawMatches, state.tbdMatches, state.lastGeneratedAt || new Date().toISOString());
+    })
     .catch(error => console.error('background odds enrichment failed', error));
 }
+
+// Kicks off every enabled sport's Polymarket download immediately, in
+// parallel with (and ahead of, in the fetch queue) the ESPN requests
+// buildMatches is about to fire - it used to start only AFTER the whole
+// match list had been fetched, scored and painted, which is exactly the
+// "odds roll in a few seconds later" delay. The results land in
+// proxyFetchJson's own cache/in-flight map, so the enrichment that follows
+// the build just picks them up instead of starting from zero.
+function prefetchPolymarketEvents() {
+  [...state.enabledSports]
+    .filter(sport => POLYMARKET_TAG_ID[sport] != null)
+    .forEach(sport => {
+      fetchAllPolymarketEvents(POLYMARKET_TAG_ID[sport], polymarketFetchJson).catch(() => {});
+    });
+}
+
+// How long the FIRST paint will wait, past the match list itself being
+// ready, for odds to be applied too - normally zero in practice (the
+// prefetch above started at the same time as the far larger ESPN fetch and
+// is done first), but capped so a slow Polymarket can never hold the whole
+// page hostage; if it misses, the background enrichment fills odds in as
+// before.
+const FIRST_PAINT_ODDS_GRACE_MS = 1500;
 
 async function refreshNearTerm() {
   try {
@@ -3668,7 +3768,7 @@ async function checkForAppVersionUpdate() {
 
 // `silent` keeps the background timer from fighting with a viewer who just
 // tapped "立即重新整理" for status text either one might want to set.
-async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
+async function refreshFullWindow({ silent = false, statusEl, button, waitForOdds = false } = {}) {
   if (!silent) {
     if (statusEl) statusEl.textContent = t('refreshing');
     if (button) button.disabled = true;
@@ -3681,6 +3781,14 @@ async function refreshFullWindow({ silent = false, statusEl, button } = {}) {
       enrichOdds: false,
       needsPregameOdds
     });
+    // First load only (see FIRST_PAINT_ODDS_GRACE_MS) - so the very first
+    // cards already carry their odds bars.
+    if (waitForOdds) {
+      await Promise.race([
+        enrichWithPolymarketOdds(matches, polymarketFetchJson).catch(() => {}),
+        new Promise(resolve => setTimeout(resolve, FIRST_PAINT_ODDS_GRACE_MS))
+      ]);
+    }
     // Set BEFORE applyFreshBuild, not after - see refreshNearTerm's own
     // comment on state.nearTermLoaded for why the render this triggers
     // needs to already see the up-to-date flag. A successful resolve here
@@ -3928,7 +4036,7 @@ async function pollLiveMatches() {
     [...sports]
       .filter(sport => POLYMARKET_TAG_ID[sport] != null)
       .map(async sport => {
-        const events = await fetchAllPolymarketEvents(POLYMARKET_TAG_ID[sport], proxyFetchJsonUncached);
+        const events = await fetchAllPolymarketEvents(POLYMARKET_TAG_ID[sport], polymarketFetchJsonUncached);
         state.allRawMatches.forEach(match => {
           if (match.sport !== sport || match.isFinished) return;
           if (sport === 'F1') {
@@ -4155,8 +4263,9 @@ async function init() {
   // then state.allRawMatches already holds the full window regardless, so
   // a routine near-term-only refresh from here on can never recreate this
   // same incomplete-rotation flicker).
+  prefetchPolymarketEvents();
   try {
-    await refreshFullWindow({ silent: true });
+    await refreshFullWindow({ silent: true, waitForOdds: true });
   } catch (error) {
     console.error(error);
   }
