@@ -1948,6 +1948,15 @@ function updateMatchCard(node, match) {
       soloRow = createTeamRowNode();
       teamsEl.appendChild(soloRow);
     }
+    // Marks this row as having neither a side tag nor a score (F1's own
+    // case, the only sport with a single competitor) - see styles.css's
+    // own `.team-row.is-solo .team-name-en` rule for why: the plain
+    // `.team-name-en` rule reserves room for both regardless, which left a
+    // real race name clipped far earlier than it needed to be. A match's
+    // own competitor shape never changes across its lifetime (see this
+    // function's own top comment), so this is safe to set unconditionally
+    // on every render rather than needing a matching removal elsewhere.
+    soloRow.classList.add('is-solo');
     updateTeamRow(soloRow, { logo: match.logo, name: match.name, nameZh: match.nameZh });
   }
 

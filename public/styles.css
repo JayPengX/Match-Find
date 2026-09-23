@@ -672,6 +672,18 @@ main#app {
   font-weight: 600;
   font-size: 0.95rem;
 }
+/* F1's own "solo" row (.team-row.is-solo, see app.js) has neither a side
+   tag nor a score - the .team-name-en rule above still reserves 104px for
+   both anyway, since it has no way to know which sibling elements are
+   actually hidden in any given row. Live-reported bug this fixes: a real
+   race name ("Qatar Airways Azerbaijan Grand Prix") was clipped to barely
+   more than half the card's width, with its own Chinese name below it left
+   almost no room at all, because ~75px of that 104px budget was being
+   reserved for a side tag and score that were never there to begin with.
+   Only the logo (21px) and its own trailing gap (8px) are real here. */
+.team-row.is-solo .team-name-en {
+  max-width: calc(100% - 37px);
+}
 .team-name-zh {
   flex: 0 1 auto;
   font-size: 0.82rem;
