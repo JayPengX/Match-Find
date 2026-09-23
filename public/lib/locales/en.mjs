@@ -4,6 +4,14 @@
 // exists in locales/zh-TW.mjs should exist here too - t() falls back to
 // zh-TW for anything missing), then wire it into i18n.mjs's STRINGS map
 // and detectLocale().
+//
+// WARNING: the day-picker pills (.day-pill, public/styles.css) sit in a
+// horizontally-scrolling row and already handle long text fine (flex:none,
+// white-space:nowrap, the row itself scrolls) - but that's not true of
+// every element here (settings labels, sport filter chips). No automated
+// test renders this site's actual layout, so always check a real
+// screenshot after adding a language, especially for anything short and
+// buttonlike that sits next to fixed-width siblings.
 export default {
   title: 'Match Find — What to Watch Tonight',
   metaDescription:
