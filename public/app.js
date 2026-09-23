@@ -2637,7 +2637,28 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   function choose(index) {
     const clamped = Math.min(ordered.length - 1, Math.max(0, index));
     const chosen = ordered[clamped];
-    if (chosen && chosen.id !== primary.id) pinSlotChoice(dayKey, slotKey, chosen.id);
+    if (!chosen || chosen.id === primary.id) return;
+    // Deferred one tick (setTimeout 0), not called synchronously - the
+    // actual work (pinSlotChoice -> renderSections) tears out and rebuilds
+    // a large chunk of the page's DOM (this whole stack, the rest of the
+    // day's cards). Every caller of choose() (a dot/arrow tap, and
+    // endDrag's own commit branch below) runs from INSIDE a touch-derived
+    // event handler (click or pointerup) that iOS WebKit itself is still
+    // in the middle of resolving - live-reported, confirmed on BOTH Safari
+    // AND Chrome for iOS (same underlying WebKit engine on iOS either way,
+    // Chromium/Blink on desktop couldn't reproduce it at all under
+    // simulated mouse OR real synthesized touch input): after any single
+    // swipe, EVERY later tap anywhere on the page - not just this card -
+    // needed two taps to register, persisting for the rest of the session.
+    // Consistent with a known WebKit-specific bug class: a large synchronous
+    // DOM mutation triggered from inside a touch event handler can leave
+    // WebKit's own touch/gesture dispatch pipeline confused until some
+    // later tap consumes/clears it, rather than the mutation itself
+    // breaking anything - Blink doesn't share this behavior, which is
+    // exactly why it never reproduced outside real iOS. Yielding back to
+    // the browser first, so WebKit fully closes out THIS event before the
+    // DOM changes, is the standard workaround for that bug class.
+    setTimeout(() => pinSlotChoice(dayKey, slotKey, chosen.id), 0);
   }
 
   // ---- Swipe gesture (layered on top of choose(), never a second state
