@@ -688,16 +688,30 @@ main#app {
    effectively vanished (0-width, not merely truncated) - confirmed live.
    A two-team row rarely hits this because team names are short; an F1
    name hitting it is closer to the common case than the exception.
-   Fixed properly by giving the Chinese name its OWN full-width row
-   instead of making it compete with the English name at all - there's no
-   second competitor row here whose height this one has to match, so
-   nothing is lost by letting it wrap. */
+   A second attempt gave the Chinese name its own full-width row instead
+   of making it compete with the English name at all - fixed the Chinese
+   name, but left English STILL single-line-truncated on its own now-
+   uncontested line, still cutting a real name down to "...Grand Prix
+   Q..." (confirmed live) even though nothing was competing with it for
+   space anymore. There was never a real reason for English to stay
+   single-line here either: unlike the two-team row above (whose whole
+   point is staying compact so an away/home pair lines up predictably),
+   this solo row already accepted a variable, wrapping height for the
+   Chinese name the moment flex-wrap was added, so letting English wrap
+   too costs nothing further. Capped at 2 lines (line-clamp), not
+   unlimited, as a backstop against a genuinely pathological name rather
+   than because 2 is expected to matter in practice - every real name
+   checked fits on one. */
 .team-row.is-solo {
   flex-wrap: wrap;
   row-gap: 2px;
 }
 .team-row.is-solo .team-name-en {
   max-width: calc(100% - 29px);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .team-row.is-solo .team-name-zh {
   flex-basis: 100%;
