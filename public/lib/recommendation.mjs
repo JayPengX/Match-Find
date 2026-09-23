@@ -904,7 +904,43 @@ export function weightedIntervalSchedule(items, getScore = choice => choice.effe
 // of "close enough to be a real call" rather than an arbitrary number.
 export const ALTERNATIVE_MAX_SCORE_GAP = 2.5;
 
-export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore' } = {}) {
+// Which of a day's previously shown plan picks (`planIds`, the ids of the
+// last plan this browser rendered for that day - see app.js's
+// state.dayPlanHistory) have already started, live or finished. Those are
+// locked into every later plan for the day via computeDayPlan's own
+// `lockedIds` option: a game the viewer was told to watch, and may already
+// be watching or have watched, is history, not something a later refresh
+// gets to re-decide. Without this, the whole day was re-planned from
+// scratch on every refresh, and the moment a recommended game ended its
+// score and scheduling block were rebuilt from ESPN's post-game feed (no
+// pre-game line any more, standings already counting the result, the real
+// duration instead of the estimate) - and after an app update or a
+// reopen more than MATCH_SNAPSHOT_MAX_AGE_MS later, with none of the
+// pre-game values left in memory to carry forward at all. That rescoring
+// let a different game take the finished one's slot and reshuffled the
+// rest of the day around it - live-reported as "a recommended game ended
+// and it started recommending other games, killing the day's schedule".
+// Upcoming picks are deliberately NOT locked: they're still free to
+// improve with fresher data, just never at the expense of what already
+// started.
+export function startedPlanLockIds(planIds, dayMatches, now = Date.now()) {
+  if (!planIds || !planIds.length) return new Set();
+  const wanted = new Set(planIds);
+  return new Set(
+    dayMatches
+      .filter(m => wanted.has(m.id) && !m.timeTbd && (m.isFinished || Date.parse(m.startTimeUtc) <= now))
+      .map(m => m.id)
+  );
+}
+
+// `lockedIds` (optional Set<matchId>, see startedPlanLockIds) - earlier
+// plan picks that have already started. Each is forced into the plan the
+// same way a pin is (its direct conflicts excluded, the free candidates
+// scheduled around it), but it stays the SYSTEM's pick (推薦, never
+// isPreferred), and a real viewer pin always wins over it: a lock whose
+// block clashes with a pinned match is simply dropped, so swiping to a
+// live alternative mid-game still works exactly as before.
+export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore', lockedIds = null } = {}) {
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
@@ -978,6 +1014,27 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     });
   });
 
+  const pinnedIds = new Set(forcedIds);
+  if (lockedIds && lockedIds.size) {
+    const pinnedMatches = candidates.filter(m => pinnedIds.has(m.id));
+    const clashes = (a, b) => {
+      const ai = schedulingInterval(a);
+      const bi = schedulingInterval(b);
+      return ai.start < bi.end && bi.start < ai.end;
+    };
+    candidates
+      .filter(m => lockedIds.has(m.id))
+      .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc))
+      .forEach(locked => {
+        if (forcedIds.has(locked.id) || excludedIds.has(locked.id)) return;
+        if (pinnedMatches.some(p => clashes(p, locked))) return;
+        forcedIds.add(locked.id);
+        candidates.forEach(m => {
+          if (m.id !== locked.id && !forcedIds.has(m.id) && isNearTotalOverlap(m, locked)) excludedIds.add(m.id);
+        });
+      });
+  }
+
   const toItem = match => ({ interval: schedulingInterval(match), choice: match });
   const forced = candidates
     .filter(m => forcedIds.has(m.id))
@@ -1010,8 +1067,9 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
     // isn't the same claim as the algorithm's own judgment. forcedIds is
     // exactly the set of pinned matches (see above) - every pick in it
     // got there because the viewer overrode the scheduler, not because
-    // the scheduler chose it on its own merits.
-    choice.isPreferred = forcedIds.has(choice.id);
+    // the scheduler chose it on its own merits. A lock (see `lockedIds`)
+    // is forced too, but it's the system's own earlier pick, so it isn't.
+    choice.isPreferred = pinnedIds.has(choice.id);
   });
 
   // alternativeIds is purely presentational, computed AFTER scheduling:

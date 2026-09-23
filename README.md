@@ -441,6 +441,27 @@ in `public/lib/recommendation.mjs`.
 - Whichever planned fixture is currently live, or (failing that) the
   soonest one still to come, is pinned to the top of the day's list.
 
+### Games that already started are locked into the day's plan
+
+The plan is recomputed on every refresh, so a finished game used to be
+re-scored from ESPN's post-game feed (no pre-game line any more, standings
+already counting the result, the real duration instead of the estimate).
+After an app update or a reopen more than 30 minutes later, the pre-game
+values weren't around to carry forward at all. The rescored game could lose
+its slot to a different one and reshuffle the rest of the day - reported as
+"a recommended game ended and it started recommending other games, killing
+the day's schedule".
+
+`app.js` now remembers the last plan it rendered for each day (per sport
+filter) in localStorage (`matchfind-day-plan-history`, kept back to
+yesterday, separate from the match snapshot so an app update doesn't wipe
+it). Any pick from that plan that has already started, live or finished, is
+passed to `computeDayPlan` as `lockedIds` (see `startedPlanLockIds` in
+`public/lib/recommendation.mjs`) and forced into its slot, still labeled
+推薦. Upcoming picks aren't locked and can still change with fresher data,
+but only around what already started. A real swipe-to-pin still wins over a
+lock it clashes with.
+
 ### Duration, endurance, and the no-clock-sport overrun buffer
 
 A fixture's own `enduranceScore` decides how much of its nominal length

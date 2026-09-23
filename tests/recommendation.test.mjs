@@ -25,6 +25,7 @@ import {
   groupIntoSlots,
   weightedIntervalSchedule,
   computeDayPlan,
+  startedPlanLockIds,
   resolveViewingPlan,
   isQuietHours,
   resolveService,
@@ -1672,5 +1673,55 @@ describe('live-pick stickiness', () => {
     applyLiveExcitementBonus(day, new Set(['sticky']));
     computeDayPlan(start.slice(0, 10), day, null, { scoreField: 'planningScore' });
     assert.deepEqual(sticky.alternativeIds, ['alt']);
+  });
+});
+
+describe('started plan picks are locked (a finished game must not reshuffle the day)', () => {
+  const NOW = Date.parse('2026-09-19T15:00:00.000Z');
+
+  test('startedPlanLockIds keeps only earlier plan picks that have started or finished', () => {
+    const finished = makeMatch({ id: 'done', isFinished: true, startTimeUtc: '2026-09-19T10:00:00.000Z' });
+    const live = makeMatch({ id: 'live', startTimeUtc: '2026-09-19T14:30:00.000Z' });
+    const upcoming = makeMatch({ id: 'later', startTimeUtc: '2026-09-19T20:00:00.000Z' });
+    const notInPlan = makeMatch({ id: 'other', isFinished: true, startTimeUtc: '2026-09-19T10:00:00.000Z' });
+    const locks = startedPlanLockIds(['done', 'live', 'later'], [finished, live, upcoming, notInPlan], NOW);
+    assert.deepEqual([...locks].sort(), ['done', 'live']);
+    assert.equal(startedPlanLockIds(undefined, [finished], NOW).size, 0);
+  });
+
+  test('a finished pick that got rescored lower after it ended keeps its slot, and the rest of the day stays put', () => {
+    // Morning plan: A (10:00) then C (20:00). B overlaps A and lost to it.
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T10:00:00.000Z', durationMinutes: 120, effectiveScore: 8 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T10:05:00.000Z', durationMinutes: 120, effectiveScore: 7 });
+    const c = makeMatch({ id: 'c', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 120, effectiveScore: 6 });
+    const morning = computeDayPlan('2026-09-19', [a, b, c]).map(m => m.id);
+    assert.deepEqual(morning, ['a', 'c']);
+
+    // A has now finished and was rescored from the post-game feed.
+    const aAfter = { ...a, isFinished: true, effectiveScore: 3 };
+    const unlocked = computeDayPlan('2026-09-19', [aAfter, { ...b }, { ...c }]).map(m => m.id);
+    assert.deepEqual(unlocked, ['b', 'c']); // the reported bug
+
+    const matches = [aAfter, { ...b }, { ...c }];
+    const locked = computeDayPlan('2026-09-19', matches, null, { lockedIds: startedPlanLockIds(morning, matches, NOW) });
+    assert.deepEqual(locked.map(m => m.id), ['a', 'c']);
+    assert.equal(locked[0].isPreferred, false); // still the system's own 推薦 pick
+  });
+
+  test('a real viewer pin still wins over a lock it clashes with', () => {
+    const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T14:00:00.000Z', durationMinutes: 180, effectiveScore: 9 });
+    const b = makeMatch({ id: 'b', startTimeUtc: '2026-09-19T14:05:00.000Z', durationMinutes: 180, effectiveScore: 7 });
+    const plan = computeDayPlan('2026-09-19', [a, b], new Set(['b']), { lockedIds: new Set(['a']) });
+    assert.deepEqual(plan.map(m => m.id), ['b']);
+    assert.equal(b.isPreferred, true);
+  });
+
+  test('upcoming picks are not locked - free candidates are still planned around the locked ones', () => {
+    const a = makeMatch({ id: 'a', isFinished: true, startTimeUtc: '2026-09-19T10:00:00.000Z', durationMinutes: 120, effectiveScore: 2 });
+    const later1 = makeMatch({ id: 'later1', startTimeUtc: '2026-09-19T20:00:00.000Z', durationMinutes: 120, effectiveScore: 5 });
+    const later2 = makeMatch({ id: 'later2', startTimeUtc: '2026-09-19T20:05:00.000Z', durationMinutes: 120, effectiveScore: 9 });
+    const matches = [a, later1, later2];
+    const plan = computeDayPlan('2026-09-19', matches, null, { lockedIds: startedPlanLockIds(['a', 'later1'], matches, NOW) });
+    assert.deepEqual(plan.map(m => m.id), ['a', 'later2']);
   });
 });

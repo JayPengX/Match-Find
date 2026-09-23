@@ -80,9 +80,19 @@ import {
   computeDayPlan,
   computeVarietyRotation,
   mergeVarietyForcedIds,
-  clearRotationIsPreferred
+  clearRotationIsPreferred,
+  startedPlanLockIds
 } from './lib/recommendation.mjs';
-import { serializePinnedChoices, deserializePinnedChoices, pruneStalePinnedChoices, applySlotSwipe } from './lib/preferences.mjs';
+import {
+  serializePinnedChoices,
+  deserializePinnedChoices,
+  pruneStalePinnedChoices,
+  applySlotSwipe,
+  dayPlanHistoryKey,
+  serializeDayPlanHistory,
+  deserializeDayPlanHistory,
+  recordDayPlan
+} from './lib/preferences.mjs';
 import {
   TEAM_LEAGUE_ESPN,
   liveScoreboardUrls,
@@ -766,6 +776,46 @@ function saveLiveStickyIds() {
   }
 }
 state.liveStickyIds = loadLiveStickyIds();
+
+// The last plan rendered for each day (per sport filter) - see
+// ./lib/preferences.mjs's dayPlanHistoryKey and recommendation.mjs's
+// startedPlanLockIds. Whatever in it has already started is locked into
+// every later plan for that day, so a game ending (or an app update wiping
+// the match snapshot) can't reshuffle the day around it. Kept back to
+// yesterday, matching MATCH_RETENTION_PAST_DAYS' own 昨天 tab.
+const DAY_PLAN_HISTORY_STORAGE_KEY = 'matchfind-day-plan-history';
+function oldestPlanHistoryDayKey() {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return localDateKey(date);
+}
+function loadDayPlanHistory() {
+  try {
+    return deserializeDayPlanHistory(JSON.parse(localStorage.getItem(DAY_PLAN_HISTORY_STORAGE_KEY)), oldestPlanHistoryDayKey());
+  } catch {
+    return new Map();
+  }
+}
+function saveDayPlanHistory() {
+  try {
+    localStorage.setItem(DAY_PLAN_HISTORY_STORAGE_KEY, JSON.stringify(serializeDayPlanHistory(state.dayPlanHistory)));
+  } catch {
+    // Private browsing / blocked storage - see savePriorityOrder's own comment.
+  }
+}
+state.dayPlanHistory = loadDayPlanHistory();
+function lockedIdsForDay(dayKey) {
+  return startedPlanLockIds(state.dayPlanHistory.get(dayPlanHistoryKey(dayKey, state.activeSport)), applySportFilter(matchesForDay(dayKey)));
+}
+// Pins are left out: a pin is already its own hard override, and recording
+// it here would keep it locked in even after the viewer swipes it away.
+function recordRenderedDayPlan(dayKey, dayPlan) {
+  const ids = dayPlan.filter(m => !m.isPreferred).map(m => m.id);
+  const next = recordDayPlan(state.dayPlanHistory, dayPlanHistoryKey(dayKey, state.activeSport), ids, oldestPlanHistoryDayKey());
+  if (next === state.dayPlanHistory) return;
+  state.dayPlanHistory = next;
+  saveDayPlanHistory();
+}
 function pruneLiveStickyIds() {
   if (!state.allRawMatches.length) return;
   const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
@@ -1456,9 +1506,12 @@ function pinnedForDayWithRotation(dayKey) {
 // rotation force whose scheduled time clashes with an underway sticky pick
 // that day; the live game keeps its slot and the rotation simply skips it.
 function rotationRespectingLivePicks(dayKey, forcedIds) {
-  if (!forcedIds || !forcedIds.size || !state.liveStickyIds.size) return forcedIds;
+  if (!forcedIds || !forcedIds.size) return forcedIds;
   const dayMatches = matchesForDay(dayKey);
-  const locked = dayMatches.filter(m => state.liveStickyIds.has(m.id) && isUnderway(m));
+  // Plan picks that already started (see lockedIdsForDay) hold their slot
+  // against a rotation force the same way an underway sticky pick does.
+  const startedLocks = lockedIdsForDay(dayKey);
+  const locked = dayMatches.filter(m => (state.liveStickyIds.has(m.id) && isUnderway(m)) || startedLocks.has(m.id));
   if (!locked.length) return forcedIds;
   const byId = new Map(dayMatches.map(m => [m.id, m]));
   const clashes = (a, b) => {
@@ -1546,7 +1599,8 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   );
   const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
   const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
-    scoreField: 'planningScore'
+    scoreField: 'planningScore',
+    lockedIds: lockedIdsForDay(dayKey)
   });
   const rotationForcedId = [...(rotationWithoutThisSlot || [])].find(id => clusterMemberIds.has(id));
   const unpinnedResultId = rotationForcedId || naturalMatchId;
@@ -2771,7 +2825,10 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const dayPlan = computeDayPlan(dayKey, dayCandidates, pinnedForDayWithRotation(dayKey), { scoreField: 'planningScore' });
+  const dayPlan = computeDayPlan(dayKey, dayCandidates, pinnedForDayWithRotation(dayKey), {
+    scoreField: 'planningScore',
+    lockedIds: lockedIdsForDay(dayKey)
+  });
   // computeDayPlan's own forcedIds mechanism marks every forced pick as
   // .isPreferred (indistinguishable from a real viewer pin) - correct for
   // a genuine pin, wrong for a rotation-forced one (see
@@ -2781,6 +2838,7 @@ function renderRecommendedSection() {
   // that's ALSO a real pin.
   clearRotationIsPreferred(dayCandidates, rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)), state.pinnedChoices.get(dayKey));
   stickLivePicks(dayPlan);
+  recordRenderedDayPlan(dayKey, dayPlan);
   const ordered = pinCurrentOrNext(dayPlan);
 
   if (!ordered.length) {

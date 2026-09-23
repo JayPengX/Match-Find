@@ -8,7 +8,11 @@ import {
   serializePinnedChoices,
   deserializePinnedChoices,
   pruneStalePinnedChoices,
-  applySlotSwipe
+  applySlotSwipe,
+  dayPlanHistoryKey,
+  serializeDayPlanHistory,
+  deserializeDayPlanHistory,
+  recordDayPlan
 } from '../public/lib/preferences.mjs';
 
 // Pins are stored as a flat Set<matchId> per day, keyed by the PINNED
@@ -159,5 +163,36 @@ describe('applySlotSwipe (the Recommend/Prefer swipe-semantics fix)', () => {
     // existing pin (match-b) even though it was originally set under a
     // smaller two-member slotKey - it's still found via the match id itself.
     assert.equal(next.has('2026-09-23'), false);
+  });
+});
+
+describe('day plan history', () => {
+  test('round-trips through JSON, dropping days before the oldest kept day and malformed entries', () => {
+    const history = new Map([
+      [dayPlanHistoryKey('2026-09-18', 'all'), ['old']],
+      [dayPlanHistoryKey('2026-09-19', 'all'), ['a', 'b']],
+      [dayPlanHistoryKey('2026-09-19', 'MLB'), ['m']]
+    ]);
+    const raw = JSON.parse(JSON.stringify(serializeDayPlanHistory(history)));
+    raw['2026-09-20|all'] = 'not-an-array';
+    const loaded = deserializeDayPlanHistory(raw, '2026-09-19');
+    assert.deepEqual([...loaded.keys()].sort(), ['2026-09-19|MLB', '2026-09-19|all']);
+    assert.deepEqual(loaded.get('2026-09-19|all'), ['a', 'b']);
+    assert.equal(deserializeDayPlanHistory(null, '2026-09-19').size, 0);
+  });
+
+  test('recordDayPlan returns the same map when nothing changed, a new one otherwise', () => {
+    const history = new Map([['2026-09-19|all', ['a', 'b']]]);
+    assert.equal(recordDayPlan(history, '2026-09-19|all', ['a', 'b'], '2026-09-19'), history);
+    const next = recordDayPlan(history, '2026-09-19|all', ['a', 'c'], '2026-09-19');
+    assert.notEqual(next, history);
+    assert.deepEqual(next.get('2026-09-19|all'), ['a', 'c']);
+    assert.deepEqual(history.get('2026-09-19|all'), ['a', 'b']); // never mutated
+  });
+
+  test('recordDayPlan prunes days that have aged out', () => {
+    const history = new Map([['2026-09-17|all', ['x']], ['2026-09-19|all', ['a']]]);
+    const next = recordDayPlan(history, '2026-09-19|all', ['a'], '2026-09-18');
+    assert.deepEqual([...next.keys()], ['2026-09-19|all']);
   });
 });

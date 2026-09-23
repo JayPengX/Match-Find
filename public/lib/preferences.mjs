@@ -127,3 +127,50 @@ export function applySlotSwipe(pinnedChoices, dayKey, slotKey, matchId, naturalM
   next.set(dayKey, nextDaySet);
   return next;
 }
+
+// ---- Day plan history (locks what's already started) ------------------------
+//
+// state.dayPlanHistory (Map<historyKey, string[]>) - the ids of the last
+// plan this browser rendered for each day, per sport filter (the 只看 MLB
+// plan is its own plan, see app.js's applySportFilter, so it gets its own
+// entry instead of leaking its picks into the all-sports one). Read back
+// through recommendation.mjs's startedPlanLockIds, which locks whichever of
+// these picks have already started into every later plan for that day -
+// see that function's own comment for the "a finished game reshuffled the
+// whole day" bug this exists for. Kept in localStorage, NOT the match
+// snapshot, so an app update (which throws the snapshot away - see
+// app.js's APP_BUILD_ID) or a reopen hours later still finds it.
+export function dayPlanHistoryKey(dayKey, sport) {
+  return `${dayKey}|${sport}`;
+}
+
+export function serializeDayPlanHistory(map) {
+  return Object.fromEntries(map);
+}
+
+// Drops any day older than `minDayKey` (same lexicographic "YYYY-MM-DD"
+// compare as deserializePinnedChoices) and anything malformed.
+export function deserializeDayPlanHistory(raw, minDayKey) {
+  const map = new Map();
+  if (!raw || typeof raw !== 'object') return map;
+  Object.entries(raw).forEach(([key, ids]) => {
+    if (key.split('|')[0] < minDayKey || !Array.isArray(ids)) return;
+    const clean = ids.filter(id => typeof id === 'string');
+    if (clean.length) map.set(key, clean);
+  });
+  return map;
+}
+
+// Pure - returns the SAME map by reference when nothing changed (so a
+// caller can cheaply skip re-persisting on every routine re-render), else a
+// new one with this key's ids replaced and anything older than `minDayKey`
+// dropped.
+export function recordDayPlan(history, key, ids, minDayKey) {
+  const previous = history.get(key);
+  const stale = [...history.keys()].some(k => k.split('|')[0] < minDayKey);
+  if (!stale && previous && previous.length === ids.length && previous.every((id, i) => id === ids[i])) return history;
+  const next = new Map([...history].filter(([k]) => k.split('|')[0] >= minDayKey));
+  if (ids.length) next.set(key, [...ids]);
+  else next.delete(key);
+  return next;
+}
