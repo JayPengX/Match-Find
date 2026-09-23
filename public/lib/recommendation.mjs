@@ -79,59 +79,47 @@ export function resolveService(whereToWatchTw) {
 
 // ---- One unified recommendation system: "Best Matches" ---------------------
 //
-// There used to be a viewer-selectable "recommendation style" (entertainment
-// vs competitive) picking which per-match score drove the recommended
-// lineup. That's gone - one well-reasoned score, not two competing answers
-// to the same question, and it's deliberately NOT anchored on any single
-// dimension either: "best match" means the fixture that combines real
-// SKILL (how good the two teams actually ARE, independent of tonight's
-// pairing - see public/lib/objective-score.mjs's skillFromWinPct), genuine
-// COMPETITIVENESS (how CLOSE tonight's specific pairing is - competitiveness
-// - plus whether those stakes actually stay meaningful all the way through
-// rather than just at kickoff - enduranceScore), and broad ENTERTAINMENT/
-// public attention (watchability - itself the deterministic objective
-// score's own national-broadcast/rivalry/derby detectors and betting-market
-// signal, see public/lib/objective-score.mjs - plus broadcastQuality's
-// production-quality signal) - never a match that only
-// wins because it's exceptional on one of those axes while being mediocre
-// on the others. A viewer explicitly asked for this distinction: two elite
-// teams playing a close, well-covered game is a different (better)
-// recommendation than two also-rans playing an equally close, equally
-// under-the-radar one - competitiveness/watchability alone can't tell those
-// apart, since neither depends on how GOOD the two teams actually are.
-// `bestMatchScore` is a weighted blend of whichever of these five fields a
-// match actually has (see BEST_MATCH_WEIGHTS), renormalized over just the
-// present ones so a finished/never-scored match, or a sport with no skill
-// signal at all (F1 - see objective-score.mjs's own comment), still gets a
-// real number built from what IS known, same "renormalize over what's
-// present" posture public/lib/objective-score.mjs's own weightedAverage uses.
-// Falls back to the build-time composite `match.score` only when NONE of
-// these dimensions are set at all (nothing left to blend).
-// Round 39 (2026-09-22): `skill` raised from 0.2 to 0.35, `competitiveness`
-// lowered from 0.2 to 0.05 (every other weight unchanged) - direct instruction
-// after a real, live disagreement: the deterministic engine kept recommending
-// Cleveland Guardians @ Boston Red Sox (skill 6, a tight, tense pairing) over
-// Milwaukee Brewers @ Philadelphia Phillies (skill 8, a clearly better team,
-// tonight's pairing less nail-biting) on 2026-09-23/24/25, and Round 33's own
-// exhaustive grid search (still true, see that round's own entry) had already
-// proven no such reweight can flip THAT case without also flipping the
-// already-validated 9/26/27 pick (Chicago Cubs @ Boston Red Sox, skill 6,
-// over Tampa Bay Rays @ Philadelphia Phillies, skill 7) the same way - same
-// shape, a lower-skill-but-tenser team vs. a higher-skill-but-more-comfortable
-// one. Put to the user directly with the real numbers rather than reweighted
-// silently: their answer was explicit - "skill/quality should generally win,
-// period," accepting that the 9/26/27 pick becomes Rays/Phillies too. This
-// is that same trade-off, chosen deliberately, not stumbled into. Re-verified
-// live (2026-09-22 build) across every currently-fetched MLB/NBA/EPL/F1
-// fixture: exactly six flips, all MLB, all this exact class of case (9/23-25
-// to Brewers/Phillips-alternatives, 9/26-28 to Rays/Phillies) - zero
-// unintended reordering anywhere else.
+// Full rewrite, direct instruction: rank the way a TV network producer
+// would - "what would the most people actually tune into" - not "which
+// game is the tensest nail-biter". The old model blended five fields
+// (skill/competitiveness/watchability/enduranceScore/broadcastQuality)
+// together and then had to bolt an extra, separately-gated "marquee
+// fixture" bonus on top just to give a famous team enough real weight -
+// a patch that (once MLB's own star-power big-club list was added
+// alongside its existing rivalry bonus) could blank a genuinely
+// competitive small-market race out of the schedule for a week straight
+// any time literally any bigger name played that day, because the patch's
+// own undiluted +2 dwarfed the ~0.6-point gap the variety-rotation
+// mechanism needs to treat two matchups as real rivals. Replaced with one
+// clean, four-factor blend, no patch layer:
+//   - FAME (40%) - is this a mainstream draw on name recognition alone
+//     (a historic rivalry, a big-market/marquee franchise, national
+//     broadcast placement)? See public/lib/objective-score.mjs's own
+//     `watchability` - now a clean, unblended read of exactly this,
+//     never mixed with skill/stakes/momentum and never gated by or capped
+//     against competitiveness.
+//   - QUALITY (30%) - how good are the two teams actually, independent of
+//     tonight's own pairing (`skill` - the better team's own win%, so a
+//     genuinely elite team gets credit even against a weak opponent).
+//   - STAKES (20%) - how much does this game matter for the season/
+//     championship race right now (`stakes` - playoff/seed/table-cutoff
+//     proximity, maxed for a postseason game).
+//   - CLOSENESS (10%) - how close is tonight's specific score expected to
+//     be (`competitiveness`) - a real but minor factor: a coin-flip game
+//     earns a little extra credit, but isn't the deciding signal the way
+//     it used to be.
+// `bestMatchScore` is a weighted blend of whichever of these four fields a
+// match actually has, renormalized over just the present ones so a sport
+// with no skill signal at all (F1 - see objective-score.mjs's own comment)
+// still gets a real number built from what IS known, same "renormalize
+// over what's present" posture public/lib/objective-score.mjs's own
+// weightedAverage uses. Falls back to the build-time composite
+// `match.score` only when NONE of these dimensions are set at all.
 export const BEST_MATCH_WEIGHTS = {
-  skill: 0.35, // how good the two teams actually are
-  competitiveness: 0.05, // how close tonight's specific pairing is
-  watchability: 0.35, // entertainment value / mainstream public attention
-  enduranceScore: 0.1, // does the competitive stakes actually last
-  broadcastQuality: 0.15 // production quality of watching it
+  watchability: 0.4, // FAME - mainstream/TV draw on name recognition alone
+  skill: 0.3, // QUALITY - how good the two teams actually are
+  stakes: 0.2, // STAKES - how much this matters for the season/championship
+  competitiveness: 0.1 // CLOSENESS - how close tonight's specific score is
 };
 
 function weightedBlend(pairs) {
@@ -143,11 +131,10 @@ function weightedBlend(pairs) {
 
 export function bestMatchScore(match) {
   const blended = weightedBlend([
-    [match.skill, BEST_MATCH_WEIGHTS.skill],
-    [match.competitiveness, BEST_MATCH_WEIGHTS.competitiveness],
     [match.watchability, BEST_MATCH_WEIGHTS.watchability],
-    [match.enduranceScore, BEST_MATCH_WEIGHTS.enduranceScore],
-    [match.broadcastQuality, BEST_MATCH_WEIGHTS.broadcastQuality]
+    [match.skill, BEST_MATCH_WEIGHTS.skill],
+    [match.stakes, BEST_MATCH_WEIGHTS.stakes],
+    [match.competitiveness, BEST_MATCH_WEIGHTS.competitiveness]
   ]);
   if (blended != null) return blended;
   return Number.isFinite(match.watchability) ? match.watchability : match.score;
@@ -170,37 +157,6 @@ export const PRIORITY_SCORE_DELTA = 1;
 // for" without turning this into a hard filter.
 export const OWNED_SERVICE_SCORE_BONUS = 0.5;
 
-// True when public/lib/objective-score.mjs already flagged this fixture as a
-// real, independently-known draw (a derby, a "Big Six"-style globally
-// followed club, or a historic rivalry) - see that module's own EPL/MLB/NBA
-// comments for why this exists at all: a pure win%-based formula has no way
-// to see that a famous club/rivalry pulls mainstream attention regardless of
-// this particular season's record. Read straight off `objectiveFactors`
-// (already shipped in matches.json, see build-data.mjs) rather than needing
-// a brand new build-time field - every relevant factor string already has a
-// stable, matchable substring.
-const MARQUEE_FACTOR_SUBSTRINGS = ['derby fixture', 'big-club fixture', 'marquee-franchise fixture', 'rivalry matchup'];
-export function isMarqueeFixture(match) {
-  return Array.isArray(match.objectiveFactors) && match.objectiveFactors.some(f => MARQUEE_FACTOR_SUBSTRINGS.some(s => f.includes(s)));
-}
-
-// Live-verified case this exists for (docs/recommendation-engine-audit.md
-// Round 14): Liverpool @ AFC Bournemouth (2026-09-20) still lost its slot to
-// Crystal Palace @ Leeds United even after isBigClub's own +2 watchability
-// bump (see computeEplObjectiveScore) - that bump only ever reaches
-// bestMatchScore diluted through watchability's own 0.35 weight (worth
-// +0.7 to the final blend, nowhere near enough against a competitiveness gap
-// this size). A real-world marquee draw isn't a small tiebreaker the way
-// PRIORITY_SCORE_DELTA/OWNED_SERVICE_SCORE_BONUS are - it's applied here,
-// UNDILUTED, directly on top of bestMatchScore, the same way those other two
-// nudges already are, so it actually moves the number by its full stated
-// value instead of losing 65% of itself in a weighted average. Deliberately
-// flat (one flag, one bonus) rather than stacking multiple marquee factors -
-// a derby between two big clubs is already unambiguously marquee; it
-// doesn't need to out-bid a non-marquee fixture by more just for having two
-// reasons instead of one.
-export const MARQUEE_FIXTURE_SCORE_BONUS = 2;
-
 // The full breakdown behind one match's effectiveScore - `baseScore` is the
 // AI's own build-time composite (`match.score`, untouched by any viewer-
 // relative nudge), `bestMatchScore` is that same match after the one
@@ -217,27 +173,19 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
   const priorityNudge = rank === -1 ? 0 : (centerRank - rank) * PRIORITY_SCORE_DELTA;
   const service = resolveService(match.whereToWatchTw);
   const serviceNudge = service && myServiceIds.has(service.id) ? OWNED_SERVICE_SCORE_BONUS : 0;
-  // `match.marqueeCredit` is a 0..1 fraction only MLB's own
-  // computeMlbObjectiveScore sets (see marqueeCreditFraction's own comment
-  // in objective-score.mjs) - undefined for NBA/EPL/F1 (and any older/mocked
-  // match object), which defaults to full credit (1), exactly reproducing
-  // this bonus's original unconditional behavior for those sports. Without
-  // this, a graduated-but-nonzero internal rivalry credit (MLB only) would
-  // still trip `isMarqueeFixture`'s own boolean detection and hand out the
-  // FULL undiluted bonus regardless of how small that internal credit was -
-  // scaling by the same fraction here keeps the two consistent instead of
-  // re-introducing an all-or-nothing cliff at this layer.
-  const marqueeCredit = Number.isFinite(match.marqueeCredit) ? Math.min(1, Math.max(0, match.marqueeCredit)) : 1;
-  const marqueeNudge = isMarqueeFixture(match) ? MARQUEE_FIXTURE_SCORE_BONUS * marqueeCredit : 0;
 
   const baseScore = Number.isFinite(match.score) ? match.score : 0;
   const bestScore = bestMatchScore(match);
-  // How much the unified Best-Match blend (skill + competition + entertainment,
-  // see bestMatchScore/BEST_MATCH_WEIGHTS above) moved the number away from
-  // watchability alone - lets an explanation say "the wider blend nudged
-  // this up/down by X" instead of just "the score is Y", per docs/
-  // recommendation-engine-audit.md's stated goal of never leaving an
-  // adjustment implicit.
+  // How much the unified Best-Match blend (fame + quality + stakes +
+  // closeness, see bestMatchScore/BEST_MATCH_WEIGHTS above) moved the
+  // number away from watchability alone - lets an explanation say "the
+  // wider blend nudged this up/down by X" instead of just "the score is
+  // Y", per docs/recommendation-engine-audit.md's stated goal of never
+  // leaving an adjustment implicit. Fame (a rivalry, a marquee franchise,
+  // national broadcast) is now folded directly into this blend at its own
+  // 40% weight (see objective-score.mjs's own "watchability" - no separate,
+  // undiluted bonus stacked on top of it any more, see BEST_MATCH_WEIGHTS'
+  // own comment for why that patch was removed).
   const preBlendBase = Number.isFinite(match.watchability) ? match.watchability : match.score;
   const blendAdjustment = Number.isFinite(preBlendBase) ? bestScore - preBlendBase : 0;
 
@@ -247,10 +195,9 @@ export function computeEffectiveScore(match, { priorityOrder = [], myServiceIds 
     adjustments: {
       blend: Math.round(blendAdjustment * 1000) / 1000,
       priority: priorityNudge,
-      service: serviceNudge,
-      marquee: marqueeNudge
+      service: serviceNudge
     },
-    effectiveScore: bestScore + priorityNudge + serviceNudge + marqueeNudge
+    effectiveScore: bestScore + priorityNudge + serviceNudge
   };
 }
 

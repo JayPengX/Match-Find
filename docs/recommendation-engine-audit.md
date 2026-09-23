@@ -4860,3 +4860,102 @@ once elapsed time exceeds the cap; still falls back to the cap itself when
 no pre-game estimate is available (defensive - every real call site always
 provides one); a pre-game estimate below `MIN_FINISHED_DURATION_MINUTES` is
 still floored. Full suite **392/392**.
+
+## Round 46 (2026-09-23): "best match" rewritten from scratch - a TV-producer's ranking, not a nail-biter detector
+
+Direct instruction, prompted by a real, reported failure: "why is there no
+Brewer in coming days." Milwaukee Brewers @ Philadelphia Phillies - a real,
+competitive playoff race, skill 7, competitiveness 8, watchability 8, no
+rivalry/big-club signal at all - lost EVERY day from 9/22 through 9/27 to
+whatever other MLB game happened to involve a bigger-market team, because
+Round 45's own predecessor (the star/team-power feature, `MLB_BIG_CLUBS`)
+added a flat, undiluted `+2` `MARQUEE_FIXTURE_SCORE_BONUS` on top of
+`bestMatchScore` for ANY fixture with a big-club name - a swing several
+times the size of `VARIETY_CLOSE_CALL_GAP` (0.6), so a merely-present big
+name (Miami Marlins @ Chicago Cubs, itself unremarkable) could outscore a
+genuinely tense small-market race by 2.5+ points, both winning its own slot
+outright AND keeping Brewers too far behind to ever be considered a "close
+rival" worth a rotated turn. On 9/25-26, Chicago Cubs @ Boston Red Sox (BOTH
+teams on `MLB_BIG_CLUBS`) won two days running for the same reason - the
+exact "same matchup wins repeatedly" failure Round 43/44's whole-window
+rotation exists to prevent, except the gap here was too large for rotation
+to ever engage at all.
+
+Explained the full pipeline to the user in plain language; asked how to fix
+it (shrink the bonus / stop double-counting / widen the rotation gap /
+leave as-is). The user's actual answer went further: "I don't understand
+that at all... rewrite the recommendation system, best match is what you
+determine the best not purely team not purely competitive but try your
+best to have a result that public media will say good (not how close play
+do race is) but overall the matches that usually have highest watch rate
+on TV." Proposed and confirmed a concrete 4-factor design in plain
+language before touching code: **fame ~40%, quality ~30%, stakes ~20%,
+closeness ~10%**.
+
+**The old model** (`objective-score.mjs`): each sport's own
+`computeXObjectiveScore` blended `stakes`/`competitiveness`/`skill`/
+momentum together into ONE `watchability` field, computed `stakes`
+internally and discarded it, then applied rivalry/big-club/derby/national-
+broadcast bonuses gated by a competitiveness-scaled `marqueeCreditFraction`
+(MLB) or capped by a competitiveness-relative "excess damping" ceiling
+(all three sports) - machinery that existed purely to stop a famous name
+from dragging a DECIDED blowout's rating too far above how close tonight's
+score was. `recommendation.mjs` then ALSO applied a second, fully
+undiluted `+2` `MARQUEE_FIXTURE_SCORE_BONUS` directly on `bestMatchScore`
+whenever `isMarqueeFixture` detected a marquee factor string - stacked on
+top of whatever the internal, diluted bonus had already contributed.
+`BEST_MATCH_WEIGHTS` blended five fields: `skill 0.35 / competitiveness
+0.05 / watchability 0.35 / enduranceScore 0.1 / broadcastQuality 0.15`.
+
+**The new model.** `computeXObjectiveScore` now returns FOUR independent
+fields, never blended together inside `objective-score.mjs` itself:
+
+- `watchability` (**Fame**) - a clean, unblended read of name recognition
+  alone (rivalry/derby +2, big-club +2, MLB/EPL; rivalry +1.5, national
+  broadcast +1, NBA), neutral baseline 5, stacking when a fixture is
+  genuinely more than one of these. Never gated by or capped against
+  competitiveness any more - the whole competitiveness-gated credit ramp
+  (`marqueeCreditFraction`, `MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS`) and
+  every per-sport excess-damping ceiling (`MAX_WATCHABILITY_LIFT_OVER_
+  COMPETITIVENESS`, `MLB/NBA/EPL_WATCHABILITY_FULL_LIFT_ALLOWANCE`/
+  `_EXCESS_DAMPING`) is DELETED, not retuned - safe specifically because
+  closeness is no longer the dominant signal fame has to be protected from
+  overriding.
+- `skill` (**Quality**) - unchanged, the better team's own win%.
+- `stakes` (**Stakes**) - the exact same playoff/seed/table-cutoff
+  proximity signal each sport already computed, now RETURNED and used on
+  its own instead of being silently folded into (and lost inside) the old
+  `watchability` blend.
+- `competitiveness` (**Closeness**) - unchanged computation, just a much
+  smaller share of the final ranking now.
+
+`recommendation.mjs`'s `BEST_MATCH_WEIGHTS` is now `watchability 0.4 /
+skill 0.3 / stakes 0.2 / competitiveness 0.1`. `isMarqueeFixture`,
+`MARQUEE_FIXTURE_SCORE_BONUS`, and the whole `marqueeCredit`-threading
+machinery in `computeEffectiveScore` are deleted outright - fame is fully
+inside the blend now, at its own real weight, needing no second, separate,
+undiluted bonus layer.
+
+**Net effect, live-verified** (rebuilt `matches.json`, 2026-09-23): Milwaukee
+Brewers @ Philadelphia Phillies now scores within ~0.6 of the day's pick on
+9/22-24 (down from a 2.5+ point blowout) - close enough to be a genuine,
+respectable second option, even where it still doesn't win outright (a
+legitimate ranking outcome now, not a name-based blackout). Chicago Cubs @
+Boston Red Sox's fame edge over Brewers/Phillies-shaped opponents is now a
+real but modest `+2` on a `0.4`-weighted axis (worth `+0.8` to the final
+blend), not an unconditional `+2` flat addition big enough to decide
+almost every close call on its own.
+
+`public/lib/match-builder.mjs`: `PREGAME_SCORING_FIELDS` gained `stakes`,
+lost `marqueeCredit`; the per-fixture scoring loop clamps and assigns
+`match.stakes` alongside the existing fields.
+
+Rewrote the majority of `tests/objective-score.test.mjs`'s MLB/NBA/EPL
+describe blocks and `tests/recommendation.test.mjs`'s `bestMatchScore`/
+`computeEffectiveScore` describe blocks to match the new, real behavior
+(deleted tests for now-nonexistent gating/damping functions; added tests
+asserting `watchability` no longer moves with stakes/skill/momentum, and
+that `stakes` is now a real, independent, asserted field per sport).
+README's "The `bestMatchScore` blend" section rewritten in full to match.
+Full suite **428/428** (down from 439 - net removal of dead-code tests for
+deleted functions, not reduced coverage of live behavior).

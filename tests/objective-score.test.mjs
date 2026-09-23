@@ -20,9 +20,7 @@ import {
   computeNbaObjectiveScore,
   computeEplObjectiveScore,
   computeF1ObjectiveScore,
-  skillFromWinPct,
-  marqueeCreditFraction,
-  MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS
+  skillFromWinPct
 } from '../public/lib/objective-score.mjs';
 
 describe('clamp', () => {
@@ -296,40 +294,6 @@ describe('skillFromWinPct', () => {
   });
 });
 
-describe('marqueeCreditFraction', () => {
-  test('zero at or below the floor - a genuinely decided pairing earns no marquee credit', () => {
-    assert.equal(marqueeCreditFraction(2), 0);
-    assert.equal(marqueeCreditFraction(1), 0);
-    assert.equal(marqueeCreditFraction(0), 0);
-  });
-
-  test('full credit (1) at or above the ceiling - same as the old hard gate\'s own "yes" case', () => {
-    assert.equal(marqueeCreditFraction(MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS), 1);
-    assert.equal(marqueeCreditFraction(10), 1);
-  });
-
-  test('linear in between - strictly increasing, not a step function', () => {
-    const low = marqueeCreditFraction(3);
-    const mid = marqueeCreditFraction(4);
-    const high = marqueeCreditFraction(5);
-    assert.ok(low > 0 && low < mid);
-    assert.ok(mid < high);
-    assert.ok(high < 1);
-  });
-
-  test('a custom floor/ceiling is respected', () => {
-    assert.equal(marqueeCreditFraction(5, 5, 9), 0);
-    assert.equal(marqueeCreditFraction(9, 5, 9), 1);
-    assert.equal(marqueeCreditFraction(7, 5, 9), 0.5);
-  });
-
-  test('returns 0, not NaN, for a non-finite competitiveness', () => {
-    assert.equal(marqueeCreditFraction(null), 0);
-    assert.equal(marqueeCreditFraction(undefined), 0);
-    assert.equal(marqueeCreditFraction(NaN), 0);
-  });
-});
-
 describe('computeMlbObjectiveScore', () => {
   test('skill reflects the BETTER team\'s own quality, not the average of both - two elite teams score higher skill than two also-rans, even at the identical win% gap', () => {
     const eliteMatchup = computeMlbObjectiveScore({ awayWinPct: 0.62, homeWinPct: 0.58, away: null, home: null, isPostseason: false });
@@ -360,13 +324,16 @@ describe('computeMlbObjectiveScore', () => {
     assert.equal(result.skill, null);
   });
 
-  test('a known historic rivalry raises watchability over an otherwise-identical non-rivalry fixture - the deterministic fix for a real, current-record-mediocre-but-historically-major matchup (e.g. Dodgers vs Giants) losing its slot by a razor-thin scheduling margin', () => {
+  // Fame (watchability) is now a clean, unblended read of name recognition
+  // alone - never mixed with skill/stakes/momentum, never gated by or
+  // capped against competitiveness (see objective-score.mjs's own "Fame is
+  // its own, unblended axis" comment for the full reasoning: a famous name
+  // is a mainstream draw whether or not tonight's specific score is close).
+  test('a known historic rivalry raises watchability over an otherwise-identical non-rivalry fixture, unconditionally', () => {
     const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: false });
     const rivalry = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isRivalry: true });
     assert.ok(rivalry.watchability > plain.watchability);
-    // At this high a competitiveness, full marquee credit applies - same
-    // as the old hard gate's own "yes" case.
-    assert.equal(rivalry.marqueeCredit, 1);
+    assert.ok(rivalry.factors.includes('known historic rivalry matchup'));
   });
 
   // Direct instruction: "we prioritize star/team power" - EPL's own
@@ -376,7 +343,6 @@ describe('computeMlbObjectiveScore', () => {
       const plain = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isBigClub: false });
       const bigClub = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.48, away: null, home: null, isPostseason: false, isBigClub: true });
       assert.ok(bigClub.watchability > plain.watchability);
-      assert.equal(bigClub.marqueeCredit, 1);
       assert.ok(bigClub.factors.includes('known marquee-franchise fixture'));
     });
 
@@ -390,19 +356,25 @@ describe('computeMlbObjectiveScore', () => {
       assert.ok(both.watchability > bigClubOnly.watchability);
       assert.ok(rivalryOnly.watchability > neither.watchability);
       assert.ok(bigClubOnly.watchability > neither.watchability);
-      // The gating fraction itself is a single number (purely a function of
-      // tonight's own competitiveness), not doubled just for having two
-      // reasons - matches recommendation.mjs's own flat, non-stacking
-      // undiluted bonus (MARQUEE_FIXTURE_SCORE_BONUS's own comment).
-      assert.equal(both.marqueeCredit, rivalryOnly.marqueeCredit);
-      assert.equal(both.marqueeCredit, bigClubOnly.marqueeCredit);
     });
 
-    test('gated by tonight\'s own competitiveness the same graduated way as isRivalry - a decided blowout between two marquee names gets little to no credit', () => {
-      // Same real shape as the Dodgers/Giants rivalry case just below -
-      // both Los Angeles Dodgers and San Francisco Giants are also on
-      // MLB_BIG_CLUBS, so a lopsided pairing between them is both.
-      const belowGate = computeMlbObjectiveScore({
+    // Live case this fixes (the actual reason this whole model was
+    // rewritten): a lopsided, low-competitiveness pairing between two
+    // marquee names (Los Angeles Dodgers @ San Francisco Giants, both on
+    // MLB_BIG_CLUBS) used to get its fame bonus gated down toward zero by
+    // tonight's own low competitiveness, which - combined with a second,
+    // unrelated case (Milwaukee Brewers @ Philadelphia Phillies, no fame
+    // signal at all but a genuinely tense playoff race) - meant a real,
+    // competitive small-market series could still lose every single day to
+    // a big-club blowout once the numbers lined up. Fame is no longer
+    // gated by competitiveness at all, so a big name's own lift is the
+    // same full amount whatever tonight's score looks like - it's the
+    // OVERALL ranking (see recommendation.mjs's BEST_MATCH_WEIGHTS, where
+    // stakes/quality/closeness now carry real, separate weight) that
+    // decides whether a famous-but-lopsided game actually outranks a
+    // competitive-but-obscure one, not a gate inside this one field.
+    test('unconditional - a lopsided pairing between two marquee names still gets the full lift, not a competitiveness-discounted fraction', () => {
+      const lopsided = computeMlbObjectiveScore({
         awayWinPct: 96 / 156,
         homeWinPct: 64 / 156,
         away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
@@ -411,114 +383,35 @@ describe('computeMlbObjectiveScore', () => {
         isRivalry: false,
         isBigClub: true
       });
-      assert.equal(belowGate.competitiveness, 5);
-      assert.ok(belowGate.marqueeCredit > 0 && belowGate.marqueeCredit < 1);
+      const lopsidedNoBigClub = computeMlbObjectiveScore({
+        awayWinPct: 96 / 156,
+        homeWinPct: 64 / 156,
+        away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
+        home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
+        isPostseason: false,
+        isRivalry: false,
+        isBigClub: false
+      });
+      assert.equal(lopsided.competitiveness, 5);
+      assert.equal(lopsided.watchability - lopsidedNoBigClub.watchability, 2);
     });
   });
 
-  // Round 31 (2026-09-26 TW time): a REAL Dodgers (96-60) @ Giants (64-92)
-  // pairing that night scored competitiveness 5 - one point under the old
-  // MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS(6) hard gate, so the rivalry
-  // bonus fell to exactly zero, and (because computeMlbObjectiveScore's own
-  // factor string never fired) recommendation.mjs's fully undiluted
-  // MARQUEE_FIXTURE_SCORE_BONUS silently missed it too. Replaced with a
-  // graduated fraction (marqueeCreditFraction) - generic (applies to any
-  // MLB_RIVALRY_PAIRS pairing at any competitiveness), not a Dodgers/Giants
-  // special case.
-  test('a rivalry below the old hard-gate threshold now gets PARTIAL credit instead of none - a real 2026-09-26 case', () => {
-    const belowGate = computeMlbObjectiveScore({
-      awayWinPct: 96 / 156, // Dodgers 96-60
-      homeWinPct: 64 / 156, // Giants 64-92
-      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
-      home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
-      isPostseason: false,
-      isRivalry: true,
-      oddsSpread: null
-    });
-    assert.equal(belowGate.competitiveness, 5, `expected the real 9/26 competitiveness of 5, got ${belowGate.competitiveness}`);
-    assert.ok(belowGate.competitiveness < MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS);
-    // Partial, not zero - the old gate's exact failure mode.
-    assert.ok(belowGate.marqueeCredit > 0 && belowGate.marqueeCredit < 1);
-    assert.ok(belowGate.factors.includes('known historic rivalry matchup'));
-    const noRivalry = computeMlbObjectiveScore({
-      awayWinPct: 96 / 156,
-      homeWinPct: 64 / 156,
-      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 7, losses: 3 }, streakCode: 'W4' },
-      home: { gamesBack: 32, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
-      isPostseason: false,
-      isRivalry: false,
-      oddsSpread: null
-    });
-    assert.ok(belowGate.watchability > noRivalry.watchability);
-  });
-
-  test('a genuinely decided rivalry blowout (competitiveness at the floor) still gets essentially zero marquee credit - the graduated version is not an unconditional rescue', () => {
-    const result = computeMlbObjectiveScore({
-      awayWinPct: 0.65,
-      homeWinPct: 0.28,
-      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 15, lastTen: { wins: 8, losses: 2 }, streakCode: 'W6' },
-      home: { gamesBack: 40, wildCardGamesBack: 38, lastTen: { wins: 2, losses: 8 }, streakCode: 'L5' },
-      isPostseason: false,
-      isRivalry: true,
-      oddsSpread: null
-    });
-    assert.ok(result.competitiveness <= 2);
-    assert.equal(result.marqueeCredit, 0);
-    assert.ok(!result.factors.includes('known historic rivalry matchup'));
-  });
-
-  test('an elite-vs-bad blowout scores higher watchability than an equally lopsided also-ran-vs-bad blowout, thanks to skill - without skill ever winning outright over a genuinely competitive game', () => {
-    const eliteBlowout = computeMlbObjectiveScore({
-      awayWinPct: 0.615,
-      homeWinPct: 0.41,
-      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 9, lastTen: { wins: 6, losses: 4 }, streakCode: 'W2' },
-      home: { gamesBack: 32, wildCardGamesBack: 30, lastTen: { wins: 4, losses: 6 }, streakCode: 'L1' },
-      isPostseason: false,
-      isRivalry: false
-    });
-    const mediocreBlowout = computeMlbObjectiveScore({
-      awayWinPct: 0.35,
-      homeWinPct: 0.4,
-      away: { gamesBack: 25, wildCardGamesBack: 22, lastTen: { wins: 3, losses: 7 }, streakCode: 'L3' },
-      home: { gamesBack: 28, wildCardGamesBack: 25, lastTen: { wins: 4, losses: 6 }, streakCode: null },
-      isPostseason: false,
-      isRivalry: false
-    });
-    // A real, live division race between two good (not necessarily elite)
-    // teams still beats a blowout, elite team or not - skill is one
-    // component among several, never enough on its own to outrank a
-    // genuinely live, close race.
-    const closeRace = computeMlbObjectiveScore({
-      awayWinPct: 0.56,
-      homeWinPct: 0.54,
-      away: { gamesBack: 0, wildCardGamesBack: 0, divisionLeadMargin: 0, lastTen: { wins: 6, losses: 4 }, streakCode: 'W1' },
-      home: { gamesBack: 1, wildCardGamesBack: 0, lastTen: { wins: 7, losses: 3 }, streakCode: 'W2' },
-      isPostseason: false,
-      isRivalry: false
-    });
-    assert.ok(eliteBlowout.watchability > mediocreBlowout.watchability);
-    assert.ok(closeRace.watchability > eliteBlowout.watchability);
-  });
-
-  test('a soft excess penalty, not a hard wall: a large excess over competitiveness is damped, never fully discarded, and never fully unbounded either', () => {
-    // Deliberately extreme: maxed-out stakes, skill and momentum against a
-    // rock-bottom competitiveness, to probe the damping path specifically.
-    const extreme = computeMlbObjectiveScore({
-      awayWinPct: 0.75,
-      homeWinPct: 0.25,
-      away: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' },
-      home: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' },
+  test('watchability comes ONLY from rivalry/big-club - never from stakes, skill, or momentum', () => {
+    const base = { awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isBigClub: false };
+    const plain = computeMlbObjectiveScore({ ...base, away: null, home: null });
+    // Maxed-out stakes (postseason) and a hot streak, still no rivalry/big
+    // club - watchability must stay exactly the same neutral baseline.
+    const maxedStakesAndMomentum = computeMlbObjectiveScore({
+      ...base,
       isPostseason: true,
-      isRivalry: false
+      away: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' },
+      home: { gamesBack: 0, wildCardGamesBack: 0, lastTen: { wins: 10, losses: 0 }, streakCode: 'W10' }
     });
-    // Damped, so it rises well above competitiveness alone...
-    assert.ok(extreme.watchability > extreme.competitiveness);
-    // ...but a soft penalty still means real, ongoing suppression relative
-    // to the raw blended value - it never reaches the maximum just because
-    // every other signal happened to max out.
-    assert.ok(extreme.watchability < 10);
+    assert.equal(maxedStakesAndMomentum.watchability, plain.watchability);
+    // But stakes itself DID change - it just doesn't leak into watchability.
+    assert.equal(maxedStakesAndMomentum.stakes, 10);
   });
-
 
   test('two evenly-matched teams with no other signals score high competitiveness', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
@@ -530,15 +423,16 @@ describe('computeMlbObjectiveScore', () => {
     assert.ok(result.competitiveness <= 3);
   });
 
+  // stakes/momentum are now their own axes (see recommendation.mjs's
+  // BEST_MATCH_WEIGHTS), never blended into watchability - see the
+  // "watchability comes ONLY from rivalry/big-club" test above for that
+  // separation. These test `stakes` directly instead.
   test('a postseason game always gets maximum stakes, regardless of the records', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.75, homeWinPct: 0.25, away: null, home: null, isPostseason: true });
-    // Watchability blends stakes(=10) with the (low) competitiveness, so it
-    // should still land meaningfully above a non-postseason equivalent.
-    const regularSeason = computeMlbObjectiveScore({ awayWinPct: 0.75, homeWinPct: 0.25, away: null, home: null, isPostseason: false });
-    assert.ok(result.watchability > regularSeason.watchability);
+    assert.equal(result.stakes, 10);
   });
 
-  test('two teams both close to a playoff spot raises watchability over two teams far from one', () => {
+  test('two teams both close to a playoff spot score higher stakes than two teams far from one', () => {
     const closeRace = computeMlbObjectiveScore({
       awayWinPct: 0.5,
       homeWinPct: 0.5,
@@ -553,10 +447,12 @@ describe('computeMlbObjectiveScore', () => {
       home: { gamesBack: 20, wildCardGamesBack: 20, lastTen: null, streakCode: null },
       isPostseason: false
     });
-    assert.ok(closeRace.watchability > decidedRace.watchability);
+    assert.ok(closeRace.stakes > decidedRace.stakes);
   });
 
-  test('a team on a hot streak raises watchability over otherwise-identical teams with no streak data', () => {
+  test('a team on a hot streak scores a higher recent-form gap (competitiveness) than otherwise-identical teams with no streak data', () => {
+    // streakMomentum no longer feeds watchability, but its factor string
+    // still surfaces so the local reason text can mention it.
     const withStreak = computeMlbObjectiveScore({
       awayWinPct: 0.5,
       homeWinPct: 0.5,
@@ -564,8 +460,7 @@ describe('computeMlbObjectiveScore', () => {
       home: null,
       isPostseason: false
     });
-    const withoutStreak = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
-    assert.ok(withStreak.watchability >= withoutStreak.watchability);
+    assert.ok(withStreak.factors.some(f => f.startsWith('streak')));
   });
 
   test('a real odds spread contributes to competitiveness even with no record signal at all', () => {
@@ -599,7 +494,7 @@ describe('computeMlbObjectiveScore', () => {
 
   test('every score is always within [1, 10] and factors is always an array', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, away: null, home: null, isPostseason: false });
-    for (const key of ['competitiveness', 'watchability', 'enduranceScore']) {
+    for (const key of ['competitiveness', 'watchability', 'stakes', 'enduranceScore']) {
       assert.ok(result[key] >= 1 && result[key] <= 10, `${key} out of range: ${result[key]}`);
     }
     assert.ok(Array.isArray(result.factors));
@@ -609,6 +504,7 @@ describe('computeMlbObjectiveScore', () => {
     const result = computeMlbObjectiveScore({ awayWinPct: null, homeWinPct: null, away: null, home: null, isPostseason: false });
     assert.equal(result.competitiveness, 5);
     assert.equal(result.watchability, 5);
+    assert.equal(result.stakes, 5);
   });
 });
 
@@ -619,10 +515,14 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(rivalryAndNational.watchability > plain.watchability);
   });
 
-  test('a postseason game raises watchability', () => {
+  // stakes/skill are their own axes now (see recommendation.mjs's
+  // BEST_MATCH_WEIGHTS) - postseason/seed-cutoff proximity affects
+  // `stakes`, not `watchability` (fame), same separation as MLB above.
+  test('a postseason game raises stakes, not watchability', () => {
     const regularSeason = computeNbaObjectiveScore({ awayWinPct: 0.6, homeWinPct: 0.4, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
     const postseason = computeNbaObjectiveScore({ awayWinPct: 0.6, homeWinPct: 0.4, isPostseason: true, isRivalry: false, isNationalBroadcast: false });
-    assert.ok(postseason.watchability > regularSeason.watchability);
+    assert.equal(postseason.stakes, 10);
+    assert.equal(postseason.watchability, regularSeason.watchability);
   });
 
   test('skill is a real, computed value from the better team\'s own win%', () => {
@@ -630,7 +530,7 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(result.skill >= 8);
   });
 
-  test('a real play-in/playoff-seed bubble race raises watchability, even with a mediocre record', () => {
+  test('a real play-in/playoff-seed bubble race raises stakes, even with a mediocre record', () => {
     // Both teams sit right on their conference's play-in cutoff - a real
     // stakes signal the old (record-only) formula had no way to see.
     const noStandings = computeNbaObjectiveScore({ awayWinPct: 0.5, homeWinPct: 0.5, isPostseason: false, isRivalry: false, isNationalBroadcast: false });
@@ -643,7 +543,7 @@ describe('computeNbaObjectiveScore', () => {
       isRivalry: false,
       isNationalBroadcast: false
     });
-    assert.ok(bubbleRace.watchability > noStandings.watchability);
+    assert.ok(bubbleRace.stakes > noStandings.stakes);
     assert.ok(bubbleRace.factors.some(f => f.includes('playoff-seed proximity')));
   });
 
@@ -653,7 +553,7 @@ describe('computeNbaObjectiveScore', () => {
     assert.ok(eliteVsTanking.skill > mediocreVsTanking.skill);
   });
 
-  test('a real blowout is NOT rescued all the way to the maximum, even with a coincidental seed cutoff AND a genuinely elite team\'s own real skill contribution both reading high - the soft cap still meaningfully suppresses it', () => {
+  test('watchability comes ONLY from rivalry/national broadcast - a real blowout with a maxed seed cutoff and elite skill still doesn\'t move it', () => {
     const blowout = computeNbaObjectiveScore({
       awayWinPct: 0.85,
       homeWinPct: 0.15,
@@ -663,14 +563,7 @@ describe('computeNbaObjectiveScore', () => {
       isRivalry: false,
       isNationalBroadcast: false
     });
-    // Real lift over competitiveness alone (skill/stakes are genuine, not
-    // discarded)...
-    assert.ok(blowout.watchability > blowout.competitiveness);
-    // ...but never rescued all the way to the top just because a seed
-    // cutoff and a real skill signal both happen to read high at once -
-    // this is the direct replacement for the old hard
-    // `competitiveness + 3` wall, softer but still a real ceiling.
-    assert.ok(blowout.watchability < 10);
+    assert.equal(blowout.watchability, 5);
   });
 
   test('recent form (last 10) and streak feed in the same way MLB\'s own standings do', () => {
@@ -719,11 +612,10 @@ describe('computeEplObjectiveScore', () => {
     assert.ok(derbyAndBigClub.factors.includes('known big-club fixture'));
   });
 
-  test('a real relegation six-pointer between two mid-table-looking teams scores high, unlike before', () => {
-    // A moderate, not-maxed-out win% gap (real headroom for stakes to
-    // actually move the number, same reasoning as the derby test above) -
-    // both teams sit right on the relegation cutoff, real current stakes a
-    // bare win% record has no way to show on its own.
+  test('a real relegation six-pointer between two mid-table-looking teams scores high stakes, unlike before', () => {
+    // A moderate, not-maxed-out win% gap - both teams sit right on the
+    // relegation cutoff, real current stakes a bare win% record has no way
+    // to show on its own.
     const noStandings = computeEplObjectiveScore({ awayWinPct: 0.35, homeWinPct: 0.3, isDerby: false, isBigClub: false });
     const sixPointer = computeEplObjectiveScore({
       awayWinPct: 0.35,
@@ -733,11 +625,11 @@ describe('computeEplObjectiveScore', () => {
       isDerby: false,
       isBigClub: false
     });
-    assert.ok(sixPointer.watchability > noStandings.watchability);
+    assert.ok(sixPointer.stakes > (noStandings.stakes ?? 0));
     assert.ok(sixPointer.factors.some(f => f.includes('table-position proximity')));
   });
 
-  test('a genuine Champions League race between two non-big clubs also scores high', () => {
+  test('a genuine Champions League race between two non-big clubs also scores high stakes', () => {
     const clRace = computeEplObjectiveScore({
       awayWinPct: 0.55,
       homeWinPct: 0.5,
@@ -746,7 +638,7 @@ describe('computeEplObjectiveScore', () => {
       isDerby: false,
       isBigClub: false
     });
-    assert.ok(clRace.watchability >= 8);
+    assert.ok(clRace.stakes >= 8);
   });
 
   test('skill reflects the BETTER club\'s own points-rate, not the average - catches a genuinely elite club even when the fixture itself is one-sided', () => {
@@ -755,7 +647,7 @@ describe('computeEplObjectiveScore', () => {
     assert.ok(eliteVsStruggler.skill > midTableVsStruggler.skill);
   });
 
-  test('a real blowout is NOT rescued all the way to the maximum, even with a coincidental table cutoff, a big-club bonus, AND a genuinely elite team\'s own real skill all reading high at once - the soft cap still meaningfully suppresses it', () => {
+  test('watchability comes ONLY from derby/big-club - a real blowout with a maxed table cutoff and elite skill still doesn\'t move it', () => {
     const blowout = computeEplObjectiveScore({
       awayWinPct: 0.05,
       homeWinPct: 0.9,
@@ -764,16 +656,8 @@ describe('computeEplObjectiveScore', () => {
       isDerby: false,
       isBigClub: true
     });
-    // Real lift over competitiveness alone (skill/stakes/the big-club bonus
-    // are genuine, not discarded)...
-    assert.ok(blowout.watchability > blowout.competitiveness);
-    // ...but never rescued all the way to the top just because a table
-    // cutoff, a big-club name, and a real skill signal all happen to read
-    // high at once - this is the direct replacement for the old hard
-    // `competitiveness + 3` wall, softer (and here, the TIGHTEST of the
-    // three sports' own dampings - see EPL_WATCHABILITY_EXCESS_DAMPING's
-    // own comment) but still a real ceiling.
-    assert.ok(blowout.watchability < 10);
+    // big-club's own +2 lift, nothing else (not stakes, not skill).
+    assert.equal(blowout.watchability, 7);
   });
 });
 
@@ -797,5 +681,11 @@ describe('computeF1ObjectiveScore', () => {
     const result = computeF1ObjectiveScore({ titleRaceIntensity: null });
     assert.equal(result.competitiveness, 5);
     assert.equal(result.watchability, 5);
+    assert.equal(result.stakes, 5);
+  });
+
+  test('stakes mirrors competitiveness - the title-race intensity IS the stakes signal, no second axis exists', () => {
+    const result = computeF1ObjectiveScore({ titleRaceIntensity: 0.6 });
+    assert.equal(result.stakes, result.competitiveness);
   });
 });

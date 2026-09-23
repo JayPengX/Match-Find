@@ -32,8 +32,6 @@ import {
   BEST_MATCH_WEIGHTS,
   PRIORITY_SCORE_DELTA,
   OWNED_SERVICE_SCORE_BONUS,
-  isMarqueeFixture,
-  MARQUEE_FIXTURE_SCORE_BONUS,
   resolveSportTiming,
   schedulingDurationMinutes,
   schedulingInterval,
@@ -78,6 +76,7 @@ function makeMatch(overrides = {}) {
     timeTbd: false,
     competitiveness: 6,
     watchability: 6,
+    stakes: 6,
     broadcastQuality: 6,
     enduranceScore: 5,
     score: 6,
@@ -87,14 +86,13 @@ function makeMatch(overrides = {}) {
 }
 
 describe('bestMatchScore (the one unified Best Matches blend)', () => {
-  test('blends skill/competitiveness/watchability/enduranceScore/broadcastQuality at the documented weights', () => {
-    const match = makeMatch({ skill: 9, competitiveness: 7, watchability: 8, enduranceScore: 6, broadcastQuality: 4 });
+  test('blends watchability(fame)/skill(quality)/stakes/competitiveness(closeness) at the documented weights', () => {
+    const match = makeMatch({ watchability: 8, skill: 9, stakes: 7, competitiveness: 6 });
     const expected =
-      9 * BEST_MATCH_WEIGHTS.skill +
-      7 * BEST_MATCH_WEIGHTS.competitiveness +
       8 * BEST_MATCH_WEIGHTS.watchability +
-      6 * BEST_MATCH_WEIGHTS.enduranceScore +
-      4 * BEST_MATCH_WEIGHTS.broadcastQuality;
+      9 * BEST_MATCH_WEIGHTS.skill +
+      7 * BEST_MATCH_WEIGHTS.stakes +
+      6 * BEST_MATCH_WEIGHTS.competitiveness;
     assert.ok(Math.abs(bestMatchScore(match) - expected) < 1e-9);
   });
 
@@ -102,66 +100,57 @@ describe('bestMatchScore (the one unified Best Matches blend)', () => {
     // Two elite teams in a close game vs. two also-ran teams in an equally
     // close game - competitiveness/watchability alone can't tell these
     // apart, since neither depends on how good the two teams actually are.
-    const eliteMatchup = makeMatch({ skill: 9, competitiveness: 8, watchability: 8, enduranceScore: 8, broadcastQuality: 8 });
-    const alsoRanMatchup = makeMatch({ skill: 2, competitiveness: 8, watchability: 8, enduranceScore: 8, broadcastQuality: 8 });
+    const eliteMatchup = makeMatch({ skill: 9, competitiveness: 8, watchability: 8, stakes: 8 });
+    const alsoRanMatchup = makeMatch({ skill: 2, competitiveness: 8, watchability: 8, stakes: 8 });
     assert.ok(bestMatchScore(eliteMatchup) > bestMatchScore(alsoRanMatchup));
   });
 
-  // Round 39 (2026-09-22): direct instruction, after live-verifying the
-  // real numeric consequence first - a clearly better team in a slightly
-  // less tense pairing must beat a lesser team in a tense one, generally,
-  // not just on one complained-about date. Live-verified case (2026-09-24):
-  // Milwaukee Brewers @ Philadelphia Phillies (skill 8, comp 7) must beat
-  // Cleveland Guardians @ Boston Red Sox (skill 6, comp 8) - the exact real
-  // pairing that motivated raising BEST_MATCH_WEIGHTS.skill from 0.2 to
-  // 0.35 (and lowering competitiveness from 0.2 to 0.05 to compensate).
-  // Deliberately real numbers, not synthetic ones, so this test would have
-  // failed against the OLD weights (7.35 beat 7.05) and correctly reflects
-  // the tradeoff the user explicitly accepted (see BEST_MATCH_WEIGHTS' own
-  // comment): the SAME shape also flips Chicago Cubs @ Boston Red Sox
-  // (skill 6, comp 8) below Tampa Bay Rays @ Philadelphia Phillies (skill 7,
-  // comp 7) on 9/26/27 - confirmed acceptable, not a silent regression.
-  test('a clearly-better team in a less-tense pairing beats a lesser team in a tenser one (Round 39)', () => {
-    const brewersPhillies = makeMatch({ skill: 8, competitiveness: 7, watchability: 8, enduranceScore: 5, broadcastQuality: 5 });
-    const guardiansRedSox = makeMatch({ skill: 6, competitiveness: 8, watchability: 8, enduranceScore: 7, broadcastQuality: 7 });
-    assert.ok(bestMatchScore(brewersPhillies) > bestMatchScore(guardiansRedSox));
+  // Direct instruction, full rewrite: rank the way a TV network producer
+  // would - "what would the most people actually tune into" - not "which
+  // game is the tensest nail-biter". A live, real failure of the OLD model
+  // motivated this: Milwaukee Brewers @ Philadelphia Phillies (a genuine,
+  // competitive playoff race, no fame signal at all) lost every single day
+  // for a week straight to whatever OTHER MLB game happened to involve any
+  // bigger-market team that day, because the old model's separate,
+  // undiluted "marquee fixture" bonus (+2, stacked on top of a blend where
+  // fame was already diluted in through watchability) dwarfed the ~0.6
+  // point gap the variety-rotation mechanism needs to treat two matchups as
+  // real rivals - blanking a real race out of the schedule entirely rather
+  // than fairly weighing "famous" against "genuinely competitive and
+  // meaningful". FAME is still the single largest factor (40%, it's what
+  // most people actually tune into) - but STAKES (20%) and QUALITY (30%)
+  // now carry enough real, separate weight that a fame-less but genuinely
+  // elite, high-stakes team can still outrank a merely-present big name.
+  test('a genuinely elite, high-stakes small-market team beats a merely-present big name with nothing else going for it', () => {
+    const brewersPhillies = makeMatch({ watchability: 5, skill: 9, stakes: 9, competitiveness: 6 }); // no fame bonus, elite + high stakes
+    const bigNamePresence = makeMatch({ watchability: 7, skill: 5, stakes: 5, competitiveness: 5 }); // fame alone, nothing else special
+    assert.ok(bestMatchScore(brewersPhillies) > bestMatchScore(bigNamePresence));
   });
 
   test('renormalizes over whichever dimensions are actually present', () => {
-    const match = makeMatch({
-      competitiveness: undefined,
-      watchability: 8,
-      enduranceScore: undefined,
-      broadcastQuality: 4
-    });
-    const totalWeight = BEST_MATCH_WEIGHTS.watchability + BEST_MATCH_WEIGHTS.broadcastQuality;
-    const expected =
-      (8 * BEST_MATCH_WEIGHTS.watchability + 4 * BEST_MATCH_WEIGHTS.broadcastQuality) / totalWeight;
+    const match = makeMatch({ competitiveness: undefined, watchability: 8, stakes: undefined, skill: 4 });
+    const totalWeight = BEST_MATCH_WEIGHTS.watchability + BEST_MATCH_WEIGHTS.skill;
+    const expected = (8 * BEST_MATCH_WEIGHTS.watchability + 4 * BEST_MATCH_WEIGHTS.skill) / totalWeight;
     assert.ok(Math.abs(bestMatchScore(match) - expected) < 1e-9);
   });
 
   test('no dimension can dominate on its own - one exceptional axis alone is not enough to top a well-rounded match', () => {
     // A one-dimensional "10 at watchability, mediocre everywhere else" match
     // should NOT beat a well-rounded match that's merely good across the board.
-    const oneDimensional = makeMatch({ competitiveness: 2, watchability: 10, enduranceScore: 2, broadcastQuality: 2 });
-    const wellRounded = makeMatch({ competitiveness: 7, watchability: 7, enduranceScore: 7, broadcastQuality: 7 });
+    const oneDimensional = makeMatch({ watchability: 10, skill: 2, stakes: 2, competitiveness: 2 });
+    const wellRounded = makeMatch({ watchability: 7, skill: 7, stakes: 7, competitiveness: 7 });
     assert.ok(bestMatchScore(wellRounded) > bestMatchScore(oneDimensional));
   });
 
   test('falls back to watchability, then the build-time composite score, when nothing else is set at all', () => {
-    const withWatchability = makeMatch({
-      competitiveness: undefined,
-      watchability: 8,
-      enduranceScore: undefined,
-      broadcastQuality: undefined
-    });
+    const withWatchability = makeMatch({ competitiveness: undefined, watchability: 8, stakes: undefined, skill: undefined });
     assert.equal(bestMatchScore(withWatchability), 8);
 
     const nothingAtAll = makeMatch({
       competitiveness: undefined,
       watchability: undefined,
-      enduranceScore: undefined,
-      broadcastQuality: undefined,
+      stakes: undefined,
+      skill: undefined,
       score: 5
     });
     assert.equal(bestMatchScore(nothingAtAll), 5);
@@ -198,54 +187,22 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(notOwned.adjustments.service, 0);
   });
 
-  test('effectiveScore is exactly bestMatchScore + priority + service + marquee, nothing hidden', () => {
-    const match = makeMatch({ sport: 'MLB', watchability: 7, broadcastQuality: 9, whereToWatchTw: 'Apple TV' });
+  // Fame (a rivalry, a marquee franchise) is folded directly into
+  // bestMatchScore now, at its own 40% weight (see objective-score.mjs's
+  // `watchability` and recommendation.mjs's BEST_MATCH_WEIGHTS) - there is
+  // no longer a second, separate "marquee fixture" bonus stacked on top of
+  // the blend (see BEST_MATCH_WEIGHTS' own comment for why that patch was
+  // removed: it could swamp a genuinely competitive, high-stakes match with
+  // no fame signal at all). `adjustments` only ever names priority/service
+  // now.
+  test('effectiveScore is exactly bestMatchScore + priority + service, nothing hidden', () => {
+    const match = makeMatch({ sport: 'MLB', watchability: 7, whereToWatchTw: 'Apple TV' });
     const breakdown = computeEffectiveScore(match, {
       priorityOrder: ['MLB', 'NBA'],
       myServiceIds: new Set(['appletv'])
     });
-    assert.equal(
-      breakdown.effectiveScore,
-      breakdown.bestMatchScore + breakdown.adjustments.priority + breakdown.adjustments.service + breakdown.adjustments.marquee
-    );
-  });
-
-  // Live-verified case (docs/recommendation-engine-audit.md Round 14):
-  // Liverpool @ AFC Bournemouth (2026-09-20) lost its slot to Crystal Palace
-  // @ Leeds United even after isBigClub's own +2 watchability bump, because
-  // that bump only reaches bestMatchScore diluted through watchability's own
-  // 0.35 weight (worth +0.7 net, nowhere near enough). The marquee bonus is
-  // applied UNDILUTED, on top of bestMatchScore, same as priority/service.
-  test('a marquee fixture (derby/big-club/rivalry) gets its bonus applied undiluted, not blended through watchability', () => {
-    const marquee = makeMatch({ objectiveFactors: ['known big-club fixture'] });
-    const plain = makeMatch({ objectiveFactors: ['season win% gap 5.0pp'] });
-    const marqueeBreakdown = computeEffectiveScore(marquee, {});
-    const plainBreakdown = computeEffectiveScore(plain, {});
-    assert.equal(marqueeBreakdown.adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
-    assert.equal(plainBreakdown.adjustments.marquee, 0);
-    assert.equal(marqueeBreakdown.effectiveScore, marqueeBreakdown.bestMatchScore + MARQUEE_FIXTURE_SCORE_BONUS);
-  });
-
-  // Round 31: MLB's own computeMlbObjectiveScore now sets a graduated
-  // marqueeCredit fraction (see objective-score.mjs's marqueeCreditFraction)
-  // instead of an all-or-nothing gate. Without threading that fraction
-  // through here too, ANY nonzero internal credit would still trip
-  // isMarqueeFixture's own boolean detection and hand out the FULL
-  // undiluted bonus regardless of how small that credit was - re-creating
-  // an all-or-nothing cliff one layer up.
-  test('marqueeCredit (when present on the match) scales the undiluted marquee bonus proportionally', () => {
-    const full = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 1 });
-    const half = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 0.5 });
-    const none = makeMatch({ objectiveFactors: ['known historic rivalry matchup'], marqueeCredit: 0 });
-    assert.equal(computeEffectiveScore(full, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
-    assert.equal(computeEffectiveScore(half, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS * 0.5);
-    assert.equal(computeEffectiveScore(none, {}).adjustments.marquee, 0);
-  });
-
-  test('a match with no marqueeCredit field at all (NBA/EPL, or any older match object) still gets the full undiluted bonus - unchanged behavior', () => {
-    const match = makeMatch({ objectiveFactors: ['known derby fixture'] });
-    assert.equal(match.marqueeCredit, undefined);
-    assert.equal(computeEffectiveScore(match, {}).adjustments.marquee, MARQUEE_FIXTURE_SCORE_BONUS);
+    assert.equal(breakdown.effectiveScore, breakdown.bestMatchScore + breakdown.adjustments.priority + breakdown.adjustments.service);
+    assert.equal(breakdown.adjustments.marquee, undefined);
   });
 
   test('computeRecommendationScore composes the score breakdown with confidence', () => {
@@ -255,19 +212,6 @@ describe('computeEffectiveScore / computeRecommendationScore', () => {
     assert.equal(result.confidence, CONFIDENCE_OBJECTIVE);
     assert.ok(result.adjustments);
     assert.equal(typeof result.baseScore, 'number');
-  });
-});
-
-describe('isMarqueeFixture', () => {
-  test('true for derby/big-club/rivalry factor strings, false otherwise', () => {
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known derby fixture'] })), true);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known big-club fixture'] })), true);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known historic rivalry matchup'] })), true);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known rivalry matchup'] })), true);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['known marquee-franchise fixture'] })), true);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: ['season win% gap 5.0pp'] })), false);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: [] })), false);
-    assert.equal(isMarqueeFixture(makeMatch({ objectiveFactors: undefined })), false);
   });
 });
 

@@ -790,7 +790,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
       result = computeF1ObjectiveScore({ titleRaceIntensity: f1TitleRaceIntensity });
       break;
     default:
-      result = { competitiveness: 5, watchability: 5, enduranceScore: 5, skill: null, factors: [] };
+      result = { competitiveness: 5, watchability: 5, stakes: 5, enduranceScore: 5, skill: null, factors: [] };
   }
   return { ...result, broadcastQuality };
 }
@@ -869,12 +869,12 @@ export function buildObjectiveReasonZh(factors) {
 export const PREGAME_SCORING_FIELDS = [
   'competitiveness',
   'watchability',
+  'stakes',
   'enduranceScore',
   'broadcastQuality',
   'skill',
   'reason',
   'objectiveFactors',
-  'marqueeCredit',
   'score',
   'confidence',
   'oddsSpread',
@@ -1097,6 +1097,7 @@ export async function buildMatches({
     const objective = computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity });
     match.competitiveness = clamp(Math.round(objective.competitiveness), 1, 10);
     match.watchability = clamp(Math.round(objective.watchability), 1, 10);
+    match.stakes = Number.isFinite(objective.stakes) ? clamp(Math.round(objective.stakes), 0, 10) : null;
     match.enduranceScore = clamp(Math.round(objective.enduranceScore), 1, 10);
     match.broadcastQuality = clamp(Math.round(objective.broadcastQuality), 1, 10);
     match.skill = Number.isFinite(objective.skill) ? objective.skill : null;
@@ -1107,12 +1108,11 @@ export async function buildMatches({
     // own comment.
     match.whereToWatchTw = resolveWhereToWatchTw(match);
     match.objectiveFactors = objective.factors;
-    // Only MLB's own computeMlbObjectiveScore sets this (a graduated 0..1
-    // marquee-credit fraction, see marqueeCreditFraction's own comment) -
-    // undefined for NBA/EPL/F1, which recommendation.mjs's own
-    // computeEffectiveScore treats as full credit (1), preserving their
-    // existing unconditional rivalry/derby/big-club bonus behavior exactly.
-    match.marqueeCredit = objective.marqueeCredit;
+    // `score` still displayed/stored as a rough two-axis summary (how good
+    // is it, how mainstream a draw is it) - recommendation.mjs's own
+    // bestMatchScore is the real ranking (see BEST_MATCH_WEIGHTS there),
+    // this is just the plain build-time composite `resolveViewingPlan`
+    // falls back to when NEITHER of those axes is set at all.
     match.score = Math.round(((match.competitiveness + match.watchability) / 2) * 10) / 10;
     // How much this score should actually be trusted - see
     // computeConfidence's own comment for what it's grounded in.

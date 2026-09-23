@@ -247,42 +247,46 @@ AI involvement anywhere, for the second time in this project's history.
 
 ### The `bestMatchScore` blend
 
-`bestMatchScore` is a weighted blend of five axes
-(`BEST_MATCH_WEIGHTS` in `public/lib/recommendation.mjs`):
+**Full rewrite** (direct instruction, replacing everything below through
+2026-09-23): rank the way a TV network producer would — "what would the
+most people actually tune into" — not "which game is the tensest
+nail-biter." The previous model blended five fields together and then
+bolted a separate, undiluted "marquee fixture" bonus on top just to give a
+famous team enough real weight to matter — a patch that, once MLB gained a
+second stackable name-based bonus (`isBigClub`, alongside the existing
+rivalry bonus), could blank a genuinely competitive small-market race out
+of the recommended lineup for a week straight any time literally any
+bigger name played that day, because the patch's own flat `+2` dwarfed the
+`0.6`-point gap the whole-week variety-rotation mechanism needs to treat
+two matchups as real rivals (see [Games that already happened can't
+reshape a series](#games-that-already-happened-cant-reshape-a-series)).
+Live case: Milwaukee Brewers @ Philadelphia Phillies — a real, competitive
+playoff race with no fame signal at all — lost every single day from
+9/22–9/27 to whatever other MLB game happened to involve a bigger-market
+team, even to a merely-present Chicago Cubs game against a mediocre Miami
+Marlins side.
+
+`bestMatchScore` is now a weighted blend of four axes
+(`BEST_MATCH_WEIGHTS` in `public/lib/recommendation.mjs`), each still
+computed from real data — no vibes, no AI:
 
 | Axis | Weight | What it measures |
 |---|---|---|
-| `skill` | 0.35 | How *good* the two teams actually are |
-| `competitiveness` | 0.05 | How *close* tonight's specific pairing is |
-| `watchability` | 0.35 | Entertainment value / mainstream public attention |
-| `enduranceScore` | 0.1 | Does the contest stay meaningful all the way through |
-| `broadcastQuality` | 0.15 | Production quality of watching it |
+| `watchability` (**Fame**) | 0.4 | Is this a mainstream draw on name recognition alone — a historic rivalry, a big-market/marquee franchise, national broadcast placement? |
+| `skill` (**Quality**) | 0.3 | How *good* are the two teams actually, independent of tonight's pairing |
+| `stakes` (**Stakes**) | 0.2 | How much does this game matter for the season/championship race right now |
+| `competitiveness` (**Closeness**) | 0.1 | How close is tonight's specific score expected to be |
 
-These weights reflect a direct, explicit choice: a clearly-better team
-should generally beat a merely-tenser pairing. `skill`'s weight was raised
-(from an original 0.2) and `competitiveness`'s lowered (from an original
-0.2) specifically because a genuinely great team playing a lopsided game
-was, at one point, losing recommendation slots to a mediocre-but-close
-pairing purely on closeness. This was verified live rather than assumed: a
-fresh EPL fetch put Sunderland @ Manchester City (skill 10, competitiveness
-1 — lopsided on paper) ahead of Crystal Palace @ Leeds United (skill 3,
-competitiveness 6) under these exact weights, correctly prioritizing the
-star club despite the lopsided score. The behavior is not sport-specific —
-`bestMatchScore`/`BEST_MATCH_WEIGHTS` is one shared blend for every sport's
-`skill`/`competitiveness`/`watchability`/`enduranceScore`/`broadcastQuality`
-fields; there is no per-sport gate in `computeEffectiveScore`.
-
-The blend is deliberately never anchored on just one of those axes, so a
-match that's exceptional on only one dimension while mediocre on the rest
-doesn't automatically win over a well-rounded one. It's renormalized over
-whichever of the five a fixture actually has — a finished/never-scored
-match, or a sport missing one signal, still gets a real number built from
-what *is* known. The one place a viewer's own taste actually overrides the
+Renormalized over whichever of the four a fixture actually has — a
+finished/never-scored match, or a sport missing one signal (F1 has no
+`skill`), still gets a real number built from what *is* known. Falls back
+to the build-time composite `match.score` only when none of the four are
+set at all. The one place a viewer's own taste actually overrides the
 algorithm is **Prefer** — swiping a card stack to commit to a specific
 alternative (see [Pinning: "Prefer"](#pinning-prefer)) — which is local,
 explicit, and per-match, not a blanket ranking toggle.
 
-#### `skill`
+#### `skill` (Quality)
 
 `skillFromWinPct` (`public/lib/objective-score.mjs`) is deliberately a
 separate axis from `competitiveness`: two elite teams playing a close game
@@ -292,88 +296,73 @@ it the two teams' *average* win%/points-rate. MLB instead feeds it the
 *better* team's own win% (`Math.max(awayWinPct, homeWinPct)`) — an average
 cancels out exactly the case this axis exists for: a 96-60 elite Dodgers
 team against a 64-92 Giants team averages to roughly .51 (a neutral
-skill≈5, indistinguishable from two genuinely mediocre .500-ish teams, as
-confirmed by direct review), while the better-team's-own-win% version
-correctly reads that pairing as containing a genuinely elite team. `skill`
-is null for F1 (no per-competitor quality signal exists for a
-single-driver race) and renormalized away like any other missing signal.
+skill≈5, indistinguishable from two genuinely mediocre .500-ish teams),
+while the better-team's-own-win% version correctly reads that pairing as
+containing a genuinely elite team. `skill` is null for F1 (no
+per-competitor quality signal exists for a single-driver race) and
+renormalized away like any other missing signal.
 
-#### `watchability`
+#### `stakes` (Stakes)
 
-`watchability` blends the deterministic objective score's own
-national-broadcast/rivalry/derby detectors and betting-market signal with
-`skill` directly — a real addition, since `skill` previously sat computed
-but unused in the return value. Each sport uses its own tailored blend and
-its own guardrail against one bonus swamping the whole score:
+How much a fixture matters for the season/championship race right now —
+MLB's playoff/wild-card proximity (`playoffProximityScore`, preferring the
+MLB Stats API's own `magicNumber` when a division leader hasn't clinched
+yet — see below), NBA's play-in/playoff seed-cutoff proximity
+(`cutoffProximityScore`), EPL's Champions League/relegation table-position
+proximity, each maxed at 10 for a genuine postseason game (MLB/NBA). F1 has
+no separate stakes signal — the championship-race intensity that already
+drives its `competitiveness`/`watchability` *is* the stakes. This used to
+be computed and then discarded straight into `watchability`'s own internal
+blend; it's now returned and used on its own, at its own weight, in the
+top-level ranking.
 
-- **MLB**: `stakes 0.3 / competitiveness 0.3 / skill 0.25 / momentum 0.15`.
-  Guardrail: `MLB_WATCHABILITY_FULL_LIFT_ALLOWANCE` /
-  `MLB_WATCHABILITY_EXCESS_DAMPING` (0.4) — the first 3 points of lift over
-  tonight's own competitiveness pass through untouched, and any excess
-  beyond that is *damped*, not hard-walled, so a genuinely elite team in an
-  otherwise-lopsided game can still earn real (if diminishing) extra
-  credit.
-- **NBA**: blends `skill` at weight 0.2 (lower than MLB's 0.25, since NBA
-  already has stackable rivalry *and* national-broadcast bonuses that
-  partially overlap with what a continuous skill score would add), with a
-  tighter damping factor, `NBA_WATCHABILITY_EXCESS_DAMPING` = 0.3 (versus
-  MLB's 0.4), since NBA's two stackable bonuses can build up more excess.
-- **EPL**: blends `skill` at weight 0.3 — the largest of the three, since
-  EPL has no recent-form/momentum signal at all to otherwise fill that
-  weight budget — with the tightest damping of the three (0.25), since EPL
-  can stack a derby *and* a big-club bonus together (up to +4) on top of
-  skill. Both NBA and EPL use the same "better team's own win%, not the
-  average" logic as MLB, for the same reason: an elite club grinding
-  through a currently-lopsided score against a weak side would otherwise
-  average back to a neutral skill reading.
-- For NBA and EPL specifically, neither a rivalry/derby/big-club name nor a
-  division leader's own "stakes" reading can lift `watchability` more than
-  `MAX_WATCHABILITY_LIFT_OVER_COMPETITIVENESS` (3) points above tonight's
-  own competitiveness. This guardrail exists because of a real case: a
-  96-60 Dodgers team, already clinched, blowing out a 64-92 last-place
-  Giants team still scored a maxed-out watchability purely from
-  "Dodgers-Giants" being a historic rivalry name, outranking a genuinely
-  live playoff race elsewhere that night.
+#### `watchability` (Fame)
 
-**MLB's rivalry bonus and the marquee-credit cliff.** MLB's own rivalry
-bonus additionally scales by `marqueeCreditFraction(competitiveness)` — MLB
-only. This isn't a standings-API depth gap (NBA's own standings
-integration above already matches MLB's own); it's a deliberate choice to
-keep protecting NBA/EPL's name-based bonuses from early-season sampling
-noise a full-season MLB-style gate would wrongly silence (see [Known
-Limitations](#known-limitations)). This replaced a hard gate,
-`MIN_COMPETITIVENESS_FOR_MARQUEE_BONUS` (6): a real, live Dodgers (96-60) @
-Giants (64-92) pairing scored competitiveness 5, one point under that old
-threshold, so the entire rivalry bonus fell to exactly zero — full credit
-one point above the line, none at all one point below. It was replaced
-with a linear ramp (0 credit at competitiveness 2 or below, full credit at
-6 or above, reusing that exact old threshold as the ceiling) so a fixture
-just under the old line gets a proportional share instead of falling off a
-cliff. This same fraction also scales the fully undiluted
-`MARQUEE_FIXTURE_SCORE_BONUS` in `public/lib/recommendation.mjs` (via
-`match.marqueeCredit`, set only by MLB — NBA/EPL default to full credit,
-preserving their own unconditional behavior); without that additional
-step, any nonzero internal credit would still trip `isMarqueeFixture`'s
-boolean detection and hand out the *full* undiluted bonus regardless of how
-small the internal credit was, re-creating the same cliff one layer up.
+A clean, **unblended** read of "is this a mainstream draw" — never mixed
+with `skill`/`stakes`/momentum, and never gated by or capped against
+`competitiveness` the way it used to be. Neutral baseline 5; a historic
+rivalry and a big-market/marquee franchise each add their own full,
+undiscounted lift and stack when a fixture is genuinely both (a Yankees @
+Red Sox game draws more than either fact alone):
 
-**The root cause behind the same Dodgers/Giants case was also fixed
-directly, not just capped.** A division leader's own `gamesBack` reads 0
-whether its lead is a nail-biter or a 20+ game runaway, so
-`playoffProximityScore` now also takes a `divisionLeadMargin` (the
-runner-up's own `gamesBack`, computed once per division in
-`parseMlbStandingsResponse` from data already in the same standings
-response) and discounts a comfortable leader's stakes the same way it
-already discounts a team chasing from behind — floored at 2, never
-automatically maxed at 10 just for holding first place. The same direction
-was applied to NBA and EPL, each with its own tailored formula rather than
-copying MLB's numbers (see the per-sport blend weights above).
+- **MLB**: `+2` known historic rivalry (`MLB_RIVALRY_PAIRS`), `+2`
+  marquee franchise (`MLB_BIG_CLUBS` — Yankees, Dodgers, Red Sox, Cubs,
+  Giants, Cardinals, Braves, Mets; either side alone qualifies).
+- **NBA**: `+1.5` known rivalry, `+1` national broadcast
+  (`isNationalBroadcast`).
+- **EPL**: `+2` known derby (`isEplDerby`), `+2` big club
+  (`EPL_BIG_CLUBS`, England's "Big Six").
+
+Removing the old competitiveness-gated credit ramp and the per-sport
+excess-damping ceilings this section used to document (all of them existed
+purely to stop a famous name from dragging a decided blowout's rating too
+far above how close tonight's score was — which only mattered because
+closeness used to be the dominant signal watchability was measured
+against) is safe precisely *because* closeness is now just a 10% factor in
+the overall ranking, not the yardstick fame has to be protected from
+overriding: a fame-less but genuinely elite, high-stakes team can still
+outrank a merely-present big name through `skill`/`stakes`'s own real,
+separate weight, without needing a gate inside `watchability` itself.
+
+**The Dodgers/Giants root cause is still fixed, just differently now.** A
+division leader's own `gamesBack` reads 0 whether its lead is a nail-biter
+or a 20+ game runaway, so `playoffProximityScore` also takes a
+`divisionLeadMargin` (the runner-up's own `gamesBack`, computed once per
+division in `parseMlbStandingsResponse`) and discounts a comfortable
+leader's `stakes` the same way it already discounts a team chasing from
+behind — floored at 2, never automatically maxed at 10 just for holding
+first place. The same direction was applied to NBA and EPL. Previously
+this fed into a gate on the fame *bonus itself*; now it simply keeps
+`stakes` honest as its own axis, and a real blowout no longer needs
+`watchability` to be capped at all, since fame no longer inflates the
+overall score enough on its own to rescue a lopsided, low-stakes,
+low-skill game.
 
 **`divisionLeadMargin` alone still can't tell a comfortable-but-early lead
 apart from a comfortable, imminent-clinch one.** It's a snapshot of
 today's standings with no idea how many games are even left to play — "6
 games up in June" and "6 games up with a week left" read identically.
-`playoffProximityScore` now prefers the MLB Stats API's own `magicNumber`
+`playoffProximityScore` prefers the MLB Stats API's own `magicNumber`
 whenever a division leader hasn't clinched yet (see
 `sport-signals.mjs`'s `parseMagicNumber`) — a real win-or-opponent-loss
 countdown that already bakes the remaining schedule in, so a small one is
@@ -388,10 +377,7 @@ live race per contemporary coverage — magic number 5, both reading as
 genuinely tense. The slope (0.25/point, gentler than `divisionLeadMargin`'s
 own 0.8/point) was chosen specifically so a magic number this small still
 lands close to what the already-tuned `divisionLeadMargin` reading gives
-an equally tense same-day race — a first cut (0.5/point) discounted it
-enough to silently drop that exact rival more than the whole-week variety
-rotation's own close-call gap behind its incumbent, excluding a genuinely
-live rival from rotation consideration entirely.
+an equally tense same-day race.
 
 **Star/team power — MLB's own version of EPL's "Big Six".** Direct
 instruction: "we prioritize star/team power." A pure win%/standings-based
@@ -401,17 +387,13 @@ record — the same gap `MLB_RIVALRY_PAIRS`/`EPL_BIG_CLUBS` already cover for
 a specific historic pairing or England's biggest clubs, but MLB had no
 per-club (rather than per-pairing) equivalent. `MLB_BIG_CLUBS`
 (`sport-duration.mjs`) is a short, deliberately conservative list of MLB's
-biggest national brands (Yankees, Dodgers, Red Sox, Cubs, Giants,
-Cardinals, Braves, Mets) — either side alone qualifies, same as
-`isEplBigClub`. Stacks additively with a genuine rivalry in
-`computeMlbObjectiveScore` (a Yankees @ Red Sox game is both, and gets more
-lift than either fact alone) rather than competing with it, and is gated by
-tonight's own `competitiveness` the same graduated way the existing rivalry
-bonus already is (added to it, not overriding it — a decided blowout
-between two marquee names still gets little to no credit). Since MLB can
-now stack two name-based bonuses the way EPL always could,
-`MLB_WATCHABILITY_EXCESS_DAMPING` was tightened to match EPL's own 0.25
-(from 0.4), for the same reason EPL's was already tighter than MLB's.
+biggest national brands — either side alone qualifies, same as
+`isEplBigClub`. Stacks additively with a genuine rivalry (a Yankees @ Red
+Sox game is both, and gets more lift than either fact alone) rather than
+competing with it. This is exactly the feature whose interaction with the
+old competitiveness-gated model caused the Brewers/Phillies blackout above
+— fixed by the full rewrite this whole section now describes, not by
+retuning the old gate further.
 
 ### Known scoring limitations
 
@@ -1823,15 +1805,6 @@ doesn't break anything: the site just shows that team's English name only.
 - **F1 gap/interval figures aren't always available** live — ESPN's own
   `competitor.statistics` field has come back empty on every real race
   weekend checked, so it's read defensively rather than relied on.
-- **MLB's marquee-credit ramp (`marqueeCreditFraction`) is MLB-only** —
-  NBA and EPL default to full rivalry-bonus credit unconditionally. This
-  isn't a standings-depth gap (NBA's own standings integration now matches
-  MLB's — seed-cutoff gaps, last-10 record, streak — see
-  `computeNbaObjectiveScore`); it's a deliberate choice to keep protecting
-  NBA/EPL's name-based bonuses (rivalry, derby, big-club, national
-  broadcast) from early-season sampling noise a full-season MLB-style gate
-  would wrongly silence — the real case (Liverpool @ AFC Bournemouth, an
-  early-season noisy 0.2/0.6 split) that bonus was written to survive.
 - **The published `checksums.txt`-style reproducibility concerns from
   this org's other repos don't apply here** — Match Find has no compiled
   build artifact; what's deployed is the same static JavaScript reviewed
