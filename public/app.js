@@ -759,7 +759,9 @@ function writeStoredJson(key, value) {
 
 const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 
-const DEFAULT_SPORT_ORDER = Object.keys(SPORT_LABEL_KEYS);
+// Default sport priority, best first - also the order the enabled-sports
+// toggles are listed in. Every sport in SPORT_LABEL_KEYS must appear here.
+const DEFAULT_SPORT_ORDER = ['F1', 'NBA', 'Premier League', 'MLB'];
 
 function loadPriorityOrder() {
   const stored = readStoredJson(SETTINGS_STORAGE_KEY);

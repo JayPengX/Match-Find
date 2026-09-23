@@ -1204,7 +1204,8 @@ a strong clue (see above).
 before it feeds `computeDayPlan`'s scheduling weight (which fixture wins a
 genuinely contested, overlapping stretch of the day) — a viewer's
 preferred sports win a close scheduling call a little more easily, and
-their least favorite needs to be a little better to win one. This is a
+their least favorite needs to be a little better to win one. The default
+order is F1, NBA, Premier League, MLB. This is a
 small, symmetric tilt (1st-ranked gets the biggest positive nudge,
 last-ranked the biggest negative, the exact middle rank gets none), never
 enough on its own to make a mediocre match beat a genuinely great one. The
