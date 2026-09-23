@@ -2727,9 +2727,28 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // is this PLUS the style reset, for the two cases where the card
   // actually stays in the DOM and genuinely needs to animate back.
   function resetDragState() {
+    const pointerId = activePointerId;
     activePointerId = null;
     isHorizontalDrag = false;
     dragDx = 0;
+    // Explicit, not just implicit-on-pointerup: on a COMMIT specifically
+    // (endDrag's own commit branch below), choose() tears this exact card
+    // out of the DOM SYNCHRONOUSLY, in the same call stack as the pointerup
+    // event that's still being handled - before this fix, capture release
+    // relied entirely on the browser's own implicit "pointerup releases
+    // capture" behavior settling BEFORE that removal, with no guarantee it
+    // does. Live-reported as every click anywhere on the page (day tabs,
+    // settings, filter chips - not just this card) needing two taps after
+    // any single swipe, persisting for the rest of the session: consistent
+    // with WebKit's touch/gesture recognizer being left in a confused state
+    // when the element it still considers "captured" disappears out from
+    // under it mid-gesture-teardown, needing one throwaway tap anywhere to
+    // reset itself. Releasing here, before resetDragState's caller does
+    // anything else (including a synchronous DOM removal), closes that
+    // race instead of hoping the browser's own cleanup wins it.
+    if (pointerId != null) {
+      try { card.releasePointerCapture(pointerId); } catch { /* already released, or node already gone */ }
+    }
     if (isTrackingSwipe) {
       isTrackingSwipe = false;
       stopTrackingSwipe();
@@ -2793,9 +2812,9 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
         // itself forever: every later swipe/tap pinned nothing visible and
         // live scores stopped updating. No transform has been applied yet
         // (isHorizontalDrag is still false), so there's no style to reset.
-        const pointerId = activePointerId;
+        // resetDragState itself now releases pointer capture too (see its
+        // own comment) - no need to duplicate that here.
         resetDragState();
-        try { card.releasePointerCapture(pointerId); } catch { /* already released */ }
         return;
       }
       isHorizontalDrag = true;
