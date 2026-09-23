@@ -65,3 +65,12 @@ describe('index.html modulepreload links', () => {
     assert.deepEqual([...preloaded].sort(), [...importGraph()].sort());
   });
 });
+
+describe('prebuilt snapshot preload', () => {
+  test("index.html preloads the same URL app.js fetches", () => {
+    const html = readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8');
+    const app = readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8');
+    const url = app.match(/const SERVER_SNAPSHOT_URL = '([^']+)'/)[1];
+    assert.ok(html.includes(`<link rel="preload" as="fetch" crossorigin href="${url}" />`));
+  });
+});

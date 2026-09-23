@@ -51,6 +51,11 @@
      since those are CORS fetches) and ESPN's image CDN (every logo). -->
 <link rel="preconnect" href="https://sports-proxy.pengzjay.workers.dev" crossorigin />
 <link rel="preconnect" href="https://a.espncdn.com" />
+<!-- The prebuilt match-list snapshot (see app.js, SERVER_SNAPSHOT_URL):
+     starts downloading immediately, alongside app.js, instead of only once
+     all the code has loaded and run - app.js's own fetch of the same URL
+     then picks up this response. Keep the URL in sync with app.js. -->
+<link rel="preload" as="fetch" crossorigin href="https://raw.githubusercontent.com/jaypengx-collab/Match-Find/data/matches.json" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <!-- Loaded without blocking: a normal stylesheet <link> holds back every

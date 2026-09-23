@@ -3408,8 +3408,11 @@ const IS_DEPLOYED_BUILD = !APP_BUILD_ID.startsWith('__');
 async function fetchServerSnapshot() {
   if (!IS_DEPLOYED_BUILD) return null;
   try {
+    // Default cache mode (not 'no-store'), so this can reuse index.html's
+    // <link rel="preload"> of the same URL instead of downloading it twice.
+    // GitHub's CDN already caps its own caching at 5 minutes, and the age
+    // check below discards anything too old regardless.
     const response = await fetch(SERVER_SNAPSHOT_URL, {
-      cache: 'no-store',
       signal: AbortSignal.timeout(SERVER_SNAPSHOT_TIMEOUT_MS)
     });
     if (!response.ok) return null;
