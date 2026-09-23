@@ -415,6 +415,39 @@ describe('computeDayPlan', () => {
     assert.equal(b.isPreferred, true);
   });
 
+  test('priorityPinnedIds breaks a same-slot tie in the viewer\'s favor when pinnedForDay carries more than one cluster member', () => {
+    // Live-reported directly: swiping/tapping to Cleveland Guardians @
+    // Boston Red Sox visibly re-rendered the card (a team-logo flash) but
+    // it always snapped straight back to Milwaukee Brewers @ Philadelphia
+    // Phillies. Root cause: app.js's pinnedForDayWithRotation unions the
+    // viewer's real pin together with the variety rotation's own,
+    // separately-forced pick for that slot into ONE Set before this
+    // function ever sees it - and without priorityPinnedIds, whichever
+    // member sorts first in `dayMatches` always won, regardless of which
+    // one the viewer actually chose.
+    const brewers = makeMatch({ id: 'brewers', startTimeUtc: '2026-09-24T22:05:00.000Z', durationMinutes: 160, effectiveScore: 6.9 });
+    const cleveland = makeMatch({ id: 'cleveland', startTimeUtc: '2026-09-24T22:45:00.000Z', durationMinutes: 160, effectiveScore: 7.2 });
+    const bothForced = new Set(['brewers', 'cleveland']);
+
+    // Without priorityPinnedIds: array order alone decides (today's
+    // pre-existing, still-correct behavior for every caller that has no
+    // way to tell a real pin apart from anything else forced in).
+    const noPriority = computeDayPlan('2026-09-25', [brewers, cleveland].map(m => ({ ...m })), bothForced);
+    assert.equal(noPriority[0].id, 'brewers');
+
+    // With priorityPinnedIds naming the viewer's own real pin: that pin
+    // wins outright, no matter what else (rotation, in production) also
+    // forced its way into the same slot.
+    const withPriority = computeDayPlan(
+      '2026-09-25',
+      [brewers, cleveland].map(m => ({ ...m })),
+      bothForced,
+      { priorityPinnedIds: new Set(['cleveland']) }
+    );
+    assert.equal(withPriority[0].id, 'cleveland');
+    assert.equal(withPriority[0].isPreferred, true);
+  });
+
   test('a match the scheduler picks on its own merits is never flagged isPreferred', () => {
     const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', durationMinutes: 60, effectiveScore: 6 });
     const plan = computeDayPlan('2026-09-19', [a]);

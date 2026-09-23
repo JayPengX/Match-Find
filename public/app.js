@@ -2924,7 +2924,16 @@ function renderRecommendedSection() {
   const dayCandidates = dayCandidatesForPlan(dayKey);
   const dayPlan = computeDayPlan(dayKey, dayCandidates, pinnedForDayWithRotation(dayKey), {
     scoreField: 'planningScore',
-    lockedIds: lockedIdsForDay(dayKey)
+    lockedIds: lockedIdsForDay(dayKey),
+    // A genuine viewer swipe/tap must always win a slot over the variety
+    // rotation's own separately-forced pick for it, when both land in the
+    // SAME cluster (pinnedForDayWithRotation above unions the two into one
+    // set with no way to tell them apart by the time computeDayPlan sees
+    // it) - see that function's own comment on priorityPinnedIds for the
+    // live-reported bug this fixes (a swipe/tap that visibly re-rendered
+    // but always snapped straight back to rotation's own pick). Passed as
+    // the viewer's OWN un-merged pins specifically, not the merged set.
+    priorityPinnedIds: state.pinnedChoices.get(dayKey)
   });
   // computeDayPlan's own forcedIds mechanism marks every forced pick as
   // .isPreferred (indistinguishable from a real viewer pin) - correct for

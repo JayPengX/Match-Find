@@ -902,7 +902,12 @@ export function startedPlanLockIds(planIds, dayMatches, now = Date.now()) {
 // isPreferred), and a real viewer pin always wins over it: a lock whose
 // block clashes with a pinned match is simply dropped, so swiping to a
 // live alternative mid-game still works exactly as before.
-export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreField = 'viewerScore', lockedIds = null } = {}) {
+export function computeDayPlan(
+  dayKey,
+  dayMatches,
+  pinnedForDay = null,
+  { scoreField = 'viewerScore', lockedIds = null, priorityPinnedIds = null } = {}
+) {
   dayMatches.forEach(match => {
     match.recommended = false;
     match.alternativeIds = null;
@@ -982,8 +987,37 @@ export function computeDayPlan(dayKey, dayMatches, pinnedForDay = null, { scoreF
   // again. A match's own id is stable regardless of which cluster shape
   // currently contains it - even a cluster that split into several
   // smaller ones (or one that grew) still finds its pin correctly here.
+  //
+  // `pinnedForDay` can legitimately contain MORE THAN ONE member of the
+  // same cluster - callers merge the viewer's own real pins together with
+  // other forced-in ids from an entirely different mechanism (app.js's
+  // pinnedForDayWithRotation unions a real pin with computeVarietyRotation's
+  // own forced winner for that slot, see mergeVarietyForcedIds). Which one
+  // "wins" the cluster then used to depend on nothing more than which
+  // happened to sort first in `dayMatches` - live-reported directly: a
+  // viewer's own swipe-to-pin (Cleveland Guardians @ Boston Red Sox)
+  // visibly re-rendered (the card's own team logos flash on every
+  // computeDayPlan-driven re-render) but the card silently snapped straight
+  // back to the earlier-in-the-array incumbent (Milwaukee Brewers @
+  // Philadelphia Phillies) every single time, on every input (drag AND the
+  // dots), because that incumbent was ALSO the rotation's own separately-
+  // forced pick for the exact same slot and simply sorted first. Confirmed
+  // directly: computeDayPlan([brewers, cleveland], pinnedForDay =
+  // {brewers, cleveland}) always returned brewers, regardless of viewer
+  // intent, purely from array order.
+  //
+  // `priorityPinnedIds` breaks that tie in the viewer's favor: when a
+  // cluster has more than one pinned candidate, whichever one is ALSO in
+  // this set (the viewer's own real, un-merged pins - see app.js's
+  // renderRecommendedSection) wins outright, no matter what else forced
+  // its way into the same slot. Optional and additive - every existing
+  // caller that doesn't pass it (computeVarietyRotation's own internal
+  // planning, dump-day-plan.mjs, every test) keeps today's plain
+  // first-in-`dayMatches` behavior exactly as before.
   clusters.forEach(cluster => {
-    const pinnedMatch = pinnedForDay && cluster.members.find(m => pinnedForDay.has(m.id));
+    const clusterPinned = pinnedForDay ? cluster.members.filter(m => pinnedForDay.has(m.id)) : [];
+    if (!clusterPinned.length) return;
+    const pinnedMatch = (priorityPinnedIds && clusterPinned.find(m => priorityPinnedIds.has(m.id))) || clusterPinned[0];
     if (pinnedMatch) forceIntoPlan(pinnedMatch);
   });
 
