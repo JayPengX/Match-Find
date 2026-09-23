@@ -2061,7 +2061,9 @@ docs/
 ```
 
 The `data` branch holds only `matches.json` (one force-pushed commit,
-rewritten every run) — never edit or merge it.
+rewritten every run) — never edit, merge or delete it (it's where the
+snapshot lives; if deleted, the loop recreates it within 5 minutes, and
+viewers fall back to the proxy until then).
 
 ## Getting Started
 
