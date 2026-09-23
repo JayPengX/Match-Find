@@ -27,11 +27,12 @@
 // public/lib/match-builder.mjs's own top comment. There is no AI anywhere
 // in this pipeline. `whereToWatchTw` is a hardcoded rule
 // (`resolveWhereToWatchTw`, in match-builder.mjs): 愛爾達體育台 for
-// everything except an MLB fixture ESPN itself reports as Apple TV. The
-// only network endpoint this page ever talks to is the shared proxy's own
-// read-only `/sports-proxy` passthrough - used both for building/refreshing
-// the match list (see proxyFetchJson) and for live score/odds polling
-// (pollLiveMatches). Everything else - sport
+// everything except an MLB fixture ESPN itself reports as Apple TV. All
+// match data comes through the shared proxy's own read-only `/sports-proxy`
+// passthrough - used both for building/refreshing the match list (see
+// proxyFetchJson) and for live score/odds polling (pollLiveMatches) - plus
+// one read of the prebuilt first-screen snapshot from this repo's `data`
+// branch (see fetchServerSnapshot). Everything else - sport
 // priority, enabled sports, and which swiped match a viewer prefers - is
 // local-only, in this browser's own localStorage, with no server-side sync
 // of any kind (see README's "Local-only, no accounts").

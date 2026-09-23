@@ -52,13 +52,15 @@ plain-language reason, not the raw competitiveness/watchability numbers
 behind it (see [Page Layout & UI](#page-layout--ui)).
 
 There is no sign-up and no app. It's a static GitHub Pages site, deployed
-only when its own code changes, and installable as a PWA. Critically, the
-match list itself is **not** produced by a periodically-rebuilt static
-file — an earlier version of this site worked that way, but it does not
-anymore. The list is fetched and scored **live, in the viewer's own
-browser**, every time the page opens and on an ongoing refresh cycle after
-that (see [How It Works](#how-it-works) and [Live Match Data &
-Refresh](#live-match-data--refresh)). There is also no in-page header: an
+only when its own code changes, and installable as a PWA. The match list
+is fetched and scored **live, in the viewer's own browser**, every time
+the page opens and on an ongoing refresh cycle after that (see [How It
+Works](#how-it-works) and [Live Match Data &
+Refresh](#live-match-data--refresh)). A copy of that same build is also
+prebuilt every ~5 minutes by a GitHub Action, but only to paint the first
+screen instantly — the live build replaces it within seconds, so it is
+never what the page settles on (see [Load Performance](#load-performance)).
+There is also no in-page header: an
 earlier version had a slim one, but it was dropped entirely, since an
 installed PWA's home-screen icon and OS title bar already carry the app's
 identity, and a masthead here was just empty space repeating that. Settings
@@ -98,9 +100,13 @@ identity, and a masthead here was just empty space repeating that. Settings
   ("Prefer") choices all live in this browser's own `localStorage`; there
   is no account and no cross-device sync (see [Local-Only Data &
   Privacy](#local-only-data--privacy)).
-- **PWA-installable**, no service worker, no offline cache — the site
-  checks for and offers a fresh deploy in place rather than silently
-  serving stale JavaScript (see [Version Detection & Manual
+- **Fast first screen** — a prebuilt match-list snapshot paints the page
+  from one small request, and a service worker keeps the site's own code
+  on the device so the home-screen app starts without waiting on the
+  network (see [Load Performance](#load-performance)).
+- **PWA-installable**, with a service worker for the app's own code only
+  (never match data) — a new deploy is still detected and applied in
+  place, never silently left stale (see [Version Detection & Manual
   Refresh](#version-detection--manual-refresh)).
 
 ## How It Works
@@ -1367,7 +1373,10 @@ they're cheap to re-derive live and would just go stale sitting there. (An
 instant-paint snapshot of the *last successful build* is cached to
 `localStorage` for perceived load time only — see [Instant Paint from a
 Cached Snapshot](#instant-paint-from-a-cached-snapshot) — which is a
-different thing from ongoing sync between viewers.)
+different thing from ongoing sync between viewers. The prebuilt snapshot
+described in [Load Performance](#load-performance) is the same public
+match data for everyone, built by a GitHub Action; nothing about a viewer
+is ever sent to build it or read back from it.)
 
 There is also only ever one recommendation system, not a choice between
 competing ones — see [The `bestMatchScore`
@@ -1462,13 +1471,13 @@ site's own one-day "yesterday" design). The cutoff is in the viewer's own
 local calendar day, the same concept `dayLabelFor`'s 今天/明天/昨天 labels
 already use, not UTC.
 
-Before either refresh tier's first result lands (a first-ever visit with no
-instant-paint snapshot yet, or one just invalidated by a new deploy, see
-[Instant Paint from a Cached Snapshot](#instant-paint-from-a-cached-snapshot)),
-a `#loading-state` spinner is shown by default rather than leaving the page
+Before anything has landed (no usable instant-paint snapshot, see
+[Instant Paint from a Cached Snapshot](#instant-paint-from-a-cached-snapshot),
+and neither the prebuilt snapshot nor a refresh tier has arrived yet, see
+[Load Performance](#load-performance)), a `#loading-state` spinner is shown by default rather than leaving the page
 blank while `#app`/`#empty-state`/`#error-state` all still say `hidden` —
 this was live-reported as confusing before it existed. `applyFreshBuild`,
-the one function both the snapshot paint and every real refresh funnel
+the one function both snapshot paints and every real refresh funnel
 through, hides it the instant either produces something to show; a total
 failure with nothing loaded at all swaps it for `#error-state`'s own
 explicit message instead.
@@ -1481,11 +1490,11 @@ to dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly
 as fast as the automatic ones.
 
 It also checks whether a *new version of the page itself* has been
-deployed since this tab loaded, not just whether the match data changed.
-This site has no service worker (`manifest.webmanifest` only makes it
-installable; it doesn't add an offline cache or an update lifecycle) —
-instead, every time this button is pressed, a fresh `cache: 'no-store'`
-fetch of `app.js` reads back the `APP_BUILD_ID` (the commit sha
+deployed since this tab loaded, not just whether the match data changed
+(the same check also runs automatically with every full-window refresh).
+Every time, a fresh `cache: 'no-store'` fetch of `app.js` — which the
+service worker (see [Load Performance](#load-performance)) always passes
+straight to the network — reads back the `APP_BUILD_ID` (the commit sha
 `deploy.yml`'s own sed step stamps into it on every deploy) embedded in the
 live file's own source, and compares it directly against this tab's own
 `APP_BUILD_ID`. An earlier version compared `app.js`'s own ETag/
@@ -1514,6 +1523,19 @@ separately — it purges/repopulates on every deploy, confirmed live within
 seconds of a push, so by the time a viewer would ever click this button
 the CDN is already serving the correct content; it was only ever this
 browser's own local cache in the way, not the CDN's).
+
+With the service worker in place, one more step comes first. The worker
+serves the page and its code from a cache tied to one deploy, and browsers
+look for a new worker lazily (iOS home-screen apps especially), so a
+reload could otherwise be answered by the *old* worker with the old code
+— and the page would find the new version again and reload again, in a
+loop. So as soon as a new build id is seen, `prepareServiceWorkerForBuild`
+asks for the new worker explicitly and waits (up to 10 seconds) until the
+new build's cache (`matchfind-shell-<sha>`) is in place. If it isn't by
+then (a failed install, a slow network), the worker is unregistered and its
+caches cleared, so the reload comes straight from the network; the next
+load registers the new worker from scratch. Either way the reloaded page
+is never a mix of two deploys.
 
 ### Instant Paint from a Cached Snapshot
 
@@ -1554,11 +1576,12 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
 - **Shared edge cache** (`cachePolicyFor` in
   `jaypengx-collab/shared-proxy`'s `sports-proxy-worker.js`) —
   `/sports-proxy` itself caches every successful upstream response, keyed
-  by the upstream URL: 20s for anything within a day of today, but 10
-  minutes for scoreboards further out and 30 minutes for standings, with
-  an expired copy of that slower data still served instantly while it
-  refreshes in the background (see that repo's README for the full
-  table). So concurrent viewers (and this
+  by the upstream URL: 20s for scoreboards within a day of today and for
+  Polymarket odds (never served once expired, so the 30s live poll always
+  gets current scores and odds), but 10 minutes for scoreboards further
+  out and 30 minutes for standings, with an expired copy of that slower
+  data still served instantly while it refreshes in the background (see
+  that repo's README for the full table). So concurrent viewers (and this
   tab's own live-poll tier, which isn't covered by the in-tab cache above)
   share one real upstream fetch instead of each paying for their own; a
   cache hit doesn't count against that route's own rate limit either. On a
@@ -1576,38 +1599,68 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   are actually kept on. Turning a sport back on immediately kicks off a
   full-window refresh in the background, so it backfills right away
   instead of waiting for whichever refresh tier happens to fire next.
-- **Odds and logos arrive with the first paint, not after it** —
-  Polymarket's `/events` pages are fetched through the proxy's
-  `&trim=polymarket-events` mode (only the fields `public/lib/polymarket.mjs`
-  reads: 11.5MB → ~0.45MB per MLB page), pages 2+ are requested in
-  parallel, and the download starts alongside the ESPN fetch instead of
-  after the match list has painted. Team/league logos are requested through
-  ESPN's own resizer at 64px (`sizedEspnLogoUrl` in `public/lib/espn.mjs` —
-  2-5KB instead of a 20-45KB 500px PNG drawn at 21px), and each one starts
-  downloading as soon as the scoreboard naming it arrives.
-- **No avoidable round trips before the data** — `index.html` preloads
-  every module (`modulepreload`) so the code arrives in one round instead
-  of three, loads the Google Fonts stylesheet without blocking scripts, and
-  standings (whose URLs are fixed) are requested alongside the scoreboards
-  rather than after all of them come back.
-- **Prebuilt snapshot for the first screen** — `.github/workflows/snapshot.yml`
-  runs the same build the page does (`scripts/build-snapshot.mjs`) every ~5
-  minutes and on every push to `main`, and publishes it as `matches.json` on
-  this repo's `data` branch. The page fetches that one file (~10KB
-  compressed, from GitHub's CDN) in parallel with its own live build and
-  paints it as soon as it arrives; the live build replaces it moments later
-  exactly as before. It's only used if it was built by the same deploy as
-  the page (`buildId`) and is under 45 minutes old. Note: GitHub pauses
-  scheduled workflows in a repo with no commits for 60 days - if the site
-  goes quiet that long, re-enable it from the Actions tab (the page simply
-  falls back to its live build meanwhile).
-- **Service worker for the app's own code** (`public/sw.js`) — keeps
-  `index.html`, `app.js`, the stylesheet and every module on the device in a
-  per-deploy cache, so a cold start (the home-screen app especially) doesn't
-  wait on GitHub Pages at all. Match data, odds, logos and fonts are left to
-  the network. When a new deploy is detected, the page makes sure the new
-  deploy's worker has taken over (or removes the worker) before reloading,
-  so a reload never mixes code from two deploys.
+
+### Load Performance
+
+What happens between opening the page and seeing the full list, in order:
+
+1. **The code is already on the device.** A service worker
+   (`public/sw.js`) keeps `index.html`, `app.js`, the stylesheet, every
+   module and the icons in a per-deploy cache (`matchfind-shell-<sha>`;
+   `deploy.yml` stamps the sha into `sw.js`, so each deploy installs a new
+   worker, which downloads the whole new shell before taking over and then
+   deletes the old cache). A cold start — the home-screen app especially,
+   which iOS restarts far more often than a Safari tab and which shares no
+   cache with Safari — doesn't wait on GitHub Pages at all. Match data,
+   odds, logos and fonts are never handled by the worker. How a new deploy
+   still gets picked up is in [Version Detection & Manual
+   Refresh](#version-detection--manual-refresh). A local checkout (no real
+   build id) never registers it.
+2. **Without the worker (first visit), nothing waits in line.** `index.html`
+   lists every module as `modulepreload`, so all the code downloads in one
+   round instead of three nested ones; the Google Fonts stylesheet loads
+   without blocking scripts; and connections to the proxy and ESPN's image
+   CDN are opened early (`preconnect`).
+3. **The first screen comes from a prebuilt snapshot.**
+   `.github/workflows/snapshot.yml` runs the same build the page does
+   (`scripts/build-snapshot.mjs` — `enrichOdds: false`, then display-only
+   Polymarket odds, exactly like `app.js`, so the first screen's
+   recommendation agrees with the live build that follows) every ~5
+   minutes and on every push to `main`, stamps it with the commit sha as
+   `buildId`, and force-pushes it as `matches.json` to this repo's `data`
+   branch (always a single commit). `index.html` preloads it from
+   `raw.githubusercontent.com` alongside the code — one ~10KB compressed
+   request — and `app.js` paints it the moment it arrives, as long as it
+   was built by the same deploy as the page and is under 45 minutes old
+   (`SERVER_SNAPSHOT_MAX_AGE_MS`), is newer than this browser's own saved
+   snapshot, and the live build hasn't already landed. Otherwise it's
+   simply ignored and the page waits for its live build as before. Two
+   windows where that happens: for a few minutes after each deploy
+   (GitHub's CDN caches the file for 5 minutes, so it briefly still serves
+   the previous build's snapshot), and if scheduled runs stop — GitHub
+   pauses scheduled workflows in a repo with no commits for 60 days;
+   re-enable it from the Actions tab.
+4. **The live build runs immediately anyway** and replaces the snapshot,
+   exactly as before (see [Live Match Data &
+   Refresh](#live-match-data--refresh)). To keep that fast:
+   Polymarket's `/events` pages are fetched through the proxy's
+   `&trim=polymarket-events` mode (only the fields
+   `public/lib/polymarket.mjs` reads: 11.5MB → ~0.45MB per MLB page), pages
+   2+ are requested in parallel, and that download starts alongside the
+   ESPN fetch rather than after the list is painted; standings (fixed
+   URLs) are requested alongside the scoreboards instead of after all of
+   them come back; up to 12 proxy requests run at once
+   (`PROXY_FETCH_MAX_CONCURRENCY`); and most of what's requested is
+   already in the proxy's shared cache (see the tiers above).
+5. **Logos arrive with their cards.** Team/league logos are requested
+   through ESPN's own resizer at 64px (`sizedEspnLogoUrl` in
+   `public/lib/espn.mjs` — 2-5KB instead of a 20-45KB 500px PNG drawn at
+   21px), and each one starts downloading as soon as the scoreboard naming
+   it arrives.
+
+`tests/app-shell.test.mjs` keeps the hand-maintained lists involved here
+(the worker's `SHELL_FILES`, the `modulepreload` links, and the preloaded
+snapshot URL) in sync with the code.
 
 ### The Shared Proxy Architecture
 
@@ -1876,8 +1929,10 @@ sort first by creation time instead of by which game was actually soonest.
 
 ```
 public/
-  index.html               entry point, PWA meta/manifest links
+  index.html               entry point, PWA meta/manifest links, preloads
   app.js                   UI, refresh tiers, live polling, Settings, rendering
+  sw.js                    service worker: per-deploy cache of the app's own
+                            code (see Load Performance)
   manifest.webmanifest     PWA install manifest
   favicon.svg               master icon mark
   icons/                   rasterized PWA icons (icon-180.png, icon-512.png)
@@ -1905,6 +1960,8 @@ public/
     tap-log.mjs              hidden on-screen touch/tap event log for
                             iPhone-only bugs (tap "Data last updated" 5x)
 scripts/
+  build-snapshot.mjs        builds the prebuilt first-screen snapshot, the
+                            same way the page builds it (run by snapshot.yml)
   build-data.mjs            Node CLI wrapper around buildMatches, for local
                             dev tooling (writes public/data/matches.json)
   evaluate-recommendations.mjs
@@ -1914,7 +1971,9 @@ tests/
   *.test.mjs                node --test suite covering recommendation.mjs,
                             match-builder.mjs, sport-duration.mjs,
                             objective-score.mjs, sport-signals.mjs,
-                            polymarket.mjs, color.mjs, evaluate-recommendations.mjs
+                            polymarket.mjs, espn.mjs, color.mjs,
+                            evaluate-recommendations.mjs, and app-shell
+                            (sw.js/index.html lists kept in sync)
 docs/
   recommendation-engine-audit.md
                             the full engineering history this README is
@@ -1923,7 +1982,14 @@ docs/
 .github/workflows/deploy.yml
                             publishes public/ to GitHub Pages on every push
                             to main (or on-demand); runs the test suite first
+.github/workflows/snapshot.yml
+                            every ~5 min and on every push to main: builds
+                            the first-screen snapshot and publishes it to
+                            the `data` branch
 ```
+
+The `data` branch holds only `matches.json` (one force-pushed commit,
+rewritten every run) — never edit or merge it.
 
 ## Getting Started
 
@@ -1933,6 +1999,13 @@ docs/
 node scripts/build-data.mjs        # writes a public/data/matches.json snapshot
 npx serve public                   # or any static file server
 ```
+
+A local checkout keeps the literal `__BUILD_ID__` placeholder (only
+`deploy.yml` stamps a real one), which switches off the two deploy-only
+speedups: the service worker is never registered and the prebuilt snapshot
+is never used, so local edits are always what you see.
+`node scripts/build-snapshot.mjs [out.json]` builds a snapshot locally if
+you want to inspect one.
 
 `scripts/build-data.mjs` is a thin Node CLI wrapper around
 `public/lib/match-builder.mjs`'s own `buildMatches` — the exact same
@@ -1994,12 +2067,18 @@ instead of judging one day in isolation.
 
 This repo deploys itself: `.github/workflows/deploy.yml` publishes
 `public/` to GitHub Pages on every push to `main` (or on-demand via the
-Actions tab). There is no scheduled rebuild anymore, and nothing for it to
-rebuild — the match list is fetched and scored live, in each viewer's own
-browser, on load and on its own two refresh tiers (see [Live Match Data &
-Refresh](#live-match-data--refresh)), not from a static file this workflow
-used to regenerate every 15 minutes. This workflow's only job is shipping
-code changes.
+Actions tab), stamping the commit sha into `app.js` and `sw.js` as the
+build id. The match list is still fetched and scored live, in each
+viewer's own browser, on load and on its own refresh tiers (see [Live Match
+Data & Refresh](#live-match-data--refresh)) — no deploy is ever needed for
+fresh data.
+
+`.github/workflows/snapshot.yml` runs separately, every ~5 minutes and on
+every push to `main`, and only publishes the prebuilt first-screen
+snapshot to the `data` branch (see [Load Performance](#load-performance));
+it never deploys the site. If it stops (a failing upstream API, or GitHub
+pausing scheduled workflows after 60 days without commits), the site keeps
+working — first loads just wait for the live build again.
 
 Make sure the repo's **Settings → Pages → Source** is set to **GitHub
 Actions** (no branch to pick — the workflow handles publishing).
@@ -2023,6 +2102,11 @@ and ESPN's team abbreviation (e.g. `mlb.NYY`). A missing or wrong entry
 doesn't break anything: the site just shows that team's English name only.
 
 ## Known Limitations
+
+- **The prebuilt snapshot is skipped for a few minutes after each deploy**
+  — GitHub's raw-file CDN caches `matches.json` for 5 minutes, so right
+  after a deploy it can still serve the previous build's snapshot, which
+  the page ignores (build id mismatch) and falls back to its live build.
 
 - **EPL has no recent-form signal** — ESPN's `soccer/eng.1` standings
   endpoint has no per-team streak/last-5 figure at all (see [Known Scoring
