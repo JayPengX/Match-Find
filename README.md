@@ -1551,10 +1551,14 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   doesn't apply to `pollLiveMatches`'s own faster tier, which always makes
   a fresh request every tick since live score/odds data can't tolerate a
   45s-old cache.
-- **Shared edge cache** (`SPORTS_PROXY_CACHE_TTL_SECONDS` in
+- **Shared edge cache** (`cachePolicyFor` in
   `jaypengx-collab/shared-proxy`'s `sports-proxy-worker.js`) —
-  `/sports-proxy` itself caches every successful upstream response for 20
-  seconds, keyed by the upstream URL alone, so concurrent viewers (and this
+  `/sports-proxy` itself caches every successful upstream response, keyed
+  by the upstream URL: 20s for anything within a day of today, but 10
+  minutes for scoreboards further out and 30 minutes for standings, with
+  an expired copy of that slower data still served instantly while it
+  refreshes in the background (see that repo's README for the full
+  table). So concurrent viewers (and this
   tab's own live-poll tier, which isn't covered by the in-tab cache above)
   share one real upstream fetch instead of each paying for their own; a
   cache hit doesn't count against that route's own rate limit either. On a
