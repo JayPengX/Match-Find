@@ -593,6 +593,23 @@ const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
 // Hidden on-screen input debugger - tap this line 5 times (see lib/tap-log.mjs).
 installTapLog(generatedNote);
+
+// Empty, passive, page-wide touch/pointer listeners - intentionally no-ops.
+// Live-reported on iOS Safari (browser and Home Screen app): after ONE swipe
+// on a match stack, every later tap on any button needed two taps, until
+// the app was backgrounded and reopened. Found with the tap log above: the
+// bug vanished whenever the log was on, and the only thing the log changes
+// that iOS cares about is that it listens for touch/pointer events on the
+// whole document. iOS WebKit handles a tap differently depending on
+// whether the spot being touched has touch listeners; with listeners only
+// on the swipeable cards, a swipe there left that tap handling in a stuck
+// state that swallowed the next tap anywhere else. Listening on the whole
+// document makes every tap go down the same path, so there's no switch to
+// get stuck on. Passive, so they never block scrolling. Mirrors exactly
+// what the tap log registers, since that's the set confirmed to fix it.
+['touchstart', 'touchend', 'touchcancel', 'pointerdown', 'pointerup', 'pointercancel'].forEach(type => {
+  document.addEventListener(type, () => {}, { capture: true, passive: true });
+});
 const nextUpdateNote = document.getElementById('next-update-note');
 const tbdSection = document.getElementById('tbd-section');
 const tbdListEl = document.getElementById('tbd-list');
