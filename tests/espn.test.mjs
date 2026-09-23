@@ -267,6 +267,10 @@ describe('sizedEspnLogoUrl', () => {
       'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png&w=64&h=64'
     );
   });
+  test('keeps a combiner URL that already has its own size (e.g. a crop)', () => {
+    const cropped = 'https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/23.png&w=128&h=80&scale=crop&location=origin';
+    assert.equal(sizedEspnLogoUrl(cropped), cropped);
+  });
   test('leaves non-ESPN, empty, and malformed URLs untouched', () => {
     assert.equal(sizedEspnLogoUrl('https://example.com/x.png'), 'https://example.com/x.png');
     assert.equal(sizedEspnLogoUrl(''), '');

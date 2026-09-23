@@ -227,6 +227,9 @@ export function sizedEspnLogoUrl(url, px = 64) {
   if (parsed.hostname !== 'a.espncdn.com') return url;
   if (parsed.pathname === '/combiner/i') {
     if (!parsed.searchParams.get('img')) return url;
+    // Already sized (e.g. a deliberate crop - see app.js's LEAGUE_LOGOS):
+    // leave its own dimensions alone.
+    if (parsed.searchParams.get('w') && parsed.searchParams.get('h')) return url;
   } else {
     const img = parsed.pathname;
     parsed = new URL('https://a.espncdn.com/combiner/i');

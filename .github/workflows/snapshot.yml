@@ -6,11 +6,20 @@
 # does its own live build right after, exactly as before - this only removes
 # the wait for the first screen.
 #
-# Runs every 5 minutes (GitHub may delay or occasionally skip scheduled
-# runs under load - the page tolerates that: a snapshot older than
-# SERVER_SNAPSHOT_MAX_AGE_MS is ignored) and on every push to main, so a
-# freshly deployed build gets a snapshot built by its own code within a
-# minute (the page ignores a snapshot stamped with a different build id).
+# Every 5 minutes, reliably: GitHub's own `schedule` trigger is best-effort
+# - a `*/5` cron was observed not firing at all for its first 40+ minutes,
+# and it routinely runs late or skips under load. So instead of one short
+# run per tick, each run LOOPS: build + publish, wait until 5 minutes after
+# that iteration started, repeat, for up to LOOP_SECONDS (just under the
+# 6-hour job limit). The hourly `schedule` only has to keep a next run
+# queued: while a loop is running, a scheduled run waits as "pending" (at
+# most one - GitHub replaces an older pending run with a newer one) and
+# starts the moment the current loop ends, so an occasional skipped or late
+# cron costs nothing. A push to main (or a manual dispatch) instead CANCELS
+# the running loop and starts a new one right away - a new deploy's page
+# only accepts a snapshot built by its own commit (buildId), so it needs one
+# within a minute, not whenever the old loop happens to end. Public repo,
+# so these Actions minutes are free.
 #
 # `data` is force-pushed as a single orphan commit every run, so it never
 # accumulates history. Pushing it doesn't trigger deploy.yml (main only).
@@ -18,7 +27,7 @@ name: Build match snapshot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
   push:
     branches: ['main']
   workflow_dispatch:
@@ -28,12 +37,17 @@ permissions:
 
 concurrency:
   group: 'match-snapshot'
-  cancel-in-progress: true
+  # See the top comment: only a push/dispatch replaces a running loop; a
+  # scheduled run queues behind it.
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 358
+    env:
+      INTERVAL_SECONDS: 300
+      LOOP_SECONDS: 20700 # 5h45m - leaves the last iteration room inside timeout-minutes
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,24 +57,42 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build snapshot
-        run: node scripts/build-snapshot.mjs snapshot/matches.json
-      - name: Stamp it with the build it came from
-        # The same commit sha deploy.yml stamps into the deployed app.js as
-        # APP_BUILD_ID - the page only uses a snapshot whose buildId matches
-        # its own, so a match/rawMatches shape change in a new deploy can
-        # never be fed data built by the previous code.
-        run: |
-          SHA=$(git rev-parse HEAD)
-          node -e "const fs=require('fs');const p='snapshot/matches.json';const d=JSON.parse(fs.readFileSync(p,'utf8'));d.buildId=process.argv[1];fs.writeFileSync(p,JSON.stringify(d))" "$SHA"
-      - name: Publish to the data branch
+      - name: Build and publish every 5 minutes
+        # Each iteration: build (scripts/build-snapshot.mjs), stamp it with
+        # this commit's sha as buildId - the same sha deploy.yml stamps into
+        # the deployed app.js as APP_BUILD_ID, so the page never feeds one
+        # deploy's rendering code another deploy's data shape - and
+        # force-push it as the `data` branch's single commit. A failed build
+        # (an upstream API having a bad moment) just skips that publish and
+        # keeps the previous snapshot; the loop carries on.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          cd snapshot
-          git init -q -b data
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add matches.json
-          git commit -q -m "Match snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" data
+          SHA=$(git rev-parse HEAD)
+          END=$(( $(date +%s) + LOOP_SECONDS ))
+          publish() {
+            rm -rf publish && mkdir publish && cp snapshot/matches.json publish/
+            (
+              cd publish
+              git init -q -b data
+              git config user.name 'github-actions[bot]'
+              git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+              git add matches.json
+              git commit -q -m "Match snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+              git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" data
+            )
+          }
+          while :; do
+            STARTED=$(date +%s)
+            if node scripts/build-snapshot.mjs snapshot/matches.json \
+              && node -e "const fs=require('fs');const p='snapshot/matches.json';const d=JSON.parse(fs.readFileSync(p,'utf8'));d.buildId=process.argv[1];fs.writeFileSync(p,JSON.stringify(d))" "$SHA"; then
+              publish && echo "Published at $(date -u +%H:%M:%S)" || echo "::warning::Publish failed; will retry next iteration"
+            else
+              echo "::warning::Build failed; keeping the last published snapshot"
+            fi
+            NEXT=$(( STARTED + INTERVAL_SECONDS ))
+            [ "$NEXT" -ge "$END" ] && break
+            WAIT=$(( NEXT - $(date +%s) ))
+            [ "$WAIT" -gt 0 ] && sleep "$WAIT"
+          done

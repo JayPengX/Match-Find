@@ -507,7 +507,12 @@ function sportLabel(sport) {
 // the match card badge, the filter chips, and both sport-related Settings
 // lists (see buildSportIcon below, the one place all four read from).
 const LEAGUE_LOGOS = {
-  'Premier League': 'https://a.espncdn.com/i/leaguelogos/soccer/500/23.png',
+  // The lion only: ESPN's one Premier League logo has the "Premier League"
+  // wordmark under the crest, unreadable at icon size, so ESPN's own
+  // resizer crops the top 312px of the 500px square (w/h 1.6 - just clear
+  // of the lettering, live-checked) and the icon's `object-fit: cover`
+  // (styles.css) trims the empty sides.
+  'Premier League': 'https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/500/23.png&w=128&h=80&scale=crop&location=origin',
   MLB: 'https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png',
   NBA: 'https://a.espncdn.com/i/teamlogos/leagues/500/nba.png',
   F1: 'https://a.espncdn.com/combiner/i?img=/i/teamlogos/leagues/500/f1.png'

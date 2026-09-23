@@ -57,7 +57,7 @@ is fetched and scored **live, in the viewer's own browser**, every time
 the page opens and on an ongoing refresh cycle after that (see [How It
 Works](#how-it-works) and [Live Match Data &
 Refresh](#live-match-data--refresh)). A copy of that same build is also
-prebuilt every ~5 minutes by a GitHub Action, but only to paint the first
+prebuilt every 5 minutes by a GitHub Action, but only to paint the first
 screen instantly — the live build replaces it within seconds, so it is
 never what the page settles on (see [Load Performance](#load-performance)).
 There is also no in-page header: an
@@ -1625,10 +1625,20 @@ What happens between opening the page and seeing the full list, in order:
    `.github/workflows/snapshot.yml` runs the same build the page does
    (`scripts/build-snapshot.mjs` — `enrichOdds: false`, then display-only
    Polymarket odds, exactly like `app.js`, so the first screen's
-   recommendation agrees with the live build that follows) every ~5
-   minutes and on every push to `main`, stamps it with the commit sha as
-   `buildId`, and force-pushes it as `matches.json` to this repo's `data`
-   branch (always a single commit). `index.html` preloads it from
+   recommendation agrees with the live build that follows) every 5
+   minutes, stamps it with the commit sha as `buildId`, and force-pushes it
+   as `matches.json` to this repo's `data` branch (always a single commit).
+   GitHub's own `schedule` trigger is too unreliable for a 5-minute
+   cadence (a `*/5` cron didn't fire at all for its first 40+ minutes, and
+   it routinely runs late or skips), so each run is a loop instead:
+   rebuild, wait until 5 minutes after that iteration started, repeat, for
+   up to 5h45m. An hourly `schedule` just keeps the next run queued behind
+   it (GitHub holds at most one pending run per concurrency group, and
+   starts it the moment the loop ends), so a late or skipped cron costs
+   nothing. A push to `main` (or a manual run from the Actions tab)
+   cancels the running loop and starts a new one immediately, so a new
+   deploy gets a snapshot built by its own commit within a minute. A failed
+   build just keeps the previous snapshot until the next iteration. `index.html` preloads it from
    `raw.githubusercontent.com` alongside the code — one ~10KB compressed
    request — and `app.js` paints it the moment it arrives, as long as it
    was built by the same deploy as the page and is under 45 minutes old
@@ -1637,9 +1647,10 @@ What happens between opening the page and seeing the full list, in order:
    simply ignored and the page waits for its live build as before. Two
    windows where that happens: for a few minutes after each deploy
    (GitHub's CDN caches the file for 5 minutes, so it briefly still serves
-   the previous build's snapshot), and if scheduled runs stop — GitHub
+   the previous build's snapshot), and if the workflow stops — GitHub
    pauses scheduled workflows in a repo with no commits for 60 days;
-   re-enable it from the Actions tab.
+   re-enable it from the Actions tab, or just run it once from there (a
+   manual run starts a new loop).
 4. **The live build runs immediately anyway** and replaces the snapshot,
    exactly as before (see [Live Match Data &
    Refresh](#live-match-data--refresh)). To keep that fast:
@@ -1655,7 +1666,11 @@ What happens between opening the page and seeing the full list, in order:
 5. **Logos are in place before the page is shown.** Team/league logos are
    requested through ESPN's own resizer at 64px (`sizedEspnLogoUrl` in
    `public/lib/espn.mjs` — 2-5KB instead of a 20-45KB 500px PNG drawn at
-   21px). On the first render, the loading screen stays up as a full-screen
+   21px). The Premier League icon is the lion alone: ESPN only has the
+   full logo with the "Premier League" wordmark underneath, so the resizer
+   also crops it to the top of the image (`LEAGUE_LOGOS` in `app.js`), and
+   league icons use `object-fit: cover` to trim the crop's empty sides.
+   On the first render, the loading screen stays up as a full-screen
    cover (`.loading-state.is-covering`) over the already-laid-out page and
    only lifts once every image on the page has loaded and decoded
    (`revealApp`), capped at `FIRST_REVEAL_IMAGE_WAIT_MS` (1.5s) so a slow or
@@ -1992,9 +2007,9 @@ docs/
                             publishes public/ to GitHub Pages on every push
                             to main (or on-demand); runs the test suite first
 .github/workflows/snapshot.yml
-                            every ~5 min and on every push to main: builds
-                            the first-screen snapshot and publishes it to
-                            the `data` branch
+                            long-running loop: every 5 min, builds the
+                            first-screen snapshot and publishes it to the
+                            `data` branch (restarted on every push to main)
 ```
 
 The `data` branch holds only `matches.json` (one force-pushed commit,
@@ -2082,10 +2097,13 @@ viewer's own browser, on load and on its own refresh tiers (see [Live Match
 Data & Refresh](#live-match-data--refresh)) — no deploy is ever needed for
 fresh data.
 
-`.github/workflows/snapshot.yml` runs separately, every ~5 minutes and on
-every push to `main`, and only publishes the prebuilt first-screen
-snapshot to the `data` branch (see [Load Performance](#load-performance));
-it never deploys the site. If it stops (a failing upstream API, or GitHub
+`.github/workflows/snapshot.yml` runs separately, as a long-running loop
+that rebuilds every 5 minutes (restarted by every push to `main`, and kept
+going by an hourly schedule — see [Load Performance](#load-performance)
+for why), and only publishes the prebuilt first-screen snapshot to the
+`data` branch; it never deploys the site. In the Actions tab, a run that
+shows as "in progress" for hours is that loop working as intended, and
+occasional "cancelled" runs are superseded ones. If it stops (a failing upstream API, or GitHub
 pausing scheduled workflows after 60 days without commits), the site keeps
 working — first loads just wait for the live build again.
 

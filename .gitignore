@@ -6,3 +6,8 @@
 
 node_modules/
 .env
+
+# Written by scripts/build-snapshot.mjs / snapshot.yml's publish step when
+# run locally - the real snapshot only ever lives on the `data` branch.
+/snapshot/
+/publish/
