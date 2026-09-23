@@ -476,14 +476,7 @@ const state = {
   // Every match id shown in the selected day's 推薦賽事 section (stack
   // primaries AND their alternates) as of its last render - see
   // renderAllMatchesSection's is-muted rule.
-  featuredIds: new Set(),
-  // Map<dayKey, Set<matchId>> - every match the viewer forced in with
-  // 設為偏好 (see preferMatch) this session. Kept as a swipe option in
-  // whichever stack it clashes with even after the viewer swipes away from
-  // it - otherwise a game that was never one of the algorithm's own
-  // alternatives vanished the moment its pin was released, with no way to
-  // swipe back to it.
-  preferredExtrasByDay: new Map()
+  featuredIds: new Set()
 };
 
 // Sport labels as ESPN/match-builder.mjs spell them internally (see
@@ -1833,8 +1826,6 @@ function preferMatch(match) {
   const dayCandidates = dayCandidatesForPlan(dayKey).filter(m => !isQuietHours(m));
   const cluster = groupIntoSlots(dayCandidates).find(c => c.members.some(m => m.id === match.id));
   const slotKey = cluster ? slotKeyFromMembers(cluster.members) : match.id;
-  if (!state.preferredExtrasByDay.has(dayKey)) state.preferredExtrasByDay.set(dayKey, new Set());
-  state.preferredExtrasByDay.get(dayKey).add(match.id);
   pinSlotChoice(dayKey, slotKey, match.id);
 }
 
@@ -3024,13 +3015,6 @@ function renderRecommendedSection() {
   // first stack's members - games with no real time conflict with it.
   const claimedFreezeSets = new Set();
   const featuredIds = new Set();
-  const claimedExtraIds = new Set();
-  const preferredExtras = [...(state.preferredExtrasByDay.get(dayKey) || [])].map(id => byId.get(id)).filter(Boolean);
-  const clashes = (a, b) => {
-    const ai = schedulingInterval(a);
-    const bi = schedulingInterval(b);
-    return ai.start < bi.end && bi.start < ai.end;
-  };
   // Existing plain cards from this SAME container's previous render, up for
   // reuse below (see getOrBuildMatchCard's own comment) - captured once,
   // up front, before this render starts moving any of them into `fragment`.
@@ -3055,13 +3039,6 @@ function renderRecommendedSection() {
       return;
     }
     let alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
-    // See state.preferredExtrasByDay - each extra joins only the FIRST
-    // stack it clashes with, so it never shows up in two stacks at once.
-    const extras = preferredExtras.filter(
-      m => m.id !== match.id && !m.recommended && !m.isFinished && !isQuietHours(m) && !claimedExtraIds.has(m.id) && clashes(m, match)
-    );
-    extras.forEach(m => claimedExtraIds.add(m.id));
-    alternatives = [...alternatives, ...extras.filter(m => !alternatives.includes(m))];
     if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = match.slotKey || slotKeyFromMembers(members);
@@ -3087,7 +3064,7 @@ function renderRecommendedSection() {
         const stable = [...knownIds]
           .map(id => byId.get(id))
           .filter(m => m && (m.id === match.id || (!m.recommended && !m.isFinished)));
-        members = [...stable, ...extras.filter(m => !stable.includes(m))];
+        members = stable;
         alternatives = members.filter(m => m.id !== match.id);
       } else {
         const created = new Set(members.map(m => m.id));
