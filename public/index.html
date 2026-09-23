@@ -53,8 +53,33 @@
 <link rel="preconnect" href="https://a.espncdn.com" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<!-- Loaded without blocking: a normal stylesheet <link> holds back every
+     script after it until it arrives, so a slow connection to Google Fonts
+     used to delay app.js - and with it the whole match fetch - for nothing.
+     Text draws in the system font until Noto Sans TC arrives (same as
+     display=swap already did); <noscript> keeps it for no-JS loads. -->
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+<noscript><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" /></noscript>
 <link rel="stylesheet" href="./styles.css" />
+<!-- Every module app.js imports, directly or through another module.
+     Without these the browser only learns about each module after
+     downloading the one that imports it - three rounds of downloads in a
+     row before any match data can be requested. Listed here, they all load
+     in parallel with app.js itself. Keep in sync with the import graph. -->
+<link rel="modulepreload" href="./lib/recommendation.mjs" />
+<link rel="modulepreload" href="./lib/preferences.mjs" />
+<link rel="modulepreload" href="./lib/espn.mjs" />
+<link rel="modulepreload" href="./lib/color.mjs" />
+<link rel="modulepreload" href="./lib/polymarket.mjs" />
+<link rel="modulepreload" href="./lib/match-builder.mjs" />
+<link rel="modulepreload" href="./lib/i18n.mjs" />
+<link rel="modulepreload" href="./lib/tap-log.mjs" />
+<link rel="modulepreload" href="./lib/team-names.mjs" />
+<link rel="modulepreload" href="./lib/sport-duration.mjs" />
+<link rel="modulepreload" href="./lib/sport-signals.mjs" />
+<link rel="modulepreload" href="./lib/objective-score.mjs" />
+<link rel="modulepreload" href="./lib/locales/zh-TW.mjs" />
+<link rel="modulepreload" href="./lib/locales/en.mjs" />
 </head>
 <body>
   <div id="settings-backdrop" class="settings-backdrop" hidden></div>

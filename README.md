@@ -1585,6 +1585,11 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   ESPN's own resizer at 64px (`sizedEspnLogoUrl` in `public/lib/espn.mjs` —
   2-5KB instead of a 20-45KB 500px PNG drawn at 21px), and each one starts
   downloading as soon as the scoreboard naming it arrives.
+- **No avoidable round trips before the data** — `index.html` preloads
+  every module (`modulepreload`) so the code arrives in one round instead
+  of three, loads the Google Fonts stylesheet without blocking scripts, and
+  standings (whose URLs are fixed) are requested alongside the scoreboards
+  rather than after all of them come back.
 
 ### The Shared Proxy Architecture
 

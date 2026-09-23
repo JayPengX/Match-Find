@@ -108,6 +108,7 @@ import {
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
+import { mlbStandingsUrl, nbaStandingsUrl, eplStandingsUrl, f1DriverStandingsUrl } from './lib/sport-signals.mjs';
 import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, PREGAME_SCORING_FIELDS, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // UI copy/locale layer - see that module's own top comment. Every piece of
 // genuine UI chrome (labels, hints, status text, aria-labels) goes through
@@ -3602,6 +3603,23 @@ function prefetchPolymarketEvents() {
     });
 }
 
+// buildMatches only asks for standings after EVERY scoreboard has come back
+// (it needs them to know which leagues have games left) - a whole extra
+// round trip on the critical path. The URLs themselves are fixed, though,
+// so they're requested up front here, alongside the scoreboards;
+// buildMatches then finds them already in (or in flight in)
+// proxyFetchJson's cache. The season matches buildMatches' own
+// (`now.getUTCFullYear()`). A league with nothing left to play costs one
+// wasted small request - nothing else.
+function prefetchStandings() {
+  const urls = [];
+  if (state.enabledSports.has('MLB')) urls.push(mlbStandingsUrl(new Date().getUTCFullYear()));
+  if (state.enabledSports.has('NBA')) urls.push(nbaStandingsUrl());
+  if (state.enabledSports.has('Premier League')) urls.push(eplStandingsUrl());
+  if (state.enabledSports.has('F1')) urls.push(f1DriverStandingsUrl());
+  urls.forEach(url => proxyFetchJson(url).catch(() => {}));
+}
+
 // How long the FIRST paint will wait, past the match list itself being
 // ready, for odds to be applied too - normally zero in practice (the
 // prefetch above started at the same time as the far larger ESPN fetch and
@@ -4264,6 +4282,7 @@ async function init() {
   // a routine near-term-only refresh from here on can never recreate this
   // same incomplete-rotation flicker).
   prefetchPolymarketEvents();
+  prefetchStandings();
   try {
     await refreshFullWindow({ silent: true, waitForOdds: true });
   } catch (error) {
