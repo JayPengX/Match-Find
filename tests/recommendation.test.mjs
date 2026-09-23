@@ -1731,7 +1731,13 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
   const game = (id, dayKey, planningScore, away, home) =>
     makeMatch({ id: `${id}-${dayKey}`, planningScore, competitors: teams(away, home) });
 
-  // Wed-Fri: one Brewers @ Phillies series with three close rivals; Sat-Sun:
+  // Wed-Fri: one Brewers @ Phillies series with one genuine rival
+  // (Guardians @ Red Sox, close every day) plus a much weaker one-day-only
+  // contender (Marlins @ Cubs) - the live case this whole describe block is
+  // named for: Marlins, eligible only on the one day it actually plays,
+  // used to bump Brewers off that day (an augmenting-path "steal" - see
+  // computeVarietyRotation's own comment) purely because it was scarce,
+  // even though it's clearly the weaker of the two real contenders. Sat-Sun:
   // one Rays @ Phillies series with a borderline one-day contender (Reds @
   // Blue Jays, exactly VARIETY_CLOSE_CALL_GAP below) that used to claim
   // Saturday ahead of a far stronger Orioles @ Yankees.
@@ -1740,13 +1746,11 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
       ['2026-09-23', [
         game('brewers', '2026-09-23', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies'),
         game('guardians', '2026-09-23', guardiansWed, 'Cleveland Guardians', 'Boston Red Sox'),
-        game('raysNyy', '2026-09-23', 6.75, 'Tampa Bay Rays', 'New York Yankees'),
         game('marlins', '2026-09-23', 6.75, 'Miami Marlins', 'Chicago Cubs')
       ]],
       ['2026-09-24', [
         game('brewers', '2026-09-24', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies'),
-        game('guardians', '2026-09-24', 6.8, 'Cleveland Guardians', 'Boston Red Sox'),
-        game('raysNyy', '2026-09-24', 6.75, 'Tampa Bay Rays', 'New York Yankees')
+        game('guardians', '2026-09-24', 6.8, 'Cleveland Guardians', 'Boston Red Sox')
       ]],
       ['2026-09-25', [game('brewers', '2026-09-25', 7.1, 'Milwaukee Brewers', 'Philadelphia Phillies')]],
       ['2026-09-26', [
@@ -1764,10 +1768,10 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
   }
   const winners = rotation => Object.fromEntries([...rotation].map(([dayKey, ids]) => [dayKey, [...ids][0].split('-')[0]]));
 
-  test('the reported lineup: each series\' best on the weekend, strongest contenders first, the weakest left out', () => {
+  test('the weaker, scarce Marlins contender never bumps Brewers off a day - Brewers and Guardians split the 3 days between them instead', () => {
     assert.deepEqual(winners(computeVarietyRotation(week())), {
-      '2026-09-23': 'guardians',
-      '2026-09-24': 'raysNyy',
+      '2026-09-23': 'brewers',
+      '2026-09-24': 'guardians',
       '2026-09-25': 'brewers',
       '2026-09-26': 'raysPhi',
       '2026-09-27': 'orioles'
@@ -1776,8 +1780,8 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
 
   test('the same lineup once Wednesday\'s finished Guardians game is re-scored 0.6 behind the series\' top', () => {
     assert.deepEqual(winners(computeVarietyRotation(week({ guardiansWed: 6.5 }))), {
-      '2026-09-23': 'guardians',
-      '2026-09-24': 'raysNyy',
+      '2026-09-23': 'brewers',
+      '2026-09-24': 'guardians',
       '2026-09-25': 'brewers',
       '2026-09-26': 'raysPhi',
       '2026-09-27': 'orioles'
@@ -1793,12 +1797,16 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
   });
 
   test('a started pick fixes its day, and the rest of the series rotates around it without repeating it', () => {
+    // Marlins - the weaker contender that would otherwise never get a day
+    // at all (see the first test above) - has already started, so it's
+    // locked into 9/23 regardless of its own score. Brewers and Guardians
+    // still split the other two days between them, never repeating
+    // Marlins, and Brewers (the stronger of the two) still keeps Friday.
     const locked = new Map([['2026-09-23', new Set(['marlins-2026-09-23'])]]);
     const result = winners(computeVarietyRotation(week(), new Map(), locked));
     assert.equal(result['2026-09-23'], 'marlins');
+    assert.equal(result['2026-09-24'], 'guardians');
     assert.equal(result['2026-09-25'], 'brewers');
-    assert.notEqual(result['2026-09-24'], 'marlins');
-    assert.equal(result['2026-09-24'], 'guardians'); // the strongest one still without a day
   });
 });
 

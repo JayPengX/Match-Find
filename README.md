@@ -647,33 +647,35 @@ unlike the earlier cross-day penalty, which only ever looked backward:
 2. For a run of 2+ days, build a pool: that matchup plus every *other*
    matchup that was a genuinely close rival (within `VARIETY_CLOSE_CALL_GAP`)
    on *any* day of the run.
-3. If the pool has more than one member, assign each day to a distinct
-   pool member via a **maximum bipartite matching** (Kuhn's algorithm —
-   days on one side, pool members on the other, an edge wherever a member
-   was actually close on that specific day), covering as many *distinct*
-   members as the run's own days can support, rather than a fixed
-   `day i → pool[i]` rotation that can't adapt when a later day's own
-   assignment turns out infeasible. Members are placed strongest-first
+3. Drop any *other* pool member that was only ever close on a single day
+   of the run — it isn't a recurring rival to rotate into, just a
+   coincidence (some unrelated game that happened to overlap the
+   incumbent's slot on the one day it's actually scheduled, with a score
+   that happened to land inside the generous `VARIETY_CLOSE_CALL_GAP`
+   window). There's no "variety" value in a one-off: a run rotates
+   *because* the same matchup keeps recurring, and a single day has
+   nothing to recur into.
+4. If the (now-filtered) pool has more than one member, assign each day to
+   a distinct pool member via a **maximum bipartite matching** (Kuhn's
+   algorithm — days on one side, pool members on the other, an edge
+   wherever a member was actually close on that specific day), covering as
+   many *distinct* members as the run's own days can support, rather than
+   a fixed `day i → pool[i]` rotation that can't adapt when a later day's
+   own assignment turns out infeasible. Members are placed strongest-first
    (best score on any day of the run; ties go to the run's own matchup,
    then to whoever was close on more days), so when a run has more
    contenders than days, the one left out is always the weakest. A
-   contender that's close on only one day still gets it when it's strong
-   enough, because the matching moves a more flexible member to another day
-   to make room. This used to go scarcest-first, which let a borderline
-   one-day contender (Cincinnati Reds @ Toronto Blue Jays, 6.45, right on
-   the gap's edge) take Saturday from Baltimore Orioles @ New York Yankees
-   (6.85), which then got no day at all.
-4. Arrange the days: fewest back-to-back repeats first, then the strongest
+   contender close on more than one day can still need the matching's own
+   augmenting step (moving a more flexible, already-placed member to
+   another of *its* eligible days) to get a day of its own — restricted to
+   the filtered pool, this only ever moves a day between two genuine
+   multi-day rivals, never hands one to a single-day one-off.
+5. Arrange the days: fewest back-to-back repeats first, then the strongest
    game on Fri/Sat/Sun, then stronger contenders on earlier days.
 
-For 2026-09-23 to 09-27 (Taipei) this gives the lineup the rotation was
-built for: Wed Guardians @ Red Sox, Thu Rays @ Yankees, Fri Brewers @
-Phillies (the series' best, on the weekend), Sat Rays @ Phillies, Sun
-Orioles @ Yankees.
-
-**Games that already happened can't reshape a series.** Three things kept
-moving that lineup after the fact, each from a game that had already
-finished:
+**Games that already happened can't reshape a series.** Four things kept
+moving a rotated lineup after the fact, each from a game that had already
+finished or from an unrelated one-off that happened to share its slot:
 
 - A finished game was re-scored from post-game data, with no pre-game line
   and standings that already counted the result. Guardians @ Red Sox on
@@ -698,6 +700,20 @@ finished:
   only made sticky, once the full window has loaded. The first
   couple-of-days render can't see a whole series, so its pick can be a
   stopgap.
+- A single-day one-off bumped a genuine multi-day rival out of a run
+  entirely. The matching (step 4 above) places members strongest-first and
+  lets a member bump a weaker, already-placed one to another of its own
+  eligible days — safe among genuine rivals, but a scarce one-off used to
+  be eligible for the matching at all: live case, Miami Marlins @ Chicago
+  Cubs (eligible only on the single day it plays, 6.75) bumped the
+  incumbent Milwaukee Brewers @ Philadelphia Phillies (7.1, eligible every
+  day of the run) off its own opening day and onto a different one, purely
+  because Marlins had nowhere else to go — a strictly worse matching than
+  simply leaving Marlins out, since it swapped a stronger member out for a
+  weaker one instead. Reported directly: "recommending marlins vs cubs,
+  which is the broken state." Step 3 above is the fix: a member only ever
+  enters the matching at all once it's shown up close on at least two days
+  of the run.
 
 **Two further corrections were needed once this shipped and was tested
 against live data.** First: "if Brewer win day three outright then day one

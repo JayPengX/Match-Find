@@ -1572,6 +1572,27 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
         eligibleDaysByMember.get(key).add(dayKey);
       });
     });
+    // Drop any OTHER member (never the run's own matchupKey) that's only
+    // ever close on a SINGLE day of the run - it isn't a recurring rival to
+    // rotate into, just a coincidence: some unrelated game that happened to
+    // overlap the incumbent's slot on the one day it's actually scheduled,
+    // with a score that happened to fall inside the generous
+    // VARIETY_CLOSE_CALL_GAP window. There's no "variety" value in it (a
+    // run rotates BECAUSE the same matchup keeps recurring; a one-off has
+    // nothing to recur INTO), and including it anyway risks it displacing a
+    // genuine, multi-day rival for the one day they both happen to want -
+    // live case: Miami Marlins @ Chicago Cubs (eligible only on the single
+    // day it plays) claimed the incumbent Milwaukee Brewers @ Philadelphia
+    // Phillies's own opening day over Cleveland Guardians @ Boston Red Sox
+    // (eligible, like the incumbent, on every day of the run - a real
+    // 3-game series), even though Guardians was the clearly stronger real
+    // rival. A day this drops a member's only entry from still correctly
+    // shows nothing else close there (closeMatchByDay, used for
+    // alternativeIds/arrangeRunDays, is untouched - only pool MEMBERSHIP,
+    // i.e. whether it can be handed a day of its own, is affected).
+    [...poolKeys].forEach(key => {
+      if (key !== run.matchupKey && eligibleDaysByMember.get(key).size < 2) poolKeys.delete(key);
+    });
     // Days already fixed by a started pick (see `lockedByDay` above): the
     // locked match is either the run's own game or one of its direct
     // conflicts - one in some unrelated slot that day doesn't touch this run.
@@ -1623,13 +1644,9 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     // on one day - live case: Cincinnati Reds @ Toronto Blue Jays, 6.45,
     // exactly on the VARIETY_CLOSE_CALL_GAP edge - claim that day ahead of a
     // much stronger one (Baltimore Orioles @ New York Yankees, 6.85), which
-    // then never got a day at all. A scarce contender still gets its one
-    // day whenever it's strong enough to deserve a seat: the augmenting
-    // step in tryAssign moves a more flexible, already-placed member to
-    // another of its days to make room. Ties go to the run's own matchup,
-    // then to whoever was close on more days of the run (a steadier
-    // contender - live case: Rays @ Yankees, close two days running, over
-    // Marlins @ Cubs, close once, both 6.75), then by name.
+    // then never got a day at all. Ties go to the run's own matchup, then to
+    // whoever was close on more days of the run (a steadier contender), then
+    // by name.
     const membersByStrength = [...poolKeys].sort((a, b) => {
       const scoreDiff = (bestScoreByMember.get(b) ?? 0) - (bestScoreByMember.get(a) ?? 0);
       if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
@@ -1637,15 +1654,29 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
       if (b === run.matchupKey) return 1;
       return eligibleDaysByMember.get(b).size - eligibleDaysByMember.get(a).size || a.localeCompare(b);
     });
-    const dayAssignedTo = new Map(fixedDays); // dayKey -> matchupKey (the maximum-matching result so far)
+    const dayAssignedTo = new Map(fixedDays); // dayKey -> matchupKey (the assignment result so far)
     const fixedMembers = new Set(fixedDays.values());
     const openDaysOf = member => [...eligibleDaysByMember.get(member)].filter(dayKey => !fixedDays.has(dayKey)).sort();
+    // Takes its earliest FREE day first, and only then tries bumping
+    // someone, so members settle in strength order day by day (a run's own
+    // matchup keeps its first day when nothing else decides) instead of
+    // reshuffling earlier placements for no reason. Bumping itself - the
+    // standard Kuhn's-algorithm augmenting-path step, moving a
+    // already-placed member to a DIFFERENT one of its OWN eligible days to
+    // make room - is safe here specifically BECAUSE `poolKeys` was already
+    // filtered, just above, to drop any member that isn't a genuine
+    // multi-day rival (a one-off single-day coincidence has no seat to
+    // bump anyone OUT of in the first place). Every member left in
+    // `membersByStrength` is a real, recurring contender the run's own
+    // days should be fairly split between - live case: Cleveland Guardians
+    // @ Boston Red Sox (a real 3-game series against the incumbent) has to
+    // be able to bump Milwaukee Brewers @ Philadelphia Phillies off a day
+    // that a started pick elsewhere in the run has already claimed, or it
+    // can be squeezed out of every day entirely just because Brewers
+    // (stronger, and processed first) happened to claim its own only
+    // remaining shared day first.
     function tryAssign(member, visitedDays) {
       const days = openDaysOf(member);
-      // Takes its earliest FREE day first, and only then tries bumping
-      // someone, so members settle in strength order day by day (a run's own
-      // matchup keeps its first day when nothing else decides) instead of
-      // reshuffling earlier placements for no reason.
       const free = days.find(dayKey => !dayAssignedTo.has(dayKey));
       if (free) {
         dayAssignedTo.set(free, member);
@@ -1682,8 +1713,10 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     dayAssignedTo.forEach(member => winCount.set(member, winCount.get(member) + 1));
     run.entries.forEach(({ dayKey }) => {
       if (dayAssignedTo.has(dayKey)) return;
-      const eligible = [...closeMatchByDay.get(dayKey).keys()];
-      eligible.sort((a, b) => winCount.get(a) - winCount.get(b) || byScoreThenName(a, b));
+      // Restricted to `poolKeys` - a single-day member dropped just above
+      // isn't in `winCount` at all, and letting it through here would leave
+      // this exactly where that filtering was trying to avoid.
+      const eligible = [...closeMatchByDay.get(dayKey).keys()].filter(key => poolKeys.has(key));
       const chosen = eligible[0];
       dayAssignedTo.set(dayKey, chosen);
       winCount.set(chosen, winCount.get(chosen) + 1);
