@@ -69,7 +69,6 @@ import {
   computeOverlapRange,
   isNearTotalOverlap,
   applyLiveExcitementBonus,
-  naturalSlotChoice,
   matchLifecycleState,
   LIFECYCLE_STATES,
   estimatedDurationMinutes,
@@ -473,7 +472,11 @@ const state = {
   // whenever genuinely fresh match data arrives (a fetch/poll can add,
   // remove, or reschedule fixtures, so last render's snapshot is no longer
   // trustworthy), never by a pin's own render.
-  stackMembershipByDay: new Map()
+  stackMembershipByDay: new Map(),
+  // Every match id shown in the selected day's 推薦賽事 section (stack
+  // primaries AND their alternates) as of its last render - see
+  // renderAllMatchesSection's is-muted rule.
+  featuredIds: new Set()
 };
 
 // Sport labels as ESPN/match-builder.mjs spell them internally (see
@@ -1779,12 +1782,18 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
     computeVarietyRotation(rotationMatchesByDayKey(), pinnedChoicesWithoutThisSlot, lockedIdsByDay()).get(dayKey)
   );
   const pinnedForDay = mergeVarietyForcedIds(pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
-  const naturalMatchId = naturalSlotChoice(dayKey, dayCandidates, slotKey, pinnedForDay, {
+  // Asked of THIS match directly, not "which member does the slot pick" -
+  // a big transitive cluster (a real MLB slate) can have several members
+  // recommended at once, and picking whichever one sorted first there
+  // turned tapping 設為偏好 on the game a pin had just displaced into a new
+  // 偏好 pin instead of restoring its 推薦. Rotation's forced picks are
+  // already in `pinnedForDay`, so this also covers the rotation case.
+  const unpinnedPlan = computeDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedForDay, {
     scoreField: 'planningScore',
-    lockedIds: lockedIdsForDay(dayKey)
+    lockedIds: lockedIdsForDay(dayKey),
+    priorityPinnedIds: pinnedChoicesWithoutThisSlot.get(dayKey)
   });
-  const rotationForcedId = [...(rotationWithoutThisSlot || [])].find(id => clusterMemberIds.has(id));
-  const unpinnedResultId = rotationForcedId || naturalMatchId;
+  const unpinnedResultId = unpinnedPlan.some(m => m.id === matchId) ? matchId : null;
   state.pinnedChoices = applySlotSwipe(basePinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
   // A pin can change which matchup naturally wins a day, which can change
@@ -2351,12 +2360,9 @@ function updateMatchCard(node, match) {
             : t('overlapHours', { hours: Math.floor(mins / 60) });
     conflictNote.hidden = false;
     conflictNote.textContent = t('conflictNote', { name: earlierOverlap.name, clause });
-    // Only dims the card when it's the weaker of the two - "you could be
-    // watching a better game right now instead" is worth de-emphasizing
-    // for; two matches that are BOTH recommended and simply overlap are
-    // both worth full attention, so neither gets muted just for that.
-    if (!match.recommended) node.classList.add('is-muted');
-    else conflictNote.classList.add('is-info');
+    // Dimming (is-muted) is decided by renderAllMatchesSection now - see
+    // its own comment; this only styles the note itself.
+    if (match.recommended) conflictNote.classList.add('is-info');
   } else {
     conflictNote.hidden = true;
     conflictNote.textContent = '';
@@ -2935,6 +2941,7 @@ function renderRecommendedSection() {
   // rather than showing it as if it had already been checked.
   if (isDayPending(dayKey)) {
     recommendedListEl.replaceChildren();
+    state.featuredIds = new Set();
     recommendedEmptyEl.hidden = true;
     if (recommendedLoadingEl) recommendedLoadingEl.hidden = false;
     return;
@@ -2971,6 +2978,7 @@ function renderRecommendedSection() {
 
   if (!ordered.length) {
     recommendedListEl.replaceChildren();
+    state.featuredIds = new Set();
     recommendedEmptyEl.hidden = false;
     return;
   }
@@ -3006,12 +3014,14 @@ function renderRecommendedSection() {
   // same `slotKey`; with a single shared entry the second stack showed the
   // first stack's members - games with no real time conflict with it.
   const claimedFreezeSets = new Set();
+  const featuredIds = new Set();
   // Existing plain cards from this SAME container's previous render, up for
   // reuse below (see getOrBuildMatchCard's own comment) - captured once,
   // up front, before this render starts moving any of them into `fragment`.
   const existingCardsById = collectExistingCardsById(recommendedListEl);
   const fragment = document.createDocumentFragment();
   ordered.forEach((match, index) => {
+    featuredIds.add(match.id);
     // A FINISHED match is kept in 推薦賽事 purely as viewing HISTORY (see
     // computeDayPlan's own comment on why a finished fixture is a normal,
     // still-scheduled candidate, not silently dropped once it ends) - it
@@ -3073,6 +3083,7 @@ function renderRecommendedSection() {
       // own comment) has no scroll position or in-flight gesture that a
       // rebuild could ever visibly disrupt, so there's no need for the old
       // DOM-node-reuse mechanism a drag-based stack once required here.
+      members.forEach(m => featuredIds.add(m.id));
       fragment.appendChild(buildMatchStack(dayKey, members, match, isTopOfDay));
     } else {
       const card = getOrBuildMatchCard(match, existingCardsById);
@@ -3081,6 +3092,7 @@ function renderRecommendedSection() {
     }
   });
   recommendedListEl.replaceChildren(fragment);
+  state.featuredIds = featuredIds;
 }
 
 function renderAllMatchesSection() {
@@ -3109,7 +3121,14 @@ function renderAllMatchesSection() {
   // score actually moved) would flash on every tick.
   const existingCardsById = collectExistingCardsById(allMatchListEl);
   const fragment = document.createDocumentFragment();
-  dayMatches.forEach(match => fragment.appendChild(getOrBuildMatchCard(match, existingCardsById)));
+  // Greyed out: a finished game, a quiet-hours game, or one that isn't
+  // anywhere in the day's 推薦賽事 stacks (state.featuredIds, set by
+  // renderRecommendedSection, which renderSections always runs first).
+  dayMatches.forEach(match => {
+    const card = getOrBuildMatchCard(match, existingCardsById);
+    card.classList.toggle('is-muted', match.isFinished || isQuietHours(match) || !state.featuredIds.has(match.id));
+    fragment.appendChild(card);
+  });
   allMatchListEl.replaceChildren(fragment);
 }
 
