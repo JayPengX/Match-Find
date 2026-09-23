@@ -2743,7 +2743,16 @@ function stopTrackingSwipe() {
   if (activeSwipeCount === 0 && rerenderPendingAfterSwipe) renderSections();
 }
 
-function buildMatchStack(dayKey, members, primary, isTopOfDay) {
+// `host` is set only for a stack a viewer pin was added to (see
+// renderRecommendedSection's isViewerPinStack): the displaced pick whose
+// stack it joined. The pinned card then sits right next to `host` instead
+// of wherever its own start time falls, and a swipe/arrow off it in EITHER
+// direction goes back to `host` - which clears the pin and restores the
+// day - rather than to whichever alternative happened to be its time-order
+// neighbor. Live-reported: swiping back from a preferred game "quietly
+// switched" the stack to an alternative as a 偏好 the viewer never set.
+// Tapping a specific dot still goes straight to that card.
+function buildMatchStack(dayKey, members, primary, isTopOfDay, host = null) {
   // The CLUSTER's own key (every near-total-overlapping member, set by
   // computeDayPlan on the recommended pick - see that field's own comment
   // in recommendation.mjs), not slotKeyFromMembers(members) - `members`
@@ -2773,9 +2782,13 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   // order"). startTimeUtc ties (two members starting at literally the same
   // instant) fall back to id for a still-deterministic order.
   const ordered = members
-    .slice()
+    .filter(m => !host || m.id !== primary.id)
     .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (host) ordered.splice(ordered.findIndex(m => m.id === host.id) + 1, 0, primary);
   const currentIndex = Math.max(0, ordered.findIndex(m => m.id === primary.id));
+  const hostIndex = host ? ordered.findIndex(m => m.id === host.id) : -1;
+  // Where a swipe/arrow step from the current card lands - see `host`.
+  const stepIndex = delta => (hostIndex >= 0 ? hostIndex : currentIndex + delta);
 
   const viewport = document.createElement('div');
   viewport.className = 'match-stack-viewport';
@@ -2896,7 +2909,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
       resetDrag(); // below threshold (or never horizontal) - snap back
       return;
     }
-    const targetIndex = committedDx < 0 ? currentIndex + 1 : currentIndex - 1;
+    const targetIndex = stepIndex(committedDx < 0 ? 1 : -1);
     const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
     if (!target || target.id === primary.id) {
       resetDrag(); // already at that end of the stack - snap back
@@ -2922,8 +2935,8 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   prevBtn.className = 'match-stack-arrow';
   prevBtn.setAttribute('aria-label', t('prevMatchAria'));
   prevBtn.textContent = '‹';
-  prevBtn.disabled = currentIndex === 0;
-  prevBtn.addEventListener('click', () => choose(currentIndex - 1));
+  prevBtn.disabled = hostIndex < 0 && currentIndex === 0;
+  prevBtn.addEventListener('click', () => choose(stepIndex(-1)));
 
   const dots = document.createElement('div');
   dots.className = 'match-stack-dots';
@@ -2941,8 +2954,8 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   nextBtn.className = 'match-stack-arrow';
   nextBtn.setAttribute('aria-label', t('nextMatchAria'));
   nextBtn.textContent = '›';
-  nextBtn.disabled = currentIndex === ordered.length - 1;
-  nextBtn.addEventListener('click', () => choose(currentIndex + 1));
+  nextBtn.disabled = hostIndex < 0 && currentIndex === ordered.length - 1;
+  nextBtn.addEventListener('click', () => choose(stepIndex(1)));
 
   nav.append(prevBtn, dots, nextBtn);
   wrapper.append(hint, viewport, nav);
@@ -3102,7 +3115,7 @@ function renderRecommendedSection() {
       // swipes to one of them.
       match.slotKey = slotKeyFromMembers(members);
       members.forEach(m => featuredIds.add(m.id));
-      fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0));
+      fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0, host));
     } else if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = (baselineById.get(match.id) || match).slotKey || slotKeyFromMembers(members);
