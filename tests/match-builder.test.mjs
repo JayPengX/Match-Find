@@ -165,6 +165,50 @@ describe('computeMatchObjectiveScore (the API-data-driven primary score)', () =>
     assert.equal(result.broadcastQuality, 7);
   });
 
+  // A real broadcaster's own editorial choice (never a guess) - see
+  // sport-duration.mjs's own MLB_NATIONAL_BROADCAST_NETWORKS comment and
+  // this suite's own Premier League test right below for why EPL never
+  // gets this signal at all.
+  describe('isNationalBroadcast (a real network choosing to air this specific game)', () => {
+    test('MLB: a flagship network (ESPN) sets it true', () => {
+      const match = { sport: 'MLB', broadcast: 'ESPN', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(match, {}).isNationalBroadcast, true);
+    });
+
+    test('MLB: a plain streaming listing (MLB.TV) - not a real editorial pick - sets it false', () => {
+      const match = { sport: 'MLB', broadcast: 'MLB.TV', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(match, {}).isNationalBroadcast, false);
+    });
+
+    test('MLB: a bundled streaming tier ("ESPN Unlmtd") - not the flagship network - sets it false', () => {
+      const match = { sport: 'MLB', broadcast: 'ESPN Unlmtd', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(match, {}).isNationalBroadcast, false);
+    });
+
+    test('NBA: a flagship network sets it true, same as MLB', () => {
+      const match = { sport: 'NBA', broadcast: 'TNT', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(match, {}).isNationalBroadcast, true);
+    });
+
+    // Direct instruction: "make sure EPL has no American bias." ESPN's own
+    // soccer scoreboard API - the only broadcast data this pipeline can
+    // fetch for EPL - only ever reports the US rights-holder feed (NBC/
+    // NBCSN/Peacock/USA Network/Universo; verified live, 2026-09: a
+    // `region=gb`/`lang=en-gb` query returns an EMPTY broadcasts list, not
+    // real Sky Sports/TNT Sports/BBC data). Reusing NBA's own
+    // isNationalBroadcast helper against that feed would silently encode
+    // "which fixture NBC finds marketable to an American audience" as if
+    // it were a real producer's pick - so this stays false unconditionally
+    // for EPL, however "national" the US broadcast label looks (`Peacock`
+    // and `NBC` are both genuinely in NBA's own national-network list).
+    test('Premier League: NEVER sets it true, even for a broadcast label that IS a flagship network for other sports', () => {
+      const peacock = { sport: 'Premier League', broadcast: 'Peacock', competitors: [{ record: null }, { record: null }] };
+      const nbc = { sport: 'Premier League', broadcast: 'NBC', competitors: [{ record: null }, { record: null }] };
+      assert.equal(computeMatchObjectiveScore(peacock, {}).isNationalBroadcast, false);
+      assert.equal(computeMatchObjectiveScore(nbc, {}).isNationalBroadcast, false);
+    });
+  });
+
   // Live-verified regression (2026-09-20, docs/recommendation-engine-audit.md
   // Round 14): Crystal Palace's real ESPN summary that day was "1-1-3" (1
   // win, 1 loss, 3 draws), parsed by the OLD parseOverallRecord into just

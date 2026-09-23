@@ -422,6 +422,22 @@ out-of-market game ever, not a producer's choice) and `ESPN Unlmtd` (a
 bundled streaming tier seen on ordinary games with nothing special about
 them, unlike plain `ESPN`).
 
+**Deliberately NOT extended to Premier League — direct instruction: "make
+sure EPL has no American bias."** ESPN's own soccer scoreboard API — the
+only broadcast data this pipeline can fetch for EPL at all — only ever
+reports the US rights-holder feed (`NBC`, `NBCSN`, `Peacock`, `USA
+Network`, `Universo`; verified live, 2026-09: a `region=gb`/`lang=en-gb`
+query param returns an *empty* `broadcasts` list, not real data), never the
+actual British broadcasters (Sky Sports, TNT Sports, BBC) who really decide
+EPL's own "Super Sunday"/Monday Night Football marquee picks. Reusing
+`isNationalBroadcast` against that US-only feed would silently encode
+"which fixture NBC finds marketable to an American audience" as if it were
+a real producer's pick — exactly the bias ruled out — so `computeMatchObjectiveScore`
+never even computes it for `Premier League` (see `match-builder.mjs`'s own
+switch statement); `isDerby`/`isBigClub` (real UK football-culture
+facts — the Big Six, historic derbies — with no American proxy involved)
+stay EPL's whole fame signal, same as before.
+
 ### Known scoring limitations
 
 Stated plainly rather than left silently unaddressed:
@@ -855,6 +871,48 @@ size 1, nothing ever close). A before/after diff across the whole fetched
 window showed exactly 3 intended days differ, zero unintended changes
 anywhere else, and zero `.isPreferred` mislabels with no real pins anywhere
 in the window.
+
+#### A real national-broadcast pick is exempt too, not just a wide-margin one
+
+Direct instruction, after live-verifying a real misfire: "look at what
+actual TV networks and public media actually push." Padres @ Dodgers above
+is exempt from rotation because it has no real *alternative* (pool size 1).
+But a run can still have a genuine close alternative on paper (inside
+`VARIETY_CLOSE_CALL_GAP`) on a day a real broadcaster has already, publicly,
+chosen to air that exact game nationally — and rotation used to spread the
+pick away from that day anyway, purely because some other candidate's score
+happened to land close enough. Live case (2026-09-24): Cleveland Guardians @
+Boston Red Sox — a live, 1-game-back AL Central race, magic number 5 — was
+ESPN's own real national broadcast specifically that day (independently
+confirmed against a live web search of ESPN's own schedule), scoring 7.1
+against a same-slot Cincinnati Reds @ Atlanta Braves (6.8, division already
+clinched) close enough (gap 0.3) to normally rotate. Fixing the underlying
+`watchability` gap (see [`national broadcast — MLB's own gap`](#the-bestmatchscore-blend)
+above) widened that specific margin past `0.6`, but the *rotation mechanism
+itself* simply found a different close alternative (Milwaukee Brewers @
+Philadelphia Phillies, gap exactly `0.6`) to spread the pick to instead —
+same wrong day, different runner-up. The real, root fix is in the rotation
+mechanism, not the score: a day whose real broadcaster pick is known
+(`match.isNationalBroadcast`) is added to the SAME `fixedDays` a real
+already-started pick already uses (`computeVarietyRotation`, right after the
+existing `lockedByDay` handling) — locked to whichever candidate the network
+actually chose that day (checked across the incumbent AND every known close
+rival, not just the incumbent — the real pick some days could just as
+easily be the rival), never traded away for the matching algorithm's own
+otherwise-blind close-score comparison. The *other* day(s) of the run still
+rotate normally — this narrows the exemption to the one day ground truth
+already answered, it doesn't turn the whole run into a second Padres @
+Dodgers.
+
+Extended to NBA (`isNationalBroadcast` already existed there for scoring;
+this is the same real ESPN/ABC/TNT/NBA TV/Prime Video/Peacock signal, now
+also read by the rotation). **Deliberately NOT extended to Premier
+League** — see [`national broadcast — MLB's own gap`](#the-bestmatchscore-blend)
+above for why no unbiased broadcast data exists to compute it from at all;
+EPL's `match.isNationalBroadcast` stays permanently `false`, so this
+exemption simply never fires for it (the mechanism is sport-agnostic and
+would apply the moment real, unbiased data existed) rather than firing on a
+fabricated, US-audience-biased proxy.
 
 ### Pinning: "Prefer"
 

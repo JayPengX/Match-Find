@@ -1564,6 +1564,28 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
       eligibleDaysByMember.get(key).add(dayKey);
       fixedDays.set(dayKey, key);
     });
+    // A real broadcaster's own editorial choice (`match.isNationalBroadcast`
+    // - see match-builder.mjs's own comment on where this comes from and
+    // why EPL never sets it) gets the same standing an uncontested "no
+    // alternative" incumbent already has: locked to whichever candidate it
+    // was for that day, never traded away for a same-slot rival just
+    // because the rival's own score happened to land inside
+    // VARIETY_CLOSE_CALL_GAP. Direct instruction: "look at what actual TV
+    // networks and public media actually push" - a network already
+    // deciding this is THE game to air nationally on this specific day is
+    // real-world ground truth, not something this scheduler's own variety
+    // preference should override. Checks every candidate already known for
+    // that day (the run's own incumbent AND every close rival in
+    // `closeMatchByDay`), not just the incumbent - the real pick some days
+    // could just as easily be the rival, not the matchup that happens to
+    // win this scheduler's own race. Skips a day a started pick already
+    // fixed above (that's real, already-happened history and takes
+    // priority over a pre-game broadcast fact).
+    run.entries.forEach(({ dayKey }) => {
+      if (fixedDays.has(dayKey)) return;
+      const nationalPick = [...closeMatchByDay.get(dayKey)].find(([, m]) => m.isNationalBroadcast);
+      if (nationalPick) fixedDays.set(dayKey, nationalPick[0]);
+    });
     if (poolKeys.size < 2) return; // genuinely nothing else close, on any day - nothing to rotate (the real Padres @ Dodgers case)
 
     // Round 44: "if Brewer win day three outright then day one should be

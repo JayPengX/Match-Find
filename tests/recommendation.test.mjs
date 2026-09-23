@@ -1382,6 +1382,69 @@ describe('Back-to-back variety (Round 43/44: whole-window rotation, hard-forced)
       assert.deepEqual(kinds, ['inc', 'rival']);
     });
 
+    // Direct instruction: "look at what actual TV networks and public
+    // media actually push" - a real broadcaster's own editorial choice
+    // (match-builder.mjs's own isNationalBroadcast, fed from the actual
+    // ESPN/FOX/TBS/Apple TV+ broadcast data already fetched, never a
+    // guess) gets the same standing an uncontested "no alternative"
+    // incumbent already has: it's never rotated away for a same-slot
+    // rival on the day it's the real pick, even when that rival's own
+    // score falls inside VARIETY_CLOSE_CALL_GAP. Live case this fixes
+    // (2026-09-24): Cleveland Guardians @ Boston Red Sox, a live 1-game AL
+    // Central race, was ESPN's real national broadcast specifically that
+    // day; without this exemption the whole-window rotation still spread
+    // its 2-day natural sweep across both days, handing the real ESPN
+    // night to whichever same-slot rival happened to be closest in score
+    // that day - a stakes-less, already-decided game the network never
+    // chose to air at all.
+    describe('national-broadcast exemption', () => {
+      test('a nationally-broadcast incumbent keeps its real day even though a same-slot rival is close enough to normally rotate in', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25']) {
+          const incumbent = makeMatch({
+            id: `guardians-${dayKey}`,
+            planningScore: 7.5,
+            competitors: teams('Cleveland Guardians', 'Boston Red Sox'),
+            isNationalBroadcast: dayKey === '2026-09-24'
+          });
+          const rival = makeMatch({ id: `brewers-${dayKey}`, planningScore: 6.9, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+          days.set(dayKey, day([incumbent, rival]));
+        }
+        const rotation = computeVarietyRotation(days);
+        assert.deepEqual([...rotation.get('2026-09-24')], ['guardians-2026-09-24']); // the real ESPN day - never traded away
+        assert.deepEqual([...rotation.get('2026-09-25')], ['brewers-2026-09-25']); // the OTHER day still rotates normally
+      });
+
+      test('the exemption follows whichever candidate the network actually picked, even when it is the close rival rather than the incumbent', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25']) {
+          const incumbent = makeMatch({ id: `guardians-${dayKey}`, planningScore: 7.5, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+          const rival = makeMatch({
+            id: `brewers-${dayKey}`,
+            planningScore: 6.9,
+            competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies'),
+            isNationalBroadcast: dayKey === '2026-09-24'
+          });
+          days.set(dayKey, day([incumbent, rival]));
+        }
+        const rotation = computeVarietyRotation(days);
+        assert.deepEqual([...rotation.get('2026-09-24')], ['brewers-2026-09-24']); // the rival was the real pick that day
+        assert.deepEqual([...rotation.get('2026-09-25')], ['guardians-2026-09-25']);
+      });
+
+      test('no isNationalBroadcast flag anywhere in the run behaves exactly as before (no regression)', () => {
+        const days = new Map();
+        for (const dayKey of ['2026-09-24', '2026-09-25']) {
+          const incumbent = makeMatch({ id: `guardians-${dayKey}`, planningScore: 7.5, competitors: teams('Cleveland Guardians', 'Boston Red Sox') });
+          const rival = makeMatch({ id: `brewers-${dayKey}`, planningScore: 6.9, competitors: teams('Milwaukee Brewers', 'Philadelphia Phillies') });
+          days.set(dayKey, day([incumbent, rival]));
+        }
+        const rotation = computeVarietyRotation(days);
+        const kinds = ['2026-09-24', '2026-09-25'].map(dayKey => [...rotation.get(dayKey)][0].split('-')[0]).sort();
+        assert.deepEqual(kinds, ['brewers', 'guardians']); // still alternates, same as the plain close-alternative case above
+      });
+    });
+
     test('an exact tie broken differently at render time still never repeats a matchup on consecutive days', () => {
       // The live 9/26-9/27 case: the incumbent led by ~1e-15 when the
       // rotation planned, but a render that sees an exact tie can break it

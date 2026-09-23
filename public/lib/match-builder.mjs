@@ -748,8 +748,17 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
   const homeWinPct = homeGames > 0 ? home.record.wins / homeGames : null;
 
   let result;
+  // Whether a REAL broadcaster's own editorial choice (never a guess) picked
+  // THIS specific fixture to air nationally - folded into `result` below so
+  // it flows through to `match.isNationalBroadcast` (see the assignment
+  // loop below) the same way `skill`/`stakes` do, for recommendation.mjs's
+  // own rotation-exemption use (see computeVarietyRotation's own comment).
+  // Defaults to false; only MLB/NBA ever set it true (see the Premier
+  // League case below for why EPL deliberately never does).
+  let isNationalBroadcastPick = false;
   switch (match.sport) {
     case 'MLB':
+      isNationalBroadcastPick = isNationalBroadcast(match.broadcast, MLB_NATIONAL_BROADCAST_NETWORKS);
       result = computeMlbObjectiveScore({
         awayWinPct,
         homeWinPct,
@@ -758,12 +767,13 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         isPostseason: match.isPostseason,
         isRivalry: isMlbRivalry(away?.name, home?.name),
         isBigClub: isMlbBigClub(away?.name, home?.name),
-        isNationalBroadcast: isNationalBroadcast(match.broadcast, MLB_NATIONAL_BROADCAST_NETWORKS),
+        isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });
       break;
     case 'NBA':
+      isNationalBroadcastPick = isNationalBroadcast(match.broadcast);
       result = computeNbaObjectiveScore({
         awayWinPct,
         homeWinPct,
@@ -771,12 +781,28 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
         home: nbaStandings?.get(home?.name) || null,
         isPostseason: match.isPostseason,
         isRivalry: isNbaRivalry(away?.name, home?.name),
-        isNationalBroadcast: isNationalBroadcast(match.broadcast),
+        isNationalBroadcast: isNationalBroadcastPick,
         oddsSpread: match.oddsSpread,
         oddsOverUnder: match.oddsOverUnder
       });
       break;
     case 'Premier League':
+      // Deliberately NEVER computes a real isNationalBroadcast signal here -
+      // ESPN's own soccer scoreboard API (the only broadcast data this
+      // pipeline can fetch for EPL) only ever reports the US rights-holder
+      // feed (`NBC`/`NBCSN`/`Peacock`/`USA Network`/`Universo` - verified
+      // live, 2026-09; a `region=gb`/`lang=en-gb` query param returns an
+      // EMPTY broadcasts list, not real UK data), never Sky Sports/TNT
+      // Sports/BBC - the actual British broadcasters who really decide
+      // EPL's own "Super Sunday"/Monday Night Football marquee picks.
+      // Reusing NBA's isNationalBroadcast helper against that US-only feed
+      // would silently encode which fixture NBC finds marketable to an
+      // American audience as if it were "what a producer thinks is the
+      // biggest match", exactly the American-bias direct instruction ruled
+      // out - so EPL's own watchability stays exactly what it already was
+      // (isDerby/isBigClub, both real, UK-football-culture facts - the
+      // Big Six, historic derbies - already free of this bias) rather than
+      // gaining a fabricated proxy. isNationalBroadcastPick stays false.
       result = computeEplObjectiveScore({
         awayWinPct,
         homeWinPct,
@@ -794,7 +820,7 @@ export function computeMatchObjectiveScore(match, { mlbStandings, nbaStandings, 
     default:
       result = { competitiveness: 5, watchability: 5, stakes: 5, enduranceScore: 5, skill: null, factors: [] };
   }
-  return { ...result, broadcastQuality };
+  return { ...result, broadcastQuality, isNationalBroadcast: isNationalBroadcastPick };
 }
 
 // A short, human-readable label per recognized factor prefix - deliberately
@@ -877,6 +903,7 @@ export const PREGAME_SCORING_FIELDS = [
   'skill',
   'reason',
   'objectiveFactors',
+  'isNationalBroadcast',
   'score',
   'confidence',
   'oddsSpread',
@@ -1103,6 +1130,14 @@ export async function buildMatches({
     match.enduranceScore = clamp(Math.round(objective.enduranceScore), 1, 10);
     match.broadcastQuality = clamp(Math.round(objective.broadcastQuality), 1, 10);
     match.skill = Number.isFinite(objective.skill) ? objective.skill : null;
+    // A real broadcaster's own editorial choice, never a guess - see this
+    // function's own comment on why EPL's stays false (no unbiased UK
+    // broadcast data exists to compute it from). Consumed by
+    // recommendation.mjs's computeVarietyRotation to exempt a fixture a
+    // real network already chose to air nationally from being rotated away
+    // for a same-slot rival, the same standing an uncontested "no
+    // alternative" incumbent already has.
+    match.isNationalBroadcast = Boolean(objective.isNationalBroadcast);
     // A locally-built, data-grounded reason - real and specific to this
     // fixture's actual numbers, not a placeholder.
     match.reason = buildObjectiveReasonZh(objective.factors);
