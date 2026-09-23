@@ -106,8 +106,12 @@ jobs:
         # never-committed-back, runner-working-copy-only approach as the
         # cache-busting step above - public/app.js in the repo keeps the
         # literal '__BUILD_ID__' placeholder.
+        #
+        # public/sw.js gets the same stamp: it names the service worker's
+        # per-deploy cache, and changing sw.js's bytes is what makes browsers
+        # install the new deploy's worker (see that file's own top comment).
         run: |
-          sed -i "s|__BUILD_ID__|${{ github.sha }}|" public/app.js
+          sed -i "s|__BUILD_ID__|${{ github.sha }}|" public/app.js public/sw.js
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact

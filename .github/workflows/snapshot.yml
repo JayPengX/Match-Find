@@ -1,0 +1,66 @@
+# Rebuilds the prebuilt match-list snapshot (scripts/build-snapshot.mjs) and
+# publishes it as matches.json on this repo's `data` branch, which the page
+# fetches from raw.githubusercontent.com on load (see public/app.js,
+# SERVER_SNAPSHOT_URL) so a viewer sees a complete match list after ONE
+# small request instead of waiting on ~80 proxied API calls. The page still
+# does its own live build right after, exactly as before - this only removes
+# the wait for the first screen.
+#
+# Runs every 5 minutes (GitHub may delay or occasionally skip scheduled
+# runs under load - the page tolerates that: a snapshot older than
+# SERVER_SNAPSHOT_MAX_AGE_MS is ignored) and on every push to main, so a
+# freshly deployed build gets a snapshot built by its own code within a
+# minute (the page ignores a snapshot stamped with a different build id).
+#
+# `data` is force-pushed as a single orphan commit every run, so it never
+# accumulates history. Pushing it doesn't trigger deploy.yml (main only).
+name: Build match snapshot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  push:
+    branches: ['main']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 'match-snapshot'
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build snapshot
+        run: node scripts/build-snapshot.mjs snapshot/matches.json
+      - name: Stamp it with the build it came from
+        # The same commit sha deploy.yml stamps into the deployed app.js as
+        # APP_BUILD_ID - the page only uses a snapshot whose buildId matches
+        # its own, so a match/rawMatches shape change in a new deploy can
+        # never be fed data built by the previous code.
+        run: |
+          SHA=$(git rev-parse HEAD)
+          node -e "const fs=require('fs');const p='snapshot/matches.json';const d=JSON.parse(fs.readFileSync(p,'utf8'));d.buildId=process.argv[1];fs.writeFileSync(p,JSON.stringify(d))" "$SHA"
+      - name: Publish to the data branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd snapshot
+          git init -q -b data
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add matches.json
+          git commit -q -m "Match snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" data

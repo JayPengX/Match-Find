@@ -1590,6 +1590,24 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   of three, loads the Google Fonts stylesheet without blocking scripts, and
   standings (whose URLs are fixed) are requested alongside the scoreboards
   rather than after all of them come back.
+- **Prebuilt snapshot for the first screen** — `.github/workflows/snapshot.yml`
+  runs the same build the page does (`scripts/build-snapshot.mjs`) every ~5
+  minutes and on every push to `main`, and publishes it as `matches.json` on
+  this repo's `data` branch. The page fetches that one file (~10KB
+  compressed, from GitHub's CDN) in parallel with its own live build and
+  paints it as soon as it arrives; the live build replaces it moments later
+  exactly as before. It's only used if it was built by the same deploy as
+  the page (`buildId`) and is under 45 minutes old. Note: GitHub pauses
+  scheduled workflows in a repo with no commits for 60 days - if the site
+  goes quiet that long, re-enable it from the Actions tab (the page simply
+  falls back to its live build meanwhile).
+- **Service worker for the app's own code** (`public/sw.js`) — keeps
+  `index.html`, `app.js`, the stylesheet and every module on the device in a
+  per-deploy cache, so a cold start (the home-screen app especially) doesn't
+  wait on GitHub Pages at all. Match data, odds, logos and fonts are left to
+  the network. When a new deploy is detected, the page makes sure the new
+  deploy's worker has taken over (or removes the worker) before reloading,
+  so a reload never mixes code from two deploys.
 
 ### The Shared Proxy Architecture
 

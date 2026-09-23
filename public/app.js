@@ -405,6 +405,10 @@ const state = {
   // this flag's own call sites for why that distinction is the whole
   // point.
   fullWindowLoaded: false,
+  // True once THIS load's own live build (either tier) has been applied -
+  // from then on the prebuilt server snapshot is older than what's on
+  // screen and must never be painted over it (see fetchServerSnapshot).
+  liveBuildApplied: false,
   // Same idea as fullWindowLoaded, one tier down - set once refreshNearTerm
   // (today/tomorrow) has resolved at least once. Covers the one case the
   // fallback in isDayPending (real data already sitting in
@@ -3380,6 +3384,45 @@ function loadMatchSnapshot() {
   return snapshot;
 }
 
+// ---- Prebuilt server snapshot ---------------------------------------------
+//
+// The localStorage snapshot above only helps a browser that loaded this page
+// in the last half hour - a first visit, or the home-screen app opened a few
+// hours later, still had to wait on ~80 proxied API requests before showing
+// anything. .github/workflows/snapshot.yml runs this app's exact build
+// (scripts/build-snapshot.mjs) every ~5 minutes and publishes the result to
+// this repo's `data` branch, served from GitHub's CDN - ONE ~10KB
+// (compressed) request that paints the full window right away. The live
+// build still runs immediately afterwards, as before, and replaces it.
+//
+// Only used when it was built by this exact deploy (see snapshot.yml's
+// buildId stamp - same reasoning as wipeStorageOnNewBuild: never feed one
+// deploy's rendering code another deploy's data shape) and is recent
+// enough. Ignored entirely in a local checkout (no real build id), so
+// local changes to the pipeline are never masked by the published data.
+const SERVER_SNAPSHOT_URL = 'https://raw.githubusercontent.com/jaypengx-collab/Match-Find/data/matches.json';
+const SERVER_SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
+const SERVER_SNAPSHOT_TIMEOUT_MS = 6_000;
+const IS_DEPLOYED_BUILD = !APP_BUILD_ID.startsWith('__');
+
+async function fetchServerSnapshot() {
+  if (!IS_DEPLOYED_BUILD) return null;
+  try {
+    const response = await fetch(SERVER_SNAPSHOT_URL, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(SERVER_SNAPSHOT_TIMEOUT_MS)
+    });
+    if (!response.ok) return null;
+    const snapshot = await response.json();
+    if (!snapshot || snapshot.buildId !== APP_BUILD_ID || !Array.isArray(snapshot.matches)) return null;
+    const generatedMs = Date.parse(snapshot.generatedAt);
+    if (!Number.isFinite(generatedMs) || Date.now() - generatedMs > SERVER_SNAPSHOT_MAX_AGE_MS) return null;
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
 // Which in-progress or finished fixtures a build should look up the pre-game line for
 // (see match-builder.mjs's espnCoreOddsUrl) - only ones this browser has no
 // pre-game line for yet (never seen, or first seen already underway), and
@@ -3644,6 +3687,7 @@ async function refreshNearTerm() {
     // comment on refreshFullWindow for why this only ever goes true on a
     // real resolve - same reasoning, one tier down.
     state.nearTermLoaded = true;
+    state.liveBuildApplied = true;
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
   } catch (error) {
@@ -3722,7 +3766,55 @@ async function fetchLiveAppBuildId() {
 // this correctly never fires there either.
 async function checkForNewAppVersion() {
   const liveBuildId = await fetchLiveAppBuildId();
-  return !!liveBuildId && liveBuildId !== APP_BUILD_ID;
+  const isNew = !!liveBuildId && liveBuildId !== APP_BUILD_ID;
+  // Start readying the service worker the moment a new deploy is seen, so
+  // it's normally done by the time the reload actually happens.
+  if (isNew && !serviceWorkerReadyForReload) serviceWorkerReadyForReload = prepareServiceWorkerForBuild(liveBuildId);
+  return isNew;
+}
+
+// ---- Service worker vs. the version reload ---------------------------------
+//
+// public/sw.js serves this site's code from a per-deploy cache. Browsers
+// only look for a new worker lazily (Chromium defers it; iOS home-screen
+// apps can go a long time without checking), so when this page finds a new
+// deploy, the reload could otherwise be answered by the OLD worker with the
+// OLD code - and this page would find the new version again and reload
+// again, in a loop. So before reloading: ask for the new worker explicitly
+// and wait (bounded) until its cache - named after the new build id - is
+// in place. If that doesn't happen in time (a failed install, a slow
+// network), the worker is unregistered instead, so the reload comes
+// straight from the network - still a consistent new build - and the next
+// load registers the new worker from scratch. Either way the reloaded page
+// is never a mix of two deploys.
+const SERVICE_WORKER_UPDATE_TIMEOUT_MS = 10_000;
+let serviceWorkerReadyForReload = null;
+
+async function prepareServiceWorkerForBuild(buildId) {
+  if (!('serviceWorker' in navigator)) return;
+  let registration;
+  try {
+    registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return;
+    const expectedCache = `matchfind-shell-${buildId}`;
+    const hasNewCache = async () => (await caches.keys()).includes(expectedCache) && registration.active && !registration.installing && !registration.waiting;
+    const deadline = Date.now() + SERVICE_WORKER_UPDATE_TIMEOUT_MS;
+    await registration.update().catch(() => {});
+    while (Date.now() < deadline) {
+      if (await hasNewCache()) return;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    await removeServiceWorker(registration);
+  } catch (error) {
+    console.warn('service worker update before reload failed - unregistering', error);
+    await removeServiceWorker(registration);
+  }
+}
+
+async function removeServiceWorker(registration) {
+  await registration?.unregister().catch(() => {});
+  const names = await caches.keys().catch(() => []);
+  await Promise.all(names.filter(name => name.startsWith('matchfind-shell-')).map(name => caches.delete(name).catch(() => {})));
 }
 
 // A real reload, not just re-fetching data - the whole point is to get this
@@ -3740,7 +3832,9 @@ async function checkForNewAppVersion() {
 // genuine network request this browser can't shortcut from disk. Shared by
 // the manual refresh button and the automatic background check below, so
 // there's exactly one place this reload actually happens.
-function reloadOntoNewAppVersion() {
+async function reloadOntoNewAppVersion() {
+  // See "Service worker vs. the version reload" above.
+  await (serviceWorkerReadyForReload || Promise.resolve()).catch(() => {});
   const bustedUrl = `${window.location.pathname}?_=${Date.now()}${window.location.hash}`;
   window.location.replace(bustedUrl);
 }
@@ -3818,6 +3912,7 @@ async function refreshFullWindow({ silent = false, statusEl, button, waitForOdds
     // real resolve, never optimistically before one. See isDayPending's
     // own comment for what this unlocks.
     state.fullWindowLoaded = true;
+    state.liveBuildApplied = true;
     applyFreshBuild(matches, generatedAt);
     enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = t('dataUpdated');
@@ -4254,6 +4349,22 @@ async function init() {
       console.error('failed to paint cached snapshot', error);
     }
   }
+  // The prebuilt server snapshot (see its own section above), fetched in
+  // parallel with the live build below - painted only if it lands before
+  // that live build does, and only if it's newer than whatever this
+  // browser's own snapshot just painted. It's a whole-window build, so the
+  // day scroller can treat every day as loaded, same as after the live
+  // full-window refresh.
+  fetchServerSnapshot().then(serverSnapshot => {
+    if (!serverSnapshot || state.liveBuildApplied) return;
+    if (snapshot && Date.parse(snapshot.generatedAt) >= Date.parse(serverSnapshot.generatedAt)) return;
+    try {
+      state.fullWindowLoaded = true;
+      applyFreshBuild(serverSnapshot.matches, serverSnapshot.generatedAt);
+    } catch (error) {
+      console.error('failed to paint server snapshot', error);
+    }
+  });
   // The WHOLE window awaited here, not just near-term - variety rotation
   // (computeVarietyRotation, via getVarietyRotation) decides which match
   // wins a slot by looking for repeat matchups across MULTIPLE consecutive
@@ -4330,3 +4441,15 @@ async function init() {
 }
 
 init();
+
+// Keeps this site's own code on the device - see public/sw.js's own top
+// comment. Registered after init() has already started the data fetch, so
+// it never competes with it. A local checkout (no real build id) skips it,
+// so local edits are never hidden behind a cached copy.
+// `updateViaCache: 'none'` makes the browser check sw.js itself against the
+// network on every visit, so a new deploy's worker is found right away.
+if ('serviceWorker' in navigator && IS_DEPLOYED_BUILD) {
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(error => {
+    console.warn('service worker registration failed', error);
+  });
+}
