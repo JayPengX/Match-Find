@@ -283,6 +283,59 @@ async function proxyFetchJsonUncached(url) {
   return response.json();
 }
 
+// `deploy.yml`'s own cache-busting step (see index.html's own `?v=` query
+// string) rewrites this literal placeholder to that build's real commit
+// sha on every real deploy - stays the literal placeholder locally/in a
+// dev checkout (that sed step only ever runs in the GitHub Actions
+// runner's own working copy, never committed back to git). Declared here,
+// at the very top of the file, specifically so the wipe below can run
+// before ANY other persisted state loads - every `state.x = loadX()`
+// assignment further down in this file runs AFTER this point.
+const APP_BUILD_ID = '__BUILD_ID__';
+
+// Direct instruction: wipe every bit of this browser's own saved state
+// (settings, pins, live-sticky ids, the pre-game scoring cache, the day
+// plan history, the cached match snapshot - all of it) the moment a new
+// deploy ships, not a hand-picked subset. Before this, only two of those
+// (`matchfind-day-plan-history`/`matchfind-match-snapshot`) were tagged
+// with APP_BUILD_ID and thrown away on mismatch; the rest (including
+// `matchfind-pregame-scoring`, whose whole purpose is to freeze an
+// already-started fixture's score so it doesn't get silently re-scored -
+// see freezeStartedMatchScoring) deliberately survived an update, so a
+// scoring/behavior change this app shipped could keep being overridden by
+// a value computed under the OLD formula for however long that particular
+// fixture stayed frozen. A single blanket wipe, keyed off this one build
+// id, replaces that whole per-key "does this survive an update" judgment
+// call with one answer: no persisted state ever outlives the deploy that
+// wrote it. Everything a fresh load rebuilds from scratch (the live fetch
+// itself, and public/lib/recommendation.mjs's own whole-window
+// computeDayPlan/computeVarietyRotation, which already plan every day -
+// including one already partly or fully finished - from THIS load's own
+// complete, freshly-fetched data, never from a a stale local cache) is
+// exactly what keeps a day's schedule from breaking after an update, so
+// losing the old cross-update caches costs nothing real: the schedule is
+// only ever unstable mid-day WITHIN one deploy if the underlying data
+// itself changes meaning (a game finishing changes its own recorded
+// score) - which pregameScoring/dayPlanHistory's own locking still guards
+// against for the rest of that SAME day, same as before; only the
+// cross-deploy survival is gone. Runs unconditionally at module load,
+// before the `state` object below even exists, so nothing anywhere in
+// this file needs its own reasoning about which deploy wrote what it just
+// read back out of localStorage.
+(function wipeStorageOnNewBuild() {
+  try {
+    if (localStorage.getItem('matchfind-app-build-id') === APP_BUILD_ID) return;
+    Object.keys(localStorage)
+      .filter(key => key.startsWith('matchfind-'))
+      .forEach(key => localStorage.removeItem(key));
+    localStorage.setItem('matchfind-app-build-id', APP_BUILD_ID);
+  } catch {
+    // Private browsing / blocked storage - every load below already
+    // tolerates missing/unreadable storage on its own, so there's simply
+    // nothing to wipe or mark here.
+  }
+})();
+
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
   rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
@@ -789,21 +842,20 @@ function oldestPlanHistoryDayKey() {
   date.setDate(date.getDate() - 1);
   return localDateKey(date);
 }
-// Tagged with APP_BUILD_ID (see that constant's own comment) and thrown
-// away on a mismatch, same as the match snapshot - unlike
-// matchfind-pregame-scoring (real, observed pre-game data that stays true
-// regardless of what code reads it), a recorded plan is this SPECIFIC
-// build's own decision. A deploy that fixes a scoring/rotation bug can
-// only be reached by loading the fixed code in the first place - trusting
-// an old decision from BEFORE that fix shipped would lock the very
-// mistake the fix was for into every later render, with no way for the
-// fix to ever correct it. Live-reported directly: a viewer who saw the
+// No longer tagged with its own copy of APP_BUILD_ID - the blanket
+// wipeStorageOnNewBuild() at the very top of this file already guarantees
+// nothing under the `matchfind-` prefix, this key included, ever survives
+// past the deploy that wrote it. A deploy that fixes a scoring/rotation
+// bug can only be reached by loading the fixed code in the first place -
+// trusting an old decision from BEFORE that fix shipped would lock the
+// very mistake the fix was for into every later render, with no way for
+// the fix to ever correct it. Live-reported directly: a viewer who saw the
 // bug once, before a fix went out, kept seeing the SAME wrong pick after
 // the fix deployed too, because it was already recorded as history.
 function loadDayPlanHistory() {
   try {
     const stored = JSON.parse(localStorage.getItem(DAY_PLAN_HISTORY_STORAGE_KEY));
-    if (!stored || stored.buildId !== APP_BUILD_ID) return new Map();
+    if (!stored) return new Map();
     return deserializeDayPlanHistory(stored.entries, oldestPlanHistoryDayKey());
   } catch {
     return new Map();
@@ -811,19 +863,12 @@ function loadDayPlanHistory() {
 }
 function saveDayPlanHistory() {
   try {
-    localStorage.setItem(
-      DAY_PLAN_HISTORY_STORAGE_KEY,
-      JSON.stringify({ buildId: APP_BUILD_ID, entries: serializeDayPlanHistory(state.dayPlanHistory) })
-    );
+    localStorage.setItem(DAY_PLAN_HISTORY_STORAGE_KEY, JSON.stringify({ entries: serializeDayPlanHistory(state.dayPlanHistory) }));
   } catch {
     // Private browsing / blocked storage - see savePriorityOrder's own comment.
   }
 }
-// The REAL load is further down (near PREGAME_SCORING_STORAGE_KEY's own
-// load) - APP_BUILD_ID is a `const` declared there, so calling
-// loadDayPlanHistory this early would throw (same TDZ as
-// PINNED_CHOICES_STORAGE_KEY). Nothing reads state.dayPlanHistory before
-// init() runs.
+state.dayPlanHistory = loadDayPlanHistory();
 // Every day's locks at once, for computeVarietyRotation - a series spans
 // several days, and a started pick on one of them fixes that day's turn.
 function lockedIdsByDay() {
@@ -3250,28 +3295,23 @@ const MATCH_SNAPSHOT_MAX_AGE_MS = 30 * 60_000;
 // throwing inside applyFreshBuild, per its own try/catch below) for
 // whatever the near-term refresh's first few seconds take, on every single
 // load after a deploy shipped ANY shape change, not just ones a viewer
-// happened to hit mid-refresh. `deploy.yml`'s own cache-busting step (see
-// index.html's own `?v=` query string) rewrites the literal placeholder
-// below to that build's real commit sha on every deploy - a snapshot
-// tagged with a DIFFERENT (or missing/pre-this-change) buildId is always
-// from a different deploy, and gets thrown away unread rather than risking
-// a shape mismatch; this build's own fetch fills the gap within seconds
-// regardless, same as a first-ever visit with no snapshot at all. Stays
-// the literal placeholder locally/in a dev checkout (this sed step only
-// ever runs in the GitHub Actions runner's own working copy, never
-// committed back to git) - harmless there since a local snapshot always
-// carries that same placeholder back, so the check always passes.
-const APP_BUILD_ID = '__BUILD_ID__';
-
+// happened to hit mid-refresh. No longer needs its own buildId tag/check -
+// wipeStorageOnNewBuild() (top of this file) already guarantees a snapshot
+// read back here was written by THIS exact deploy's own code, never a
+// previous one; a first-ever visit with no snapshot at all degrades the
+// exact same way it always did.
+//
 // Pre-game scoring per fixture (Map<id, {startTimeUtc, ...PREGAME_SCORING_
-// FIELDS}>), kept apart from the snapshot above so it survives an app update
-// (which throws the snapshot away - see APP_BUILD_ID) and a reopen hours
-// later. mergeFreshMatches hands it to freezeStartedMatchScoring when a
-// fixture's previous version isn't in memory. Without it, a game that had
+// FIELDS}>). mergeFreshMatches hands it to freezeStartedMatchScoring when a
+// fixture's previous version isn't in memory - without it, a game that had
 // already started or finished was re-scored from ESPN's post-game data on
-// the first load after an update - a different score than the one it was
-// recommended with, which moved it in or out of a variety-rotation pool
-// and reshuffled the rest of its series (see computeVarietyRotation).
+// the very next merge, a different score than the one it was recommended
+// with, which moved it in or out of a variety-rotation pool and reshuffled
+// the rest of its series (see computeVarietyRotation). Wiped on every
+// deploy along with everything else (see wipeStorageOnNewBuild) - a
+// scoring/behavior change this app ships should apply to every fixture
+// this load re-fetches, not keep being overridden by a value an OLDER
+// deploy's formula already froze in.
 const PREGAME_SCORING_STORAGE_KEY = 'matchfind-pregame-scoring';
 function pickPregameScoring(match) {
   const entry = { startTimeUtc: match.startTimeUtc };
@@ -3304,28 +3344,7 @@ function rememberPregameScoring(rawMatches) {
   state.pregameScoring = new Map(rawMatches.filter(m => Number.isFinite(m.score)).map(m => [m.id, pickPregameScoring(m)]));
   savePregameScoring();
 }
-// A snapshot from a previous deploy is never painted (see loadMatchSnapshot),
-// but the pre-game scoring in it is still the best record of what its
-// fixtures were recommended with - carried over once, for fixtures this
-// browser has no entry for yet, before the snapshot is thrown away.
-function harvestPregameScoring(snapshotMatches) {
-  let added = false;
-  snapshotMatches.forEach(m => {
-    if (!m || typeof m.id !== 'string' || !Number.isFinite(m.score) || state.pregameScoring.has(m.id)) return;
-    state.pregameScoring.set(m.id, pickPregameScoring(m));
-    added = true;
-  });
-  if (added) savePregameScoring();
-}
-// Loaded here rather than with the other stored state near the top of the
-// file: PREGAME_SCORING_STORAGE_KEY is a `const`, so reading it any earlier
-// would throw (same TDZ as PINNED_CHOICES_STORAGE_KEY). Nothing reads
-// state.pregameScoring before init() runs.
 state.pregameScoring = loadPregameScoring();
-// The real load promised by loadDayPlanHistory's own comment near the top
-// of the file - same TDZ reasoning (APP_BUILD_ID is a `const`, declared
-// just above).
-state.dayPlanHistory = loadDayPlanHistory();
 
 function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
   try {
@@ -3335,12 +3354,7 @@ function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
     // repopulates it fresh within LIVE_POLL_INTERVAL_MS regardless (see
     // matchWorthPollingNow), so keeping a frozen copy here would only risk
     // briefly showing a long-over inning as if it were still happening.
-    const snapshot = {
-      buildId: APP_BUILD_ID,
-      generatedAt,
-      rawMatches: rawMatches.map(({ live, ...rest }) => rest),
-      tbdMatches
-    };
+    const snapshot = { generatedAt, rawMatches: rawMatches.map(({ live, ...rest }) => rest), tbdMatches };
     localStorage.setItem(MATCH_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
     // Private browsing / blocked storage / quota exceeded - this is purely
@@ -3354,16 +3368,6 @@ function loadMatchSnapshot() {
   try {
     const snapshot = JSON.parse(localStorage.getItem(MATCH_SNAPSHOT_STORAGE_KEY));
     if (!snapshot || !Array.isArray(snapshot.rawMatches) || !snapshot.generatedAt) return null;
-    // A snapshot from a DIFFERENT deploy than this one - see APP_BUILD_ID's
-    // own comment - is never safe to instant-paint; wiped outright rather
-    // than merely ignored, so it can't linger and get read again by a
-    // later load that also fails to overwrite it (e.g. one that errors out
-    // before applyFreshBuild's own saveMatchSnapshot call is reached).
-    if (snapshot.buildId !== APP_BUILD_ID) {
-      harvestPregameScoring(snapshot.rawMatches);
-      localStorage.removeItem(MATCH_SNAPSHOT_STORAGE_KEY);
-      return null;
-    }
     if (Date.now() - Date.parse(snapshot.generatedAt) > MATCH_SNAPSHOT_MAX_AGE_MS) return null;
     return snapshot;
   } catch {

@@ -498,28 +498,52 @@ the day's schedule".
 
 `app.js` now remembers the last plan it rendered for each day (per sport
 filter) in localStorage (`matchfind-day-plan-history`, kept back to
-yesterday, separate from the match snapshot so an app update doesn't wipe
-it). Any pick from that plan that has already started, live or finished, is
-passed to `computeDayPlan` as `lockedIds` (see `startedPlanLockIds` in
-`public/lib/recommendation.mjs`) and forced into its slot, still labeled
-推薦. Upcoming picks aren't locked and can still change with fresher data,
-but only around what already started. A real swipe-to-pin still wins over a
-lock it clashes with.
+yesterday). Any pick from that plan that has already started, live or
+finished, is passed to `computeDayPlan` as `lockedIds` (see
+`startedPlanLockIds` in `public/lib/recommendation.mjs`) and forced into
+its slot, still labeled 推薦. Upcoming picks aren't locked and can still
+change with fresher data, but only around what already started. A real
+swipe-to-pin still wins over a lock it clashes with.
 
-**A recorded plan is tagged with the build that produced it** (`APP_BUILD_ID`,
-the same tag `matchfind-match-snapshot` already carries — see "Local-Only
-Data & Privacy" below), and thrown away on a mismatch rather than trusted.
-Unlike `matchfind-pregame-scoring` (real, observed pre-game data that stays
-true regardless of what code reads it), a recorded plan *is* a decision by
-this specific build's own scoring/rotation code. Live-reported directly: a
-viewer who saw a bad recommendation once, from a bug that got fixed and
-deployed minutes later, kept seeing that exact same wrong pick after
-reloading the fixed site — the lock designed to protect a good recommendation
-from being reshuffled was just as effective at protecting a bad one from
-ever being corrected. A build tag means a deploy that changes how a day
-gets decided can only ever be reached by loading the code that produced
-it, so the very first render under fixed code recomputes and records fresh,
-rather than trusting a decision from before the fix existed.
+**Every deploy starts every browser completely fresh.** A live-reported bug
+directly motivated this: a viewer who saw a bad recommendation once, from a
+bug that got fixed and deployed minutes later, kept seeing that exact same
+wrong pick after reloading the fixed site — the lock designed to protect a
+good recommendation from being reshuffled was just as effective at
+protecting a bad one from ever being corrected. `app.js`'s very first
+top-level statement (`wipeStorageOnNewBuild`) compares this build's own
+stamped `APP_BUILD_ID` against a marker (`matchfind-app-build-id`) this
+browser last stored, and on any mismatch deletes *every* `matchfind-*`
+localStorage key — not just the day plan history and match snapshot, but
+also settings, pins, live-sticky ids, and `matchfind-pregame-scoring`
+(the frozen pre-game score cache) — before any of them ever gets loaded.
+`matchfind-pregame-scoring` used to be a deliberate exception (kept across
+an update specifically so it *would* survive), but that meant a scoring
+formula change (a new weight, a new bonus) could keep losing to a value an
+older deploy's formula had already frozen in for however long that
+fixture stayed frozen — direct instruction to wipe it too, so a shipped
+change always applies everywhere, immediately. Reusing the same fresh,
+complete, freshly-fetched data every load (see the next paragraph) is what
+keeps this from reintroducing the original reshuffling bug: nothing about
+day-plan stability actually depends on state surviving *across* deploys,
+only on it surviving the rest of *one* already-in-progress day, which the
+locking above still does unconditionally.
+
+**Every day's plan is always built from that whole calendar day's own
+complete match list — including any game that's already finished — plus
+every other day already fetched in the same window, never from a partial
+or "still ahead" subset.** `computeDayPlan` treats a finished match as a
+real candidate, not something to drop the moment it ends (see that
+function's own top comment), and `computeVarietyRotation`/
+`computeWindowPlan` always run across the *entire* fetched window
+(`state.days`, every day present even when empty) rather than one day in
+isolation — a multi-day rotation run needs to see the whole series to
+split it fairly, and a day missing from that map would otherwise silently
+stitch two unrelated repeats together across the gap. This is what makes a
+freshly wiped browser safe to build from immediately after an update: the
+live fetch itself already contains the whole picture a day's plan needs,
+so there's nothing about a cross-deploy cache that the schedule actually
+depended on to avoid "going broken".
 
 ### Duration, endurance, and the no-clock-sport overrun buffer
 
@@ -741,11 +765,16 @@ finished or from an unrelated one-off that happened to share its slot:
   9/23 ended up 0.6 behind the series' top, fell out of the pool at 0.5,
   and flipped Wed/Thu. The build now also looks up the pre-game line for
   finished games, not just live ones. `app.js` saves every fixture's
-  pre-game scoring in localStorage (`matchfind-pregame-scoring`), separately
-  from the match snapshot, so it survives an app update. On the first load
-  after an update it also recovers that scoring from the old snapshot
-  before throwing the snapshot away. The gap is now 0.6, still inside the
-  observed dividing line, to absorb that post-game drift.
+  pre-game scoring in localStorage (`matchfind-pregame-scoring`) so a game
+  that's already started keeps the score it was recommended with for the
+  rest of that same day, rather than getting rescored out from under
+  itself mid-refresh (see "Games that already started are locked into the
+  day's plan" above). This cache — like every other piece of saved state —
+  is wiped on every new deploy (`wipeStorageOnNewBuild`, see "Local-Only
+  Data & Privacy" below), so a scoring change always applies fresh rather
+  than being overridden by a value an older deploy's formula already froze
+  in. The gap is now 0.6, still inside the observed dividing line, to
+  absorb that post-game drift.
 - A finished game that ran long had its whole real length reserved on the
   schedule. Brewers @ Phillies ran 210 minutes, its block ran into the
   10:10 Padres @ Dodgers start, and that day's natural plan changed.
@@ -1167,6 +1196,35 @@ There is also only ever one recommendation system, not a choice between
 competing ones — see [The `bestMatchScore`
 Blend](#the-bestmatchscore-blend).
 
+### Every deploy wipes every browser's saved state
+
+`app.js`'s very first top-level statement is `wipeStorageOnNewBuild`: it
+compares this build's own stamped `APP_BUILD_ID` (the commit sha
+`deploy.yml`'s own sed step stamps into the file on every deploy) against
+a marker (`matchfind-app-build-id`) this browser last stored, and on any
+mismatch — including a first-ever visit with no marker at all — deletes
+*every* `localStorage` key starting with `matchfind-` before anything else
+in this file ever reads one. That's every per-viewer preference above,
+`matchfind-pinned-choices`, `matchfind-live-sticky-ids`,
+`matchfind-day-plan-history`, `matchfind-pregame-scoring`, and
+`matchfind-match-snapshot` alike — no per-key exception, deliberately. An
+earlier version tagged only the day plan history and match snapshot with
+their own copy of `APP_BUILD_ID`, on the theory that real, observed
+pre-game scoring (`matchfind-pregame-scoring`) stays true regardless of
+what code reads it back and so should survive an update. Direct
+instruction reversed that: a scoring/behavior change this app ships (a
+reweighted formula, a new bonus) should apply to everything a fresh load
+re-fetches, not keep losing to a value an *older* deploy's formula had
+already frozen into that cache. Nothing about a day's own stability
+depends on that survival either — see "Games that already started are
+locked into the day's plan" under [The Viewing Plan
+Algorithm](#the-viewing-plan-algorithm): the locking that keeps an
+already-started pick from being reshuffled works entirely from *this*
+load's own fresh, complete fetch (every day's plan is always built from
+that whole calendar day's own complete match list, including any already-
+finished game, plus every other fetched day), for the rest of *this* day,
+and never actually needed a cache that outlives the deploy that wrote it.
+
 ## Live Match Data & Refresh
 
 Every fixture's score is computed fresh, by the viewer's own browser, every
@@ -1291,13 +1349,14 @@ whatever the snapshot showed, so this is purely a perceived-load-time fix
 of a blank shell), never a substitute for a real fetch. A snapshot older
 than `MATCH_SNAPSHOT_MAX_AGE_MS` (30 minutes) is ignored rather than
 painted, since a stale-enough copy is more likely to mislead (a
-finished-vs-still-scheduled fixture) than to help. It's also tagged with
-the deploy that built it (`APP_BUILD_ID`, stamped by `deploy.yml`'s own sed
-step with that build's commit sha) — a snapshot from a *different* deploy
-than the one currently running is wiped rather than painted, since a code
-change can change the shape this app's own rendering assumes (a renamed
-field, a newly-required one), and a viewer who never manually refreshes
-could otherwise sit on a stale, mismatched snapshot indefinitely.
+finished-vs-still-scheduled fixture) than to help. It no longer needs its
+own per-key deploy tag: `wipeStorageOnNewBuild` (see "Local-Only Data &
+Privacy" below) already guarantees a snapshot read back here was written
+by the exact build now running, never an older one whose rendering code
+assumed a different shape (a renamed field, a newly-required one) — a
+viewer who never manually refreshes gets that same guarantee automatically
+the next time this tab reloads onto the new deploy, rather than sitting on
+a stale, mismatched snapshot indefinitely.
 
 ### Efficiency: Caching & Fetch-Skipping
 
