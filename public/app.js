@@ -789,21 +789,41 @@ function oldestPlanHistoryDayKey() {
   date.setDate(date.getDate() - 1);
   return localDateKey(date);
 }
+// Tagged with APP_BUILD_ID (see that constant's own comment) and thrown
+// away on a mismatch, same as the match snapshot - unlike
+// matchfind-pregame-scoring (real, observed pre-game data that stays true
+// regardless of what code reads it), a recorded plan is this SPECIFIC
+// build's own decision. A deploy that fixes a scoring/rotation bug can
+// only be reached by loading the fixed code in the first place - trusting
+// an old decision from BEFORE that fix shipped would lock the very
+// mistake the fix was for into every later render, with no way for the
+// fix to ever correct it. Live-reported directly: a viewer who saw the
+// bug once, before a fix went out, kept seeing the SAME wrong pick after
+// the fix deployed too, because it was already recorded as history.
 function loadDayPlanHistory() {
   try {
-    return deserializeDayPlanHistory(JSON.parse(localStorage.getItem(DAY_PLAN_HISTORY_STORAGE_KEY)), oldestPlanHistoryDayKey());
+    const stored = JSON.parse(localStorage.getItem(DAY_PLAN_HISTORY_STORAGE_KEY));
+    if (!stored || stored.buildId !== APP_BUILD_ID) return new Map();
+    return deserializeDayPlanHistory(stored.entries, oldestPlanHistoryDayKey());
   } catch {
     return new Map();
   }
 }
 function saveDayPlanHistory() {
   try {
-    localStorage.setItem(DAY_PLAN_HISTORY_STORAGE_KEY, JSON.stringify(serializeDayPlanHistory(state.dayPlanHistory)));
+    localStorage.setItem(
+      DAY_PLAN_HISTORY_STORAGE_KEY,
+      JSON.stringify({ buildId: APP_BUILD_ID, entries: serializeDayPlanHistory(state.dayPlanHistory) })
+    );
   } catch {
     // Private browsing / blocked storage - see savePriorityOrder's own comment.
   }
 }
-state.dayPlanHistory = loadDayPlanHistory();
+// The REAL load is further down (near PREGAME_SCORING_STORAGE_KEY's own
+// load) - APP_BUILD_ID is a `const` declared there, so calling
+// loadDayPlanHistory this early would throw (same TDZ as
+// PINNED_CHOICES_STORAGE_KEY). Nothing reads state.dayPlanHistory before
+// init() runs.
 // Every day's locks at once, for computeVarietyRotation - a series spans
 // several days, and a started pick on one of them fixes that day's turn.
 function lockedIdsByDay() {
@@ -3302,6 +3322,10 @@ function harvestPregameScoring(snapshotMatches) {
 // would throw (same TDZ as PINNED_CHOICES_STORAGE_KEY). Nothing reads
 // state.pregameScoring before init() runs.
 state.pregameScoring = loadPregameScoring();
+// The real load promised by loadDayPlanHistory's own comment near the top
+// of the file - same TDZ reasoning (APP_BUILD_ID is a `const`, declared
+// just above).
+state.dayPlanHistory = loadDayPlanHistory();
 
 function saveMatchSnapshot(rawMatches, tbdMatches, generatedAt) {
   try {

@@ -462,6 +462,21 @@ passed to `computeDayPlan` as `lockedIds` (see `startedPlanLockIds` in
 but only around what already started. A real swipe-to-pin still wins over a
 lock it clashes with.
 
+**A recorded plan is tagged with the build that produced it** (`APP_BUILD_ID`,
+the same tag `matchfind-match-snapshot` already carries — see "Local-Only
+Data & Privacy" below), and thrown away on a mismatch rather than trusted.
+Unlike `matchfind-pregame-scoring` (real, observed pre-game data that stays
+true regardless of what code reads it), a recorded plan *is* a decision by
+this specific build's own scoring/rotation code. Live-reported directly: a
+viewer who saw a bad recommendation once, from a bug that got fixed and
+deployed minutes later, kept seeing that exact same wrong pick after
+reloading the fixed site — the lock designed to protect a good recommendation
+from being reshuffled was just as effective at protecting a bad one from
+ever being corrected. A build tag means a deploy that changes how a day
+gets decided can only ever be reached by loading the code that produced
+it, so the very first render under fixed code recomputes and records fresh,
+rather than trusting a decision from before the fix existed.
+
 ### Duration, endurance, and the no-clock-sport overrun buffer
 
 A fixture's own `enduranceScore` decides how much of its nominal length
