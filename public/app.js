@@ -2614,12 +2614,18 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay) {
   hint.className = 'match-stack-hint';
   hint.textContent = t('matchStackHint');
 
-  // A FIXED order (by score, highest first), independent of which member is
-  // currently primary - so the dots/arrows always land in the same visual
-  // order across renders, rather than reshuffling around whichever member
-  // just got pinned. viewerScore, not the older effectiveScore name - see
-  // recommendation.mjs's computeRecommendationScore/resolveViewingPlan.
-  const ordered = members.slice().sort((a, b) => b.viewerScore - a.viewerScore);
+  // A FIXED order (by start time, earliest first), independent of which
+  // member is currently primary - so the dots/arrows always land in the
+  // same visual order across renders, rather than reshuffling around
+  // whichever member just got pinned. Time, not viewerScore - a viewer
+  // switching through a stack's alternates expects them laid out in the
+  // order they'll actually happen, not shuffled by which one this app
+  // liked best (live-reported: "stacked card is not stacking in time
+  // order"). startTimeUtc ties (two members starting at literally the same
+  // instant) fall back to id for a still-deterministic order.
+  const ordered = members
+    .slice()
+    .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const currentIndex = Math.max(0, ordered.findIndex(m => m.id === primary.id));
 
   const viewport = document.createElement('div');
