@@ -1787,7 +1787,7 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   // turned tapping 設為偏好 on the game a pin had just displaced into a new
   // 偏好 pin instead of restoring its 推薦. Rotation's forced picks are
   // already in `pinnedForDay`, so this also covers the rotation case.
-  const unpinnedPlan = stableDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot);
+  const unpinnedPlan = stableDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot).plan;
   const unpinnedResultId = unpinnedPlan.some(m => m.id === matchId) ? matchId : null;
   state.pinnedChoices = applySlotSwipe(basePinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
   savePinnedChoices();
@@ -1798,28 +1798,46 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   renderSections();
 }
 
-// The day's plan with the viewer's own pins applied as a LOCAL change: the
-// plan the day would have with none of them (`baseline`) is locked in via
-// computeDayPlan's lockedIds, so a pin only displaces the picks it actually
-// clashes with (a lock yields to a pin) and the freed time gets refilled -
-// the rest of the day stays exactly as it was. Without this, every pin
-// re-ran the scheduler over the whole day around it, pulling unrelated,
-// previously greyed-out games into the plan, and swiping back to an
-// original pick then snapped the whole day back again - reported as
-// "I chose one match to prefer, a bunch of greyed-out matches also get
-// featured... it's illogical".
+// The day's plan with the viewer's own pins applied as a LOCAL swap. The
+// plan the day would have with none of them (`baseline`) stays as it is,
+// except for whatever a pin clashes with (a lock yields to a pin), and
+// nothing new is pulled in to fill the freed time - the only candidates
+// are the baseline picks, the pins themselves, started-pick locks and
+// rotation's forced ids. Letting the scheduler loose over the whole day
+// instead pulled unrelated, previously greyed-out games into the plan the
+// moment one game was preferred - reported as "I chose one match to
+// prefer, a bunch of greyed-out matches also get featured... it's
+// illogical". The stack a pin lands in is built from `baseline` too - see
+// renderRecommendedSection's stackAlternativeIds.
 //
 // `viewerPins` goes in as priorityPinnedIds too - a genuine viewer swipe/
 // tap must always win a slot over the variety rotation's own separately-
 // forced pick for it when both land in the SAME cluster (see that option's
 // own comment in computeDayPlan).
 function stableDayPlan(dayKey, dayCandidates, viewerPins, rotationForced) {
-  const options = { scoreField: 'planningScore', lockedIds: lockedIdsForDay(dayKey) };
-  if (viewerPins && viewerPins.size) {
-    const baseline = computeDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), mergeVarietyForcedIds(null, rotationForced), options);
-    options.lockedIds = new Set([...options.lockedIds, ...baseline.map(m => m.id)]);
+  const lockedIds = lockedIdsForDay(dayKey);
+  const options = { scoreField: 'planningScore', lockedIds };
+  if (!viewerPins || !viewerPins.size) {
+    const plan = computeDayPlan(dayKey, dayCandidates, mergeVarietyForcedIds(null, rotationForced), options);
+    return { plan, baseline: plan };
   }
-  return computeDayPlan(dayKey, dayCandidates, mergeVarietyForcedIds(viewerPins, rotationForced), { ...options, priorityPinnedIds: viewerPins });
+  const baseline = computeDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), mergeVarietyForcedIds(null, rotationForced), options);
+  const allowed = new Set([...baseline.map(m => m.id), ...viewerPins, ...lockedIds, ...(rotationForced || [])]);
+  // computeDayPlan only resets the flags on the candidates it's handed -
+  // clear the rest here so nothing keeps a stale 推薦 from a prior render.
+  dayCandidates.forEach(m => {
+    m.recommended = false;
+    m.alternativeIds = null;
+    m.isPreferred = false;
+    m.slotKey = null;
+  });
+  const plan = computeDayPlan(
+    dayKey,
+    dayCandidates.filter(m => allowed.has(m.id)),
+    mergeVarietyForcedIds(viewerPins, rotationForced),
+    { ...options, lockedIds: new Set([...lockedIds, ...baseline.map(m => m.id)]), priorityPinnedIds: viewerPins }
+  );
+  return { plan, baseline };
 }
 
 // Lets a viewer promote ANY not-currently-recommended candidate straight
@@ -2971,10 +2989,11 @@ function renderRecommendedSection() {
   // "只看 MLB" gets its own MLB-only continuous plan, not the cross-sport
   // plan filtered down to whichever MLB picks happened to survive it.
   const dayCandidates = dayCandidatesForPlan(dayKey);
-  const dayPlan = stableDayPlan(
+  const viewerPins = state.pinnedChoices.get(dayKey) || new Set();
+  const { plan: dayPlan, baseline } = stableDayPlan(
     dayKey,
     dayCandidates,
-    state.pinnedChoices.get(dayKey),
+    viewerPins,
     rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey))
   );
   // computeDayPlan's own forcedIds mechanism marks every forced pick as
@@ -3000,6 +3019,29 @@ function renderRecommendedSection() {
   // full state.matches, not just today's bucket, so that edge case doesn't
   // just silently drop the alternative.
   const byId = new Map(state.matches.map(m => [m.id, m]));
+  // Each pick's stack comes from the unpinned `baseline` (see stableDayPlan):
+  // an ordinary pick keeps its original alternatives, and a viewer's pin
+  // joins the stack of whatever baseline pick(s) it displaced - exactly one
+  // added card, rather than its own near-total conflicts (games that were
+  // greyed out and would suddenly get featured). Swiping off it clears the
+  // pin, so it leaves the stack again.
+  const baselineById = new Map(baseline.map(m => [m.id, m]));
+  const planClashes = (a, b) => {
+    const ai = schedulingInterval(a);
+    const bi = schedulingInterval(b);
+    return ai.start < bi.end && bi.start < ai.end;
+  };
+  const stackAlternativeIds = new Map();
+  dayPlan.forEach(match => {
+    let ids;
+    if (viewerPins.has(match.id) && !baselineById.has(match.id)) {
+      const displaced = baseline.filter(b => !b.isFinished && !dayPlan.some(p => p.id === b.id) && planClashes(b, match));
+      ids = displaced.flatMap(b => [b.id, ...(b.alternativeIds || [])]);
+    } else {
+      ids = (baselineById.get(match.id) || match).alternativeIds || [];
+    }
+    stackAlternativeIds.set(match.id, [...new Set(ids)]);
+  });
   // Per-day, per-slot FROZEN membership - see state.stackMembershipByDay's
   // own comment for why. computeDayPlan's alternativeIds is genuinely
   // recomputed per CHOICE (whichever member the scheduler/a pin actually
@@ -3050,10 +3092,21 @@ function renderRecommendedSection() {
       fragment.appendChild(card);
       return;
     }
-    let alternatives = (match.alternativeIds || []).map(id => byId.get(id)).filter(Boolean);
-    if (alternatives.length) {
+    let alternatives = stackAlternativeIds
+      .get(match.id)
+      .map(id => byId.get(id))
+      .filter(m => m && m.id !== match.id && !m.recommended && !m.isFinished);
+    const isViewerPinStack = viewerPins.has(match.id) && !baselineById.has(match.id);
+    if (alternatives.length && isViewerPinStack) {
+      // Not frozen (see dayMembership below) - this stack exists only while
+      // the pin does, and freezing it would leave the pinned game behind in
+      // the original stack after the viewer swipes off it.
+      const members = [match, ...alternatives];
+      members.forEach(m => featuredIds.add(m.id));
+      fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0));
+    } else if (alternatives.length) {
       let members = [match, ...alternatives];
-      const slotKey = match.slotKey || slotKeyFromMembers(members);
+      const slotKey = (baselineById.get(match.id) || match).slotKey || slotKeyFromMembers(members);
       // Which of this slotKey's frozen sets belongs to THIS stack - matched
       // by CONTENT (the frozen set that already contains this
       // stack's primary), not by render position: pinCurrentOrNext and a
