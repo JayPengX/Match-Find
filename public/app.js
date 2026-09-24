@@ -3108,6 +3108,18 @@ function renderRecommendedSection() {
       if (frozen) {
         alternatives = [host, ...[...frozen].map(id => byId.get(id)).filter(m => m && m !== host && m.id !== match.id && !m.recommended && !m.isFinished)];
       }
+      // A pin that was ALREADY one of the host stack's own cards got here by
+      // an ordinary swipe/dot inside that stack, not by 設為偏好 from outside
+      // it - so it keeps the stack's plain time order and swipes step to the
+      // real neighbor. Host mode (pin moved next to the host, every swipe
+      // goes back to it) is only for an outside pin. Live-reported on
+      // 9/25 Padres @ Dodgers ([Angels, Astros, Padres]): swiping to Astros
+      // rebuilt the stack as [Angels, Padres, Astros], so the active dot
+      // never moved and the next swipe went straight back to Padres -
+      // looping between two of the three cards.
+      const joinedFromStack = frozen
+        ? frozen.has(match.id)
+        : (baselineById.get(host.id)?.alternativeIds || []).includes(match.id);
       const members = [match, ...alternatives];
       // The whole stack is the slot a swipe acts on - the pin's own
       // conflict cluster may not contain the host stack's other cards, and
@@ -3115,7 +3127,7 @@ function renderRecommendedSection() {
       // swipes to one of them.
       match.slotKey = slotKeyFromMembers(members);
       members.forEach(m => featuredIds.add(m.id));
-      fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0, host));
+      fragment.appendChild(buildMatchStack(dayKey, members, match, index === 0, joinedFromStack ? null : host));
     } else if (alternatives.length) {
       let members = [match, ...alternatives];
       const slotKey = (baselineById.get(match.id) || match).slotKey || slotKeyFromMembers(members);
