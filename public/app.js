@@ -117,7 +117,7 @@ import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, PREG
 // t() rather than a hardcoded literal, so this file itself never has to
 // change again to add a third language, only ./lib/i18n.mjs does.
 import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
-import { installTapLog, tapLog } from './lib/tap-log.mjs';
+import { installTapLog, isTapLogOn, setTapLogHeader, tapLog } from './lib/tap-log.mjs';
 
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
@@ -664,6 +664,22 @@ const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
 // Hidden on-screen input debugger - tap this line 5 times (see lib/tap-log.mjs).
 installTapLog(generatedNote);
+setTapLogHeader(() => [
+  `build: ${APP_BUILD_ID}`,
+  `tz: ${Intl.DateTimeFormat().resolvedOptions().timeZone} now=${new Date().toString()}`,
+  `data: ${state.lastGeneratedAt || '(none yet)'}`,
+  `day: ${state.selectedDayKey} pins=[${[...(state.pinnedChoices.get(state.selectedDayKey) || [])].map(id => logName(id)).join(', ')}]`
+]);
+
+// Short, readable match label for the tap log: "Padres@Dodgers" rather than
+// an ESPN id or the full two-line name. Takes a match or an id.
+function logName(matchOrId) {
+  const match = typeof matchOrId === 'string' ? state.matches.find(m => m.id === matchOrId) : matchOrId;
+  if (!match) return String(matchOrId);
+  const teams = (match.name || '').split(' @ ');
+  if (teams.length === 2) return teams.map(team => team.trim().split(/\s+/).pop()).join('@');
+  return (match.name || match.id).slice(0, 24);
+}
 
 // ============================================================================
 // DO NOT REMOVE - iOS Safari "every tap needs two taps" fix.
@@ -1791,6 +1807,11 @@ function pinSlotChoice(dayKey, slotKey, matchId) {
   const unpinnedPlan = stableDayPlan(dayKey, dayCandidates.map(m => ({ ...m })), pinnedChoicesWithoutThisSlot.get(dayKey), rotationWithoutThisSlot).plan;
   const unpinnedResultId = unpinnedPlan.some(m => m.id === matchId) ? matchId : null;
   state.pinnedChoices = applySlotSwipe(basePinnedChoices, dayKey, slotKey, matchId, unpinnedResultId);
+  tapLog(
+    `[app] pin ${unpinnedResultId ? `cleared (${logName(matchId)} is the natural pick)` : `set ${logName(matchId)}`}` +
+      (ownPinInCluster !== undefined ? ` replacing ${logName(ownPinInCluster)}` : '') +
+      (supersededPins.length ? ` superseded=[${supersededPins.map(logName).join(', ')}]` : '')
+  );
   savePinnedChoices();
   // A pin can change which matchup naturally wins a day, which can change
   // a rotation run's own shape (see computeVarietyRotation) - the cached
@@ -2767,6 +2788,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay, host = null) {
   const wrapper = document.createElement('div');
   wrapper.className = 'match-stack';
   wrapper.dataset.slotKey = slotKey;
+  if (host) wrapper.dataset.logHost = logName(host);
 
   const hint = document.createElement('p');
   hint.className = 'match-stack-hint';
@@ -2800,7 +2822,11 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay, host = null) {
     const clamped = Math.min(ordered.length - 1, Math.max(0, index));
     const chosen = ordered[clamped];
     if (!chosen || chosen.id === primary.id) return;
-    tapLog(`[app] choose index=${clamped}`);
+    tapLog(
+      `[app] choose ${clamped + 1}/${ordered.length} ${logName(chosen)} from ${logName(primary)}` +
+        ` cards=[${ordered.map((m, i) => (i === currentIndex ? '*' : '') + logName(m)).join(', ')}]` +
+        (hostIndex >= 0 ? ` host=${logName(ordered[hostIndex])}` : '')
+    );
     pinSlotChoice(dayKey, slotKey, chosen.id);
   }
 
@@ -2906,12 +2932,14 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay, host = null) {
     const committedDx = isHorizontalDrag ? dragDx : 0;
     tapLog(`[app] swipe end dx=${Math.round(committedDx)}`);
     if (Math.abs(committedDx) < SWIPE_COMMIT_PX) {
+      tapLog(`[app] swipe snap back: ${isHorizontalDrag ? `under ${SWIPE_COMMIT_PX}px` : 'never horizontal'}`);
       resetDrag(); // below threshold (or never horizontal) - snap back
       return;
     }
     const targetIndex = stepIndex(committedDx < 0 ? 1 : -1);
     const target = ordered[Math.min(ordered.length - 1, Math.max(0, targetIndex))];
     if (!target || target.id === primary.id) {
+      tapLog(`[app] swipe snap back: already at ${committedDx < 0 ? 'last' : 'first'} card`);
       resetDrag(); // already at that end of the stack - snap back
       return;
     }
@@ -2945,6 +2973,7 @@ function buildMatchStack(dayKey, members, primary, isTopOfDay, host = null) {
     dot.type = 'button';
     dot.className = 'match-stack-dot' + (index === currentIndex ? ' is-active' : '');
     dot.setAttribute('aria-label', t('switchToAria', { name: match.name || index + 1 }));
+    dot.dataset.logName = logName(match);
     dot.addEventListener('click', () => choose(index));
     dots.appendChild(dot);
   });
@@ -3182,6 +3211,30 @@ function renderRecommendedSection() {
   });
   recommendedListEl.replaceChildren(fragment);
   state.featuredIds = featuredIds;
+  logRenderedPlan(dayKey, ordered, rotationRespectingLivePicks(dayKey, getVarietyRotation().get(dayKey)));
+}
+
+// One tap-log line for the day's plan and one per stack (cards in on-screen
+// order, * = the card showing, host mode if any) - only when they differ
+// from the last render, so a 30s live poll that changes nothing adds nothing.
+// This is what would have shown the two-card swipe loop at a glance: the
+// stack's order changing under the viewer on every swipe.
+function logRenderedPlan(dayKey, ordered, rotationForced) {
+  if (!isTapLogOn()) return;
+  const pins = state.pinnedChoices.get(dayKey) || new Set();
+  const plan = ordered
+    .map(m => logName(m) + (pins.has(m.id) ? '(pin)' : rotationForced?.has(m.id) ? '(rot)' : '') + (m.isFinished ? '(done)' : ''))
+    .join(', ');
+  const stacks = [...recommendedListEl.querySelectorAll('.match-stack')].map(stack => {
+    const names = [...stack.querySelectorAll('.match-stack-dot')].map(dot => dot.dataset.logName);
+    const active = [...stack.querySelectorAll('.match-stack-dot')].findIndex(dot => dot.classList.contains('is-active'));
+    const host = stack.dataset.logHost;
+    return `  stack [${names.map((n, i) => (i === active ? '*' : '') + n).join(', ')}]${host ? ` host=${host}` : ''}`;
+  });
+  const text = [`[app] plan ${dayKey}: ${plan}`, ...stacks].join('\n');
+  if (text === logRenderedPlan.last) return;
+  logRenderedPlan.last = text;
+  tapLog(text);
 }
 
 function renderAllMatchesSection() {
@@ -3635,6 +3688,7 @@ function needsPregameOdds(id) {
 // own first run), so "how a fresh batch of matches turns into what's on
 // screen" only exists in one place.
 function applyFreshBuild(matches, generatedAt) {
+  tapLog(`[app] data ${generatedAt} (${matches?.length ?? 0} matches)`);
   // Both snapshot paints and every real refresh funnel through here (see
   // this function's own call sites), so the loading screen is lifted from
   // the paths below - immediately when there's nothing to show, or via

@@ -9,7 +9,10 @@
 // page can hide an event from it: every touch/pointer/mouse/click event
 // (with its target and the topmost element actually under the finger),
 // scroll events (a stuck momentum scroll swallows taps), plus app-level
-// markers that app.js reports through tapLog() (swipe start/end, renders).
+// markers that app.js reports through tapLog() (swipe start/end and why it
+// committed or snapped back, which card a stack moved to, what that did to
+// the pins, each stack's cards and the day's plan whenever they change,
+// data loads), plus uncaught errors and the app going to the background.
 // "Copy" puts the whole log on the clipboard so it can be pasted anywhere.
 //
 // Heads-up: turning the log on is NOT side-effect free. Its document-level
@@ -28,6 +31,14 @@ let enabled = false;
 let panel = null;
 let listEl = null;
 let startedAt = 0;
+let headerProvider = null;
+
+// app.js registers a function returning extra header lines for "Copy" (build,
+// time zone, selected day, that day's pins) - the state a pasted log needs
+// to be replayed against, read at copy time rather than guessed afterwards.
+export function setTapLogHeader(provider) {
+  headerProvider = provider;
+}
 
 function describe(el) {
   if (!el || el.nodeType !== 1) return el === document ? 'document' : String(el && el.nodeName);
@@ -40,6 +51,12 @@ function describe(el) {
 
 function stamp() {
   return ((performance.now() - startedAt) / 1000).toFixed(3).padStart(8, ' ');
+}
+
+// For app.js markers that cost real work to build (DOM queries) - skip it
+// entirely while the log is off.
+export function isTapLogOn() {
+  return enabled;
 }
 
 export function tapLog(message) {
@@ -70,6 +87,7 @@ function logEvent(event) {
   }
   if (event.defaultPrevented) extra += ' PREVENTED';
   if (!event.isTrusted) extra += ' SYNTHETIC';
+  if (event.type === 'visibilitychange') extra += ` ${document.visibilityState}`;
   tapLog(`${event.type} ${describe(event.target)}${extra}`);
 }
 
@@ -88,8 +106,17 @@ const EVENT_TYPES = [
   'touchstart', 'touchend', 'touchcancel',
   'pointerdown', 'pointerup', 'pointercancel', 'gotpointercapture', 'lostpointercapture',
   'mouseover', 'mousedown', 'mouseup', 'click',
-  'gesturestart', 'gestureend', 'contextmenu', 'selectstart', 'dragstart', 'focusin'
+  'gesturestart', 'gestureend', 'contextmenu', 'selectstart', 'dragstart', 'focusin',
+  'visibilitychange'
 ];
+
+// A thrown error mid-gesture looks exactly like "the swipe did nothing" from
+// the outside - log it inline so it shows up in the same timeline.
+function logError(event) {
+  const reason = event.type === 'unhandledrejection' ? event.reason : event.error || event.message;
+  const text = reason && reason.stack ? reason.stack.split('\n').slice(0, 3).join(' | ') : String(reason);
+  tapLog(`!! ${event.type} ${text}`);
+}
 
 function buildPanel() {
   panel = document.createElement('div');
@@ -133,11 +160,20 @@ function buildPanel() {
   document.body.appendChild(panel);
 }
 
+function headerLines() {
+  try {
+    return headerProvider ? headerProvider() : [];
+  } catch (error) {
+    return [`header: failed (${error && error.message})`];
+  }
+}
+
 async function copyLog(btn) {
   const text = [
     `UA: ${navigator.userAgent}`,
     `standalone: ${Boolean(navigator.standalone) || matchMedia('(display-mode: standalone)').matches}`,
     `viewport: ${innerWidth}x${innerHeight} dpr=${devicePixelRatio}`,
+    ...headerLines(),
     '',
     ...lines
   ].join('\n');
@@ -172,11 +208,15 @@ function setEnabled(value) {
     startedAt = performance.now();
     EVENT_TYPES.forEach(type => document.addEventListener(type, logEvent, { capture: true, passive: true }));
     document.addEventListener('scroll', logScroll, { capture: true, passive: true });
+    window.addEventListener('error', logError);
+    window.addEventListener('unhandledrejection', logError);
     buildPanel();
     tapLog('tap log on');
   } else {
     EVENT_TYPES.forEach(type => document.removeEventListener(type, logEvent, { capture: true }));
     document.removeEventListener('scroll', logScroll, { capture: true });
+    window.removeEventListener('error', logError);
+    window.removeEventListener('unhandledrejection', logError);
     panel?.remove();
     panel = null;
     listEl = null;
