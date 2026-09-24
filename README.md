@@ -845,7 +845,14 @@ unlike the earlier cross-day penalty, which only ever looked backward:
    that happened to land inside the generous `VARIETY_CLOSE_CALL_GAP`
    window). There's no "variety" value in a one-off: a run rotates
    *because* the same matchup keeps recurring, and a single day has
-   nothing to recur into.
+   nothing to recur into. "Close on a day" here means the same matchup
+   plays that day within `VARIETY_CLOSE_CALL_GAP` of the pick, whether or
+   not the two overlap. Live case (9/26-9/27 Taiwan time): the Red Sox's
+   doubleheader moved Cubs @ Red Sox an hour ahead of Orioles @ Yankees
+   (0.4 behind both days) on 9/26, so Orioles was only a same-slot
+   alternative on 9/27. Judged by slot alone it looked like a one-off,
+   and Cubs @ Red Sox won both days. A member still only gets a day where
+   it really is a same-slot alternative.
 4. If the (now-filtered) pool has more than one member, assign each day to
    a distinct pool member via a **maximum bipartite matching** (Kuhn's
    algorithm — days on one side, pool members on the other, an edge

@@ -1557,8 +1557,32 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     // shows nothing else close there (closeMatchByDay, used for
     // alternativeIds/arrangeRunDays, is untouched - only pool MEMBERSHIP,
     // i.e. whether it can be handed a day of its own, is affected).
+    //
+    // "Recurring" is judged against the whole day, not just the pick's own
+    // slot: a rival counts on any run day where the same matchup plays
+    // within VARIETY_CLOSE_CALL_GAP of the pick, overlapping or not. Live
+    // case (2026-09-26/27 Taiwan time): Chicago Cubs @ Boston Red Sox (7.6)
+    // won both days, and Baltimore Orioles @ New York Yankees (7.2) was
+    // 0.4 behind both days - but on 9/26 the Red Sox's doubleheader moved
+    // their game an hour earlier (06:00 vs 07:05, 62% overlap, under
+    // NEAR_TOTAL_OVERLAP_FRACTION), so Orioles was only an `.alternativeIds`
+    // entry on 9/27, looked like a one-off, and was dropped - the same
+    // matchup two days running with nothing rotated. It still only ever
+    // gets a day where it's a real alternative (`eligibleDaysByMember`).
+    const closeDaysByMember = new Map();
+    run.entries.forEach(({ dayKey, match }) => {
+      const score = Number.isFinite(match.planningScore) ? match.planningScore : match.effectiveScore;
+      byIdByDay.get(dayKey).forEach(m => {
+        const key = matchupKey(m);
+        if (key === run.matchupKey || !poolKeys.has(key)) return;
+        const mScore = Number.isFinite(m.planningScore) ? m.planningScore : m.effectiveScore;
+        if (score - mScore > VARIETY_CLOSE_CALL_GAP + 1e-9) return;
+        if (!closeDaysByMember.has(key)) closeDaysByMember.set(key, new Set());
+        closeDaysByMember.get(key).add(dayKey);
+      });
+    });
     [...poolKeys].forEach(key => {
-      if (key !== run.matchupKey && eligibleDaysByMember.get(key).size < 2) poolKeys.delete(key);
+      if (key !== run.matchupKey && (closeDaysByMember.get(key)?.size ?? 0) < 2) poolKeys.delete(key);
     });
     // Days already fixed by a started pick (see `lockedByDay` above): the
     // locked match is either the run's own game or one of its direct

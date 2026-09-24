@@ -1874,6 +1874,29 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
     assert.equal(result['2026-09-24'], 'guardians');
     assert.equal(result['2026-09-25'], 'brewers');
   });
+
+  test('a rival close both days still rotates in when a doubleheader shifts the run\'s game off its slot on one of them (the real 9/26-9/27 Taiwan-time lineup)', () => {
+    // 9/26: the Red Sox doubleheader's night game starts 06:00 Taiwan time,
+    // an hour before Orioles @ Yankees - only 62% overlap, so Orioles isn't
+    // one of Cubs' `.alternativeIds` that day even though it's 0.4 behind.
+    // 9/27: same start, full overlap. Orioles is a genuine two-day rival,
+    // not a one-off, and must get 9/27 instead of Cubs repeating.
+    const at = (id, dayKey, planningScore, away, home, startTimeUtc, durationMinutes) =>
+      makeMatch({ id: `${id}-${dayKey}`, planningScore, competitors: teams(away, home), startTimeUtc, durationMinutes });
+    const days = new Map([
+      ['2026-09-26', [
+        at('cubs', '2026-09-26', 7.6, 'Chicago Cubs', 'Boston Red Sox', '2026-09-25T22:00:00Z', 170),
+        at('raysPhi', '2026-09-26', 6.9, 'Tampa Bay Rays', 'Philadelphia Phillies', '2026-09-25T22:40:00Z', 170),
+        at('orioles', '2026-09-26', 7.2, 'Baltimore Orioles', 'New York Yankees', '2026-09-25T23:05:00Z', 168)
+      ]],
+      ['2026-09-27', [
+        at('cubs', '2026-09-27', 7.6, 'Chicago Cubs', 'Boston Red Sox', '2026-09-26T23:15:00Z', 170),
+        at('raysPhi', '2026-09-27', 6.9, 'Tampa Bay Rays', 'Philadelphia Phillies', '2026-09-26T23:15:00Z', 170),
+        at('orioles', '2026-09-27', 7.2, 'Baltimore Orioles', 'New York Yankees', '2026-09-26T23:15:00Z', 168)
+      ]]
+    ]);
+    assert.deepEqual(winners(computeVarietyRotation(days)), { '2026-09-26': 'cubs', '2026-09-27': 'orioles' });
+  });
 });
 
 describe('a finished game that ran long keeps the block it was planned with', () => {
