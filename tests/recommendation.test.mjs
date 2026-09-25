@@ -455,6 +455,20 @@ describe('computeDayPlan', () => {
     assert.equal(withPriority[0].isPreferred, true);
   });
 
+  test('a viewer pin also beats a forced pick it only partly overlaps (a different cluster)', () => {
+    // Live case: Cubs @ Red Sox (live, forced by the rotation) and a pinned
+    // Rays @ Phillies starting 70 minutes later were both shown as picks,
+    // so the Cubs stack's cards reshuffled on every swipe.
+    const cubs = makeMatch({ id: 'cubs', startTimeUtc: '2026-09-25T21:30:00.000Z', durationMinutes: 165, effectiveScore: 7.6 });
+    const rays = makeMatch({ id: 'rays', startTimeUtc: '2026-09-25T22:40:00.000Z', durationMinutes: 162, effectiveScore: 6.7 });
+    const plan = computeDayPlan('2026-09-26', [cubs, rays], new Set(['cubs', 'rays']), {
+      priorityPinnedIds: new Set(['rays']),
+      lockedIds: new Set(['cubs'])
+    });
+    assert.deepEqual(plan.map(m => m.id), ['rays']);
+    assert.deepEqual(rays.alternativeIds, ['cubs']);
+  });
+
   test('a match the scheduler picks on its own merits is never flagged isPreferred', () => {
     const a = makeMatch({ id: 'a', startTimeUtc: '2026-09-19T12:00:00.000Z', durationMinutes: 60, effectiveScore: 6 });
     const plan = computeDayPlan('2026-09-19', [a]);

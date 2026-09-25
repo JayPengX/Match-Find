@@ -1139,12 +1139,34 @@ export function computeDayPlan(
   // caller that doesn't pass it (computeVarietyRotation's own internal
   // planning, dump-day-plan.mjs, every test) keeps today's plain
   // first-in-`dayMatches` behavior exactly as before.
-  clusters.forEach(cluster => {
-    const clusterPinned = pinnedForDay ? cluster.members.filter(m => pinnedForDay.has(m.id)) : [];
-    if (!clusterPinned.length) return;
-    const pinnedMatch = (priorityPinnedIds && clusterPinned.find(m => priorityPinnedIds.has(m.id))) || clusterPinned[0];
-    if (pinnedMatch) forceIntoPlan(pinnedMatch);
-  });
+  //
+  // The same "the viewer's pin wins" rule has to hold ACROSS clusters too: a
+  // non-priority forced id (a rotation force - often a started pick the
+  // rotation fixed its day to) that only PARTIALLY overlaps a viewer pin
+  // sits in a different cluster, so the per-cluster tie-break above never
+  // sees the two together and both used to be forced in side by side. Live
+  // case: Cubs @ Red Sox (live, rotation) and a pinned Rays @ Phillies
+  // starting an hour later both showed as picks; swiping the Cubs stack to
+  // a third game superseded the Rays pin, which dropped Rays back into that
+  // stack, and swiping back landed on Rays and split it out again - the
+  // stack's cards and order changed under the viewer on every swipe.
+  // Priority pins are forced first, and any other forced id that clashes
+  // with one gives way.
+  const pinnedClusters = clusters
+    .map(cluster => {
+      const clusterPinned = pinnedForDay ? cluster.members.filter(m => pinnedForDay.has(m.id)) : [];
+      const priority = priorityPinnedIds && clusterPinned.find(m => priorityPinnedIds.has(m.id));
+      return { pinnedMatch: priority || clusterPinned[0], isPriority: !!priority };
+    })
+    .filter(entry => entry.pinnedMatch);
+  pinnedClusters.filter(entry => entry.isPriority).forEach(entry => forceIntoPlan(entry.pinnedMatch));
+  const priorityForced = pinnedClusters.filter(entry => entry.isPriority).map(entry => entry.pinnedMatch);
+  pinnedClusters
+    .filter(entry => !entry.isPriority)
+    .forEach(({ pinnedMatch }) => {
+      if (priorityForced.some(pin => schedulingClash(pin, pinnedMatch))) return;
+      forceIntoPlan(pinnedMatch);
+    });
 
   const pinnedIds = new Set(forcedIds);
   const forcedMatches = () => candidates.filter(m => forcedIds.has(m.id));

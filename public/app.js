@@ -2793,7 +2793,7 @@ function isDayPending(dayKey) {
 function visibleDays() {
   return state.days.filter(day => {
     if (isDayPending(day.key)) return true;
-    const dayMatches = matchesForDay(day.key);
+    const dayMatches = [...matchesForDay(day.key), ...tbdMatchesForDay(day.key)];
     return state.activeSport === 'all'
       ? dayMatches.length > 0
       : dayMatches.some(m => m.sport === state.activeSport);
@@ -3422,7 +3422,9 @@ function renderAllMatchesSection() {
 
   if (!dayMatches.length) {
     allMatchListEl.replaceChildren();
-    allEmptyEl.hidden = false;
+    // A day with only not-yet-timed games isn't "no games" - they're listed
+    // right below (renderTbdSection).
+    allEmptyEl.hidden = applySportFilter(tbdMatchesForSelectedDay()).length > 0;
     return;
   }
   allEmptyEl.hidden = true;
@@ -3460,6 +3462,7 @@ function renderSections() {
   rerenderPendingAfterSwipe = false;
   renderRecommendedSection();
   renderAllMatchesSection();
+  renderTbdSection();
 }
 
 // Fixtures ESPN has on the schedule but hasn't set a real kickoff time for
@@ -3469,8 +3472,14 @@ function renderSections() {
 // DP pipeline (see applyFreshBuild) and just listed here once, independent
 // of whichever day is currently selected, with a "時間未定" label instead
 // of a clock time.
+//
+// Listed under the day each fixture most likely falls on (tbdDayKey), not
+// under every day: a list of every not-yet-timed game hung off the bottom
+// of whichever day was selected put next week's Wild Card games under
+// today - live-reported as "why at the bottom of today we got play off?".
 function renderTbdSection() {
-  if (!state.tbdMatches.length) {
+  const dayTbd = applySportFilter(tbdMatchesForDay(state.selectedDayKey));
+  if (!dayTbd.length) {
     tbdSection.hidden = true;
     tbdListEl.replaceChildren();
     return;
@@ -3478,8 +3487,29 @@ function renderTbdSection() {
   tbdSection.hidden = false;
   const existingCardsById = collectExistingCardsById(tbdListEl);
   const fragment = document.createDocumentFragment();
-  state.tbdMatches.forEach(match => fragment.appendChild(getOrBuildMatchCard(match, existingCardsById)));
+  dayTbd.forEach(match => fragment.appendChild(getOrBuildMatchCard(match, existingCardsById)));
   tbdListEl.replaceChildren(fragment);
+}
+
+// ESPN dates a not-yet-timed game at midnight US Eastern on its US calendar
+// day, which is hours before any real first pitch/tip-off and, east of the
+// US, often the wrong local day altogether (a US-evening game is the next
+// morning in Taipei). Bucketed as if it started at a typical 7pm ET
+// (23:00 UTC) instead - still only a best guess, which is why the card says
+// 時間未定 rather than a time.
+// A function, not a const, so buildDayList can use it however early the
+// first render runs.
+function tbdLikelyStart(match) {
+  return new Date(Date.parse(match.startTimeUtc) + 19 * 3_600_000);
+}
+function tbdDayKey(match) {
+  return localDateKey(tbdLikelyStart(match));
+}
+function tbdMatchesForDay(dayKey) {
+  return state.tbdMatches.filter(m => tbdDayKey(m) === dayKey);
+}
+function tbdMatchesForSelectedDay() {
+  return tbdMatchesForDay(state.selectedDayKey);
 }
 
 function buildDayList(matches) {
@@ -3501,6 +3531,16 @@ function buildDayList(matches) {
       seen.add(key);
       days.push({ key, date: new Date(match.startTimeUtc) });
     }
+  });
+  // Days whose only games are not-yet-timed ones (see tbdDayKey) still get
+  // a pill, as long as they're inside the fetched window.
+  state.tbdMatches.forEach(match => {
+    const key = tbdDayKey(match);
+    if (seen.has(key)) return;
+    const date = tbdLikelyStart(match);
+    if (date - today >= daysAhead * 86_400_000) return;
+    seen.add(key);
+    days.push({ key, date });
   });
   days.sort((a, b) => a.date - b.date);
   return days;
