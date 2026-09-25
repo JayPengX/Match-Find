@@ -4064,10 +4064,41 @@ async function fetchLiveAppBuildId() {
 async function checkForNewAppVersion() {
   const liveBuildId = await fetchLiveAppBuildId();
   const isNew = !!liveBuildId && liveBuildId !== APP_BUILD_ID;
+  if (isNew) lastSeenLiveBuildId = liveBuildId;
   // Start readying the service worker the moment a new deploy is seen, so
   // it's normally done by the time the reload actually happens.
   if (isNew && !serviceWorkerReadyForReload) serviceWorkerReadyForReload = prepareServiceWorkerForBuild(liveBuildId);
   return isNew;
+}
+
+let lastSeenLiveBuildId = null;
+
+// For the two moments nobody is mid-interaction - the page just opened, or
+// the viewer just came back to it - a new deploy is applied RIGHT AWAY
+// instead of waiting for the tab to be backgrounded again. Live-reported:
+// going back to an open tab after a deploy "spins forever", and the new
+// recommendations only show up "quite some time after", while a fresh
+// browser gets them at once. The old tab's code rejects the new deploy's
+// snapshot (fetchServerSnapshot only accepts its own buildId), so it
+// rebuilt the whole window through the proxy - the spinner - and a manual
+// refresh could still be answered by the old service worker's cached
+// shell; the new code then only arrived on the next backgrounding.
+//
+// At most one such reload per new build per tab session: if the reload
+// somehow still lands on the old code (the worker couldn't be replaced or
+// removed), reloading again would just loop.
+const RELOADED_FOR_BUILD_KEY = 'matchfind-reloaded-for-build';
+async function reloadNowIfNewVersion() {
+  if (!(await checkForNewAppVersion().catch(() => false))) return false;
+  try {
+    if (sessionStorage.getItem(RELOADED_FOR_BUILD_KEY) === lastSeenLiveBuildId) return false;
+    sessionStorage.setItem(RELOADED_FOR_BUILD_KEY, lastSeenLiveBuildId);
+  } catch {
+    return false; // no way to guard against a loop - leave it to the normal background path
+  }
+  tapLog(`[app] new build ${lastSeenLiveBuildId} - reloading now`);
+  await reloadOntoNewAppVersion();
+  return true;
 }
 
 // ---- Service worker vs. the version reload ---------------------------------
@@ -4096,7 +4127,9 @@ async function prepareServiceWorkerForBuild(buildId) {
     const expectedCache = `matchfind-shell-${buildId}`;
     const hasNewCache = async () => (await caches.keys()).includes(expectedCache) && registration.active && !registration.installing && !registration.waiting;
     const deadline = Date.now() + SERVICE_WORKER_UPDATE_TIMEOUT_MS;
-    await registration.update().catch(() => {});
+    // Bounded - an update() that never settles (seen on iOS) would
+    // otherwise hold the reload that's waiting on this forever.
+    await Promise.race([registration.update().catch(() => {}), new Promise(resolve => setTimeout(resolve, SERVICE_WORKER_UPDATE_TIMEOUT_MS))]);
     while (Date.now() < deadline) {
       if (await hasNewCache()) return;
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -4547,6 +4580,8 @@ const FOREGROUND_STALE_MS = 30_000;
 let hiddenSinceAt = null;
 
 async function handleForegroundReturn(awayMs) {
+  // A new deploy first - see reloadNowIfNewVersion.
+  if (await reloadNowIfNewVersion()) return;
   const fromSnapshot = await refreshFromSnapshot().catch(() => false);
   if (!fromSnapshot) {
     try {
@@ -4681,6 +4716,11 @@ async function init() {
   if (isSnapshotLiveEnough(serverSnapshot) && state.allRawMatches.length) {
     // refreshFullWindow would have run this; the snapshot path must too.
     checkForAppVersionUpdate().catch(() => {});
+  } else if (await reloadNowIfNewVersion()) {
+    // No usable snapshot because a newer deploy's is already out - this
+    // page is the old code. Reload onto the new one instead of rebuilding
+    // the whole window through the proxy first (see reloadNowIfNewVersion).
+    return;
   } else {
     // See prefetchPolymarketEvents/prefetchStandings for why these start
     // before the build itself.
