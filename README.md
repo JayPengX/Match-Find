@@ -2122,7 +2122,7 @@ public/
   manifest.webmanifest     PWA install manifest
   favicon.svg               master icon mark
   icons/                   rasterized PWA icons (icon-180.png, icon-512.png)
-  og-image.png             1200x630 social/link-preview card
+  og-image.jpg             1200x630 social/link-preview card
   styles.css               all styling
   lib/
     match-builder.mjs      buildMatches: fetch pipeline, resolveWhereToWatchTw,
@@ -2278,7 +2278,7 @@ Actions** (no branch to pick — the workflow handles publishing).
 
 `public/favicon.svg` is the one master mark; `public/icons/icon-180.png`
 (apple-touch-icon, e.g. "加入主畫面" on iOS Safari) and `icon-512.png`
-(`manifest.webmanifest`) are rasterized from it, and `public/og-image.png`
+(`manifest.webmanifest`) are rasterized from it, and `public/og-image.jpg`
 (1200×630) is what a shared link's preview card shows (Messages, Slack,
 etc. — see the `og:image`/`twitter:image` tags in `index.html`). All three
 PNGs were generated once with headless Chromium screenshotting the SVG at
