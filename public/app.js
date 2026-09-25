@@ -2730,7 +2730,7 @@ function ensureSelectedDayHasActiveSport() {
   if (state.activeSport === 'all') return;
   if (matchesForDay(state.selectedDayKey).some(m => m.sport === state.activeSport)) return;
   const currentIndex = state.days.findIndex(d => d.key === state.selectedDayKey);
-  const hasSport = day => matchesForDay(day.key).some(m => m.sport === state.activeSport);
+  const hasSport = day => isDisplayableDay(day) && matchesForDay(day.key).some(m => m.sport === state.activeSport);
   let candidate = null;
   for (let i = currentIndex + 1; i < state.days.length; i++) {
     if (hasSport(state.days[i])) { candidate = state.days[i]; break; }
@@ -2816,6 +2816,7 @@ function isDayPending(dayKey) {
 // or the other.
 function visibleDays() {
   return state.days.filter(day => {
+    if (!isDisplayableDay(day)) return false;
     if (isDayPending(day.key)) return true;
     const dayMatches = [...matchesForDay(day.key), ...tbdMatchesForDay(day.key)];
     return state.activeSport === 'all'
@@ -3616,9 +3617,24 @@ function pickInitialDay(days, matches) {
 // KEPT afterward is a local-calendar-day question only the browser (which
 // alone knows the real viewer's own timezone) can answer correctly.
 const MATCH_RETENTION_PAST_DAYS = 1;
+// One more past day is kept in memory than is ever shown, purely as context
+// for the variety rotation (see rotationMatchesByDayKey): without the day
+// before yesterday, a fresh browser re-planned yesterday as if it were the
+// first day of its series and re-picked the matchup the day before had
+// already had. Live-reported: the home-screen app (whose stored history
+// still held what it had shown) said Rays @ Yankees for yesterday while
+// every freshly wiped Safari tab said Guardians @ Red Sox - the pick from
+// the day BEFORE yesterday.
+const ROTATION_CONTEXT_PAST_DAYS = MATCH_RETENTION_PAST_DAYS + 1;
 
 function isWithinRetentionWindow(match) {
-  return daysFromToday(new Date(match.startTimeUtc)) >= -MATCH_RETENTION_PAST_DAYS;
+  return daysFromToday(new Date(match.startTimeUtc)) >= -ROTATION_CONTEXT_PAST_DAYS;
+}
+
+// A day the viewer can actually see (a pill, a jump target) - state.days
+// also carries the hidden rotation-context day(s) before 昨天.
+function isDisplayableDay(day) {
+  return daysFromToday(day.date) >= -MATCH_RETENTION_PAST_DAYS;
 }
 
 // The one exception to "upsert only": a not-yet-finished fixture ESPN has
@@ -4037,7 +4053,7 @@ function applyEnabledSportsAndRender() {
   // fresh default when their previous selection no longer has a match at
   // all (e.g. it aged out of the rolling window, or its only sport just
   // got disabled).
-  if (!state.selectedDayKey || !state.days.some(d => d.key === state.selectedDayKey)) {
+  if (!state.selectedDayKey || !state.days.some(d => d.key === state.selectedDayKey && isDisplayableDay(d))) {
     state.selectedDayKey = pickInitialDay(state.days, state.matches);
   }
 

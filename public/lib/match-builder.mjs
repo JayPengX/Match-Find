@@ -431,11 +431,16 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
   // outside the real window; only a genuinely FINISHED fixture is exempted
   // from that bound at all - see the isFinished check below).
   //
-  // length is daysAhead + 3, not + 1: two extra days for the lookback
+  // A THIRD lookback day covers the viewer's day BEFORE yesterday, which
+  // is never shown but which the variety rotation needs to plan yesterday
+  // the way it was planned when it was today (see app.js's
+  // ROTATION_CONTEXT_PAST_DAYS).
+  //
+  // length is daysAhead + 4, not + 1: three extra days for the lookback
   // above, PLUS one more so the loop's own far end actually reaches
   // windowEndMs.
-  const dates = Array.from({ length: daysAhead + 3 }, (_, i) =>
-    yyyymmddUtc(new Date(now.getTime() + (i - 2) * 86_400_000))
+  const dates = Array.from({ length: daysAhead + 4 }, (_, i) =>
+    yyyymmddUtc(new Date(now.getTime() + (i - 3) * 86_400_000))
   );
   const results = await Promise.allSettled(
     dates.map(date => fetchJson(espnScoreboardUrl(league.sportKey, league.leagueKey, date)))
@@ -650,8 +655,9 @@ const F1_SESSION_TYPES = [
 async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
   // Starts two days before `now`, same reasoning and same fix as
   // fetchTeamLeagueMatches's own `dates` array above (the Taiwan-viewer
-  // "昨天" lookback needs a full 2 UTC-calendar-days of margin, not just 1).
-  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 2 * 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
+  // "昨天" lookback needs a full 2 UTC-calendar-days of margin, not just 1,
+  // plus one for the rotation's day-before-yesterday context).
+  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 3 * 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
   let data;
   try {
     data = await fetchJson(espnScoreboardUrl('racing', 'f1', rangeParam));
