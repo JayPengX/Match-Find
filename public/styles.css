@@ -10,6 +10,10 @@
   --accent-soft: rgba(91, 140, 255, 0.16);
   --good: #3ddc97;
   --good-soft: rgba(61, 220, 151, 0.14);
+  /* Text on --good-soft - --good itself is fine on dark but too pale on light. */
+  --good-text: #3ddc97;
+  /* An odds-bar side with no usable team color of its own (see app.js's teamOddsColors). */
+  --odds-neutral: #5d6578;
   --warn: #ffb84d;
   --warn-text: #ffb84d;
   --warn-soft: rgba(255, 184, 77, 0.16);
@@ -42,7 +46,9 @@
     --text-muted: #5c6270;
     --text-faint: #8890a0;
     --accent-soft: rgba(91, 140, 255, 0.1);
-    --good-soft: rgba(61, 220, 151, 0.12);
+    --good-soft: rgba(26, 160, 100, 0.12);
+    --good-text: #11774a;
+    --odds-neutral: #b3b9c6;
     --shadow-card: 0 1px 2px rgba(20, 22, 30, 0.04), 0 8px 20px -12px rgba(20, 22, 30, 0.12);
     --shadow-pinned: 0 1px 2px rgba(20, 22, 30, 0.06), 0 16px 28px -14px rgba(91, 140, 255, 0.25);
   }
@@ -329,6 +335,14 @@ main#app {
   scrollbar-width: none;
 }
 .day-scroller::-webkit-scrollbar { display: none; }
+/* The row runs off the right edge on a phone with no scrollbar - a fade
+   there says "more days this way" instead of a pill just getting cut. */
+@media (max-width: 760px) {
+  .day-scroller {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+}
 .day-pill {
   flex: none;
   border: 1px solid var(--border);
@@ -689,6 +703,38 @@ main#app {
   object-fit: contain;
   flex: none;
 }
+/* Same footprint as .team-logo, so a missing/failed logo never slides the
+   name left out of line with the other team's (see updateTeamRow). */
+.team-logo-fallback {
+  width: 21px;
+  height: 21px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.team-logo-fallback[hidden] { display: none; }
+/* An F1 race row's logo is the event's own art, not a crest - initials of a
+   race name would just be noise there. */
+.team-row.is-solo .team-logo-fallback { display: none; }
+/* Many crests are dark artwork (the Yankees' navy NY, the Tigers' D) that
+   disappears straight into the dark card - the same fixed light backdrop
+   the sport icons already get (see .sport-icon), dark theme only. */
+@media not (prefers-color-scheme: light) {
+  .team-row:not(.is-solo) .team-logo {
+    box-sizing: border-box;
+    padding: 2px;
+    border-radius: 50%;
+    background: #f1f3f9;
+  }
+}
 .team-name-en,
 .team-name-zh {
   min-width: 0;
@@ -787,9 +833,9 @@ main#app {
 }
 
 .recommended-tag {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  color: var(--good);
+  color: var(--good-text);
   background: var(--good-soft);
   border-radius: 999px;
   padding: 3px 10px;

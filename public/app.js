@@ -98,7 +98,8 @@ import {
   extractF1LiveUpdates,
   sizedEspnLogoUrl
 } from './lib/espn.mjs';
-import { pickReadableTeamColor } from './lib/color.mjs';
+import { pickDistinctTeamColors } from './lib/color.mjs';
+import { roundToHundred } from './lib/percent.mjs';
 import {
   POLYMARKET_TAG_ID,
   fetchAllPolymarketEvents,
@@ -1928,8 +1929,14 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
     img.addEventListener('error', () => {
       img.dataset.loadFailed = '1';
       img.hidden = true;
+      showTeamLogoFallback(node, true);
     });
   }
+  // Initials for the same-size placeholder that stands in whenever there's
+  // no logo to draw (none sent, or it failed to load) - so the name always
+  // starts at the same x as the other team's instead of sliding left into
+  // the empty logo slot.
+  node.querySelector('.team-logo-fallback').textContent = teamInitials(name);
   if (logo) {
     // Downsized - see sizedEspnLogoUrl's own comment.
     const src = sizedEspnLogoUrl(logo);
@@ -1956,6 +1963,7 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
   } else {
     img.hidden = true;
   }
+  showTeamLogoFallback(node, img.hidden);
   const sideEl = node.querySelector('.team-side');
   if (homeAway === 'home' || homeAway === 'away') {
     sideEl.hidden = false;
@@ -1982,6 +1990,23 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
     scoreEl.hidden = true;
   }
   return node;
+}
+
+function showTeamLogoFallback(node, show) {
+  const fallbackEl = node.querySelector('.team-logo-fallback');
+  fallbackEl.hidden = !show || !fallbackEl.textContent;
+}
+
+// "Boston Red Sox" -> "BR", "Athletics" -> "A" - first letters of the first
+// two words, which is enough to tell the two sides of one card apart.
+function teamInitials(name) {
+  return String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(word => Array.from(word)[0].toUpperCase())
+    .join('');
 }
 
 function renderVenue(el, match) {
@@ -2059,12 +2084,20 @@ function cssVar(name) {
 // shows something readable rather than the pure-illegible team color as-is.
 const SPORT_ODDS_FALLBACK_VAR = { MLB: '--sport-mlb', NBA: '--sport-nba', 'Premier League': '--sport-epl' };
 
-function teamOddsColor(competitor, sport) {
+// Both segments at once, since whether one side's color works depends on
+// the other's (see pickDistinctTeamColors). A side left without a usable
+// color of its own is drawn in the neutral --odds-neutral grey - never the
+// sport's accent when the other side already has a real color, since that
+// accent can clash too (MLB's red next to the Red Sox's).
+function teamOddsColors(away, home, sport) {
   const backgroundHex = cssVar('--bg-elevated') || cssVar('--bg');
-  const readable = pickReadableTeamColor(competitor?.color, competitor?.altColor, backgroundHex);
-  if (readable) return readable;
-  const fallbackVar = SPORT_ODDS_FALLBACK_VAR[sport];
-  return fallbackVar ? `var(${fallbackVar})` : 'var(--accent)';
+  const picked = pickDistinctTeamColors(away, home, backgroundHex);
+  const neutral = 'var(--odds-neutral)';
+  if (!picked.away && !picked.home) {
+    const fallbackVar = SPORT_ODDS_FALLBACK_VAR[sport];
+    return { away: fallbackVar ? `var(${fallbackVar})` : 'var(--accent)', home: neutral };
+  }
+  return { away: picked.away || neutral, home: picked.home || neutral };
 }
 
 function createMatchCardNode() {
@@ -2243,23 +2276,25 @@ function updateMatchCard(node, match) {
   if (displayOdds && match.competitors && match.competitors.length === 2) {
     const [away, home] = match.competitors;
     const hasDraw = Number.isFinite(displayOdds.draw);
+    const [awayPct, drawPct, homePct] = roundToHundred([displayOdds.away, hasDraw ? displayOdds.draw : null, displayOdds.home]);
     oddsEl.hidden = false;
-    oddsEl.querySelector('.match-odds-away').textContent = `${Math.round(displayOdds.away)}%`;
-    oddsEl.querySelector('.match-odds-home').textContent = `${Math.round(displayOdds.home)}%`;
+    oddsEl.querySelector('.match-odds-away').textContent = `${awayPct}%`;
+    oddsEl.querySelector('.match-odds-home').textContent = `${homePct}%`;
     const awaySeg = oddsEl.querySelector('.match-odds-seg-away');
     const drawSeg = oddsEl.querySelector('.match-odds-seg-draw');
     const homeSeg = oddsEl.querySelector('.match-odds-seg-home');
     // Each segment gets ITS OWN team's real color (see ./lib/color.mjs) -
     // never one fixed color for both sides, which read as arbitrary rather
     // than "which team is this" at a glance.
+    const segColors = teamOddsColors(away, home, match.sport);
     awaySeg.style.width = `${displayOdds.away}%`;
-    awaySeg.style.background = teamOddsColor(away, match.sport);
+    awaySeg.style.background = segColors.away;
     homeSeg.style.width = `${displayOdds.home}%`;
-    homeSeg.style.background = teamOddsColor(home, match.sport);
+    homeSeg.style.background = segColors.home;
     drawSeg.hidden = !hasDraw;
     if (hasDraw) {
       drawSeg.style.width = `${displayOdds.draw}%`;
-      drawSeg.querySelector('.match-odds-seg-label').textContent = `${Math.round(displayOdds.draw)}%`;
+      drawSeg.querySelector('.match-odds-seg-label').textContent = `${drawPct}%`;
     }
     const sourceLabel = displayOdds.provider || t('oddsSourceSportsbook');
     const sourceEl = oddsEl.querySelector('.match-odds-source');
@@ -2268,16 +2303,16 @@ function updateMatchCard(node, match) {
     const ariaLabel = hasDraw
       ? t('winProbAriaWithDraw', {
           away: away.name,
-          awayPct: Math.round(displayOdds.away),
-          drawPct: Math.round(displayOdds.draw),
+          awayPct,
+          drawPct,
           home: home.name,
-          homePct: Math.round(displayOdds.home)
+          homePct
         })
       : t('winProbAria', {
           away: away.name,
-          awayPct: Math.round(displayOdds.away),
+          awayPct,
           home: home.name,
-          homePct: Math.round(displayOdds.home)
+          homePct
         });
     oddsEl.setAttribute('aria-label', ariaLabel + t('oddsSourceAria', { source: sourceLabel }));
   } else {
@@ -2648,7 +2683,10 @@ function ensureSelectedDayHasActiveSport() {
 function renderDayLabels() {
   const day = state.days.find(d => d.key === state.selectedDayKey);
   const label = day ? dayLabelFor(day.date) : '';
-  dayLabelEls.forEach(el => { el.textContent = label; });
+  // Chinese runs the day straight into the heading (今天推薦賽事); English
+  // needs a separator or it reads "TodayRecommended Matches".
+  const text = label && getLocale() === 'en' ? `${label} · ` : label;
+  dayLabelEls.forEach(el => { el.textContent = text; });
 }
 
 // The near-term refresh tier's own guaranteed coverage boundary (see

@@ -1,8 +1,8 @@
 // Tests for public/lib/color.mjs - the WCAG contrast math behind the odds
-// bar's per-team color (see public/app.js's teamOddsColor).
+// bar's per-team color (see public/app.js's teamOddsColors).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { hexToRgb, relativeLuminance, contrastRatio, pickReadableTeamColor } from '../public/lib/color.mjs';
+import { hexToRgb, relativeLuminance, contrastRatio, pickReadableTeamColor, pickDistinctTeamColors, colorDistance } from '../public/lib/color.mjs';
 
 describe('hexToRgb', () => {
   test('reads ESPN\'s own bare hex (no leading #)', () => {
@@ -53,5 +53,31 @@ describe('pickReadableTeamColor', () => {
   test('missing colors entirely returns null rather than throwing', () => {
     assert.equal(pickReadableTeamColor('', '', '0b0d12'), null);
     assert.equal(pickReadableTeamColor(undefined, undefined, '0b0d12'), null);
+  });
+});
+
+describe('pickDistinctTeamColors', () => {
+  const cubs = { color: '0e3386', altColor: 'cc3433' };
+  const redSox = { color: '0c2340', altColor: 'bd3039' };
+
+  test('keeps both primaries when they are already easy to tell apart', () => {
+    const orioles = { color: 'df4601', altColor: '000000' };
+    const yankees = { color: '132448', altColor: 'c4ced3' };
+    assert.deepEqual(pickDistinctTeamColors(orioles, yankees, 'ffffff'), { away: '#df4601', home: '#132448' });
+  });
+
+  test('swaps the home side to its alternate when the two primaries look alike', () => {
+    assert.deepEqual(pickDistinctTeamColors(cubs, redSox, 'ffffff'), { away: '#0e3386', home: '#bd3039' });
+  });
+
+  test('leaves home null when no readable pair is distinct enough', () => {
+    // On the dark card both navies fail contrast, leaving red vs red.
+    assert.deepEqual(pickDistinctTeamColors(cubs, redSox, '14171f'), { away: '#cc3433', home: null });
+  });
+
+  test('colorDistance is zero for identical colors and large for black vs white', () => {
+    assert.equal(colorDistance('abcdef', '#abcdef'), 0);
+    assert.ok(colorDistance('000000', 'ffffff') > 700);
+    assert.equal(colorDistance('nope', '000000'), null);
   });
 });

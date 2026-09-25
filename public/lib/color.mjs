@@ -86,3 +86,47 @@ export function pickReadableTeamColor(primaryHex, alternateHex, backgroundHex, {
   }
   return null;
 }
+
+// "Redmean" weighted RGB distance - a cheap approximation of how different
+// two colors look to a person (0 = identical, ~765 = black vs white),
+// close enough for "can a viewer tell these two bar segments apart" without
+// pulling in a full Lab conversion. Returns null for a non-hex input.
+export function colorDistance(hexA, hexB) {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  if (!a || !b) return null;
+  const rMean = (a.r + b.r) / 2;
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt((2 + rMean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rMean) / 256) * db * db);
+}
+
+// Both sides of one odds bar, each still its own team's real color, but
+// never two colors a viewer can't tell apart - a live-reported case: the
+// Cubs' blue "0e3386" next to the Red Sox's navy "0c2340" read as one solid
+// bar, so the split (the whole point of the bar) vanished. Each side's
+// readable candidates (primary first, then alternate - same rules as
+// pickReadableTeamColor) are tried in order of how much of each team's
+// real identity they keep: both primaries, then the home side's alternate,
+// then the away side's alternate, then both alternates. If no pair is far
+// enough apart, the away side keeps its color and home comes back null -
+// the caller draws that side in a neutral color instead.
+export function pickDistinctTeamColors(away, home, backgroundHex, { minContrast = 1.6, minDistance = 150 } = {}) {
+  const readable = team =>
+    [team?.color, team?.altColor]
+      .map(c => pickReadableTeamColor(c, null, backgroundHex, { minContrast }))
+      .filter(Boolean);
+  const awayOptions = readable(away);
+  const homeOptions = readable(home);
+  const pairs = [
+    [awayOptions[0], homeOptions[0]],
+    [awayOptions[0], homeOptions[1]],
+    [awayOptions[1], homeOptions[0]],
+    [awayOptions[1], homeOptions[1]]
+  ];
+  for (const [a, h] of pairs) {
+    if (a && h && colorDistance(a, h) >= minDistance) return { away: a, home: h };
+  }
+  return { away: awayOptions[0] ?? null, home: awayOptions[0] ? null : homeOptions[0] ?? null };
+}
