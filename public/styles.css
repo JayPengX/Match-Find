@@ -48,6 +48,20 @@
 
 * { box-sizing: border-box; }
 
+/* No rubber-band bounce on the page itself. iOS WebKit (Safari, and Chrome
+   on iPhone, which is WebKit too) loses track of the sticky .control-bar
+   while the root scroller bounces past either end, and the day/sport bar
+   vanishes until the bounce settles. The translateZ(0) workaround on
+   .control-bar below wasn't enough - reported again with a tap log showing
+   the page bouncing to y=4860 and back to 4590. With no bounce, the root
+   scroll offset never leaves its real range, so the sticky position has
+   nothing out of range to recompute against. Inner horizontal scrollers
+   (day pills, sport chips) keep their own behavior. */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+
 body {
   margin: 0;
   background: var(--bg);
