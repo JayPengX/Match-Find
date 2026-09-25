@@ -80,7 +80,9 @@ export const MLB_STATS_API_TEAM_IDS = {
   'Los Angeles Dodgers': 119,
   'Washington Nationals': 120,
   'New York Mets': 121,
-  'Oakland Athletics': 133,
+  // ESPN's displayName since the 2025 move out of Oakland - keyed by the old
+  // name, the A's never got a standings signal at all.
+  Athletics: 133,
   'Pittsburgh Pirates': 134,
   'San Diego Padres': 135,
   'Seattle Mariners': 136,
@@ -97,6 +99,64 @@ export const MLB_STATS_API_TEAM_IDS = {
   'New York Yankees': 147,
   'Milwaukee Brewers': 158
 };
+
+// ---- MLB: real end times of finished games --------------------------------
+//
+// ESPN's scoreboard has no end time for a finished game, so a finished
+// game's length used to be "now minus start" at whichever refresh first
+// saw it final (match-builder.mjs's finishedDurationMinutes) - up to one
+// refresh interval plus ESPN's own lag too long. The MLB Stats API has the
+// real thing: the actual first pitch, the official game time
+// (`gameDurationMinutes`, first pitch to final out) and any delay. Their sum
+// matches ESPN's own play-by-play wallclock on the final play (Nationals @
+// Tigers 2026-09-23: 17:12 + 164 min = 19:56, ESPN's last play 19:56:14).
+// One request covers every finished game in a date range.
+export function mlbScheduleGameInfoUrl(startDate, endDate) {
+  return `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${startDate}&endDate=${endDate}&hydrate=gameInfo`;
+}
+
+// [{homeTeamId, scheduledMs, endMs}] for every final game with a known
+// first pitch and game time.
+export function parseMlbGameEnds(json) {
+  return (json?.dates || [])
+    .flatMap(d => d.games || [])
+    .filter(g => g.status?.abstractGameState === 'Final' && g.gameInfo?.firstPitch && Number.isFinite(g.gameInfo.gameDurationMinutes))
+    .map(g => ({
+      homeTeamId: g.teams?.home?.team?.id,
+      scheduledMs: Date.parse(g.gameDate),
+      endMs: Date.parse(g.gameInfo.firstPitch) + (g.gameInfo.gameDurationMinutes + (g.gameInfo.delayDurationMinutes || 0)) * 60_000
+    }))
+    .filter(g => Number.isFinite(g.scheduledMs) && Number.isFinite(g.endMs));
+}
+
+// Sets `actualEndUtc` and the real `durationMinutes` (scheduled start to
+// final out) on every finished MLB match it can find, matched by home team
+// and a scheduled start within 45 minutes (a doubleheader's two games are
+// hours apart). Best-effort: a failed lookup leaves the estimate in place.
+export async function applyMlbActualEnds(matches, fetchJson) {
+  const finished = matches.filter(m => m.sport === 'MLB' && m.isFinished && !m.timeTbd);
+  if (!finished.length) return;
+  const day = ms => new Date(ms).toISOString().slice(0, 10);
+  const startMs = finished.map(m => Date.parse(m.startTimeUtc));
+  // officialDate is the US local date - a day either side of the UTC dates.
+  const from = day(Math.min(...startMs) - 86_400_000);
+  const to = day(Math.max(...startMs) + 86_400_000);
+  let ends;
+  try {
+    ends = parseMlbGameEnds(await fetchJson(mlbScheduleGameInfoUrl(from, to)));
+  } catch (error) {
+    console.warn(`MLB Stats API game-end fetch failed (keeping estimated lengths): ${error.message}`);
+    return;
+  }
+  finished.forEach(match => {
+    const homeTeamId = MLB_STATS_API_TEAM_IDS[match.competitors?.find(c => c.homeAway === 'home')?.name];
+    const start = Date.parse(match.startTimeUtc);
+    const game = ends.find(g => g.homeTeamId === homeTeamId && Math.abs(g.scheduledMs - start) < 45 * 60_000);
+    if (!game || game.endMs <= start) return;
+    match.actualEndUtc = new Date(game.endMs).toISOString();
+    match.durationMinutes = Math.round((game.endMs - start) / 60_000);
+  });
+}
 
 // "-" is the MLB Stats API's own notation for "leading this race" (zero
 // games back) - everything else is a plain decimal string. Missing/

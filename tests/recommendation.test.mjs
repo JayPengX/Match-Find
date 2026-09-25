@@ -57,6 +57,7 @@ import {
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
   ACCEPTED_OVERLAP_MINUTES,
+  MLB_LIVE_OBSERVED_PACE_WEIGHT,
   schedulingClash,
   computeVarietyRotation,
   mergeVarietyForcedIds,
@@ -1223,17 +1224,23 @@ describe('estimateLiveDurationMinutes (real-time correction from ESPN live perio
     assert.ok(slow > fast);
   });
 
-  test('MLB: reads the half-inning, so the estimate does not jump down when a new inning starts', () => {
-    // Live 2026-09-25, Rays @ Yankees: 150 minutes in, top of the 8th - about
-    // 7.25 innings played, not 8, so a ~186-minute pace, not ~169.
+  test('MLB: time played plus the remaining innings at mostly the pre-game pace, read by half-inning', () => {
+    // Live 2026-09-25, Rays @ Yankees: 150 minutes in, top of the 8th - 7.25
+    // innings played (ESPN's period is the inning IN PROGRESS), 1.75 to go.
     const at = startMs + 150 * 60_000;
     const top8 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 8, shortDetail: 'Top 8th' }, at);
-    assert.equal(top8, Math.round((150 / (7.25 / 9)) * 0.7 + 157 * 0.3));
-    // End of the 7th vs top of the 8th a moment later: nearly the same
-    // position, nearly the same estimate (the old inning/9 reading jumped
-    // 7/9 -> 8/9 here).
+    const pace = MLB_LIVE_OBSERVED_PACE_WEIGHT * (150 / 7.25) + (1 - MLB_LIVE_OBSERVED_PACE_WEIGHT) * (157 / 9);
+    assert.equal(top8, Math.round(150 + 1.75 * pace));
+    // The end of the 7th and the top of the 8th a moment later are nearly the
+    // same point in the game - nearly the same estimate (the old inning/9
+    // reading jumped 7/9 -> 8/9 there).
     const end7 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 7, shortDetail: 'End 7th' }, at);
     assert.ok(Math.abs(end7 - top8) <= 5);
+  });
+
+  test('MLB: extra innings keep half an inning more ahead', () => {
+    const at = startMs + 200 * 60_000;
+    assert.ok(estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 10, shortDetail: 'Top 10th' }, at) > 200);
   });
 
   test('never estimates less than the time that has already genuinely elapsed', () => {

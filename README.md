@@ -620,8 +620,9 @@ in `public/lib/recommendation.mjs`.
   whether either one made the plan — gets a small note saying so and for
   how long ("與「X」重疊 45 分鐘"), a plain fact about the schedule shown
   independently of the plan itself.
-- Whichever planned fixture is currently live, or (failing that) the
-  soonest one still to come, is pinned to the top of the day's list.
+- The day's live and upcoming picks come first, in start-time order, and
+  its finished picks go below them (`pinCurrentOrNext`), so whatever is
+  live now, or failing that the soonest still to come, is always on top.
 
 ### Games that already started are locked into the day's plan
 
@@ -1306,11 +1307,12 @@ per-league average (every MLB game: 190 minutes, regardless of which two
 teams were playing). Real per-team pace varies by roughly 20 minutes across
 MLB alone, so this is now a real formula per sport:
 
-- **MLB**: averages each team's own documented pace offset, plus a Coors
-  Field venue modifier, a fixed 2026 Automated Ball-Strike challenge-review
-  padding, and a bounded modifier from the betting market's own
-  total-runs line (`mlbOddsDurationModifier` — more total runs means more
-  baserunners/pitching changes and real additional broadcast time).
+- **MLB**: averages each team's pace offset, plus a Coors Field venue
+  modifier and a fixed 2026 Automated Ball-Strike challenge-review padding
+  — all **fitted to real game lengths** (see
+  [Checking durations against real games](#checking-durations-against-real-games)).
+  The betting total-runs term (`mlbOddsDurationModifier`) is kept as a knob
+  but set to 0: on real games it made predictions slightly worse.
 - **NBA**: adds an expected-value overtime term plus a rivalry/national-
   broadcast modifier.
 - **EPL**: adds a derby modifier, clamped to a realistic min/max.
@@ -1338,6 +1340,45 @@ formula above is still a genuine prediction with real uncertainty (extra
 innings and rain delays are not knowable in advance), but a live game's own
 actual pace can now correct that estimate in real time instead of the
 schedule staying pinned to a single guess for the whole broadcast.
+
+
+### Real end times of finished games
+
+ESPN's scoreboard has no end time, so a finished game's length used to be
+"now minus start" at whichever refresh first saw it final — up to a
+refresh interval plus ESPN's lag too long. Every build now looks up
+finished MLB games in the MLB Stats API (`applyMlbActualEnds` in
+`public/lib/sport-signals.mjs`, one request for the whole window): actual
+first pitch + official game time + any delay = the real end
+(`actualEndUtc`), which the card shows and the app keeps once it has it.
+Checked against ESPN's own play-by-play wallclock on the final play
+(Nationals @ Tigers 2026-09-23: 17:12 + 164 min = 19:56, ESPN's last play
+19:56:14).
+
+### Checking durations against real games
+
+`node scripts/calibrate-durations.mjs` measures the MLB model against every
+finished game of the season (MLB Stats API: scheduled start to final out,
+leaving out weather delays and late starts) and prints a refit —
+base, per-team pace, Coors, over/under term — fitted to the typical game
+(absolute error) and scored on games after `--split` that the fit never
+saw. It also checks the **live** estimate: ESPN play-by-play gives the
+real wallclock at every half-inning start, so the live estimate is scored
+at each one against when the game really ended.
+
+First run (2026-09-25, 2,256 games):
+
+| | Average error | Notes |
+|---|---|---|
+| Pre-game, hand-set model | 15.2 min (bias −2.1) | September 16.1 |
+| Pre-game, refit (shipped) | 14.9 min (bias −0.3) | September 15.4; team spread ~10 min, not 19 |
+| Live, old (inning in progress read as completed) | 22.3 min | 34 min short in the 3rd |
+| Live, observed pace over the whole game | 14.2 min | |
+| Live, played so far + remaining innings at 85% pre-game / 15% observed pace (shipped) | 12.0–12.2 min | 8 min by the 9th |
+
+A single game varies by about 15 minutes whatever the formula, so
+pre-game gains are small; the live estimate is where real data helps
+most. Rerun the script every few weeks rather than hand-tuning.
 
 ### Taiwan broadcast source
 

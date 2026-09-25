@@ -17,7 +17,9 @@ import {
   parseEplStandingsResponse,
   computeTitleRaceIntensity,
   parseF1DriverStandingsResponse,
-  F1_TITLE_RACE_DECIDED_GAP_POINTS
+  F1_TITLE_RACE_DECIDED_GAP_POINTS,
+  parseMlbGameEnds,
+  applyMlbActualEnds
 } from '../public/lib/sport-signals.mjs';
 
 // A stat entry in ESPN's own /standings shape (both NBA and EPL below use
@@ -330,5 +332,55 @@ describe('parseF1DriverStandingsResponse', () => {
     assert.deepEqual(parseF1DriverStandingsResponse({}), []);
     assert.deepEqual(parseF1DriverStandingsResponse(null), []);
     assert.deepEqual(parseF1DriverStandingsResponse({ MRData: { StandingsTable: { StandingsLists: [] } } }), []);
+  });
+});
+
+describe('applyMlbActualEnds (real end times from the MLB Stats API)', () => {
+  const game = (homeId, gameDate, firstPitch, minutes, delay = 0) => ({
+    gameDate,
+    status: { abstractGameState: 'Final' },
+    teams: { home: { team: { id: homeId } } },
+    gameInfo: { firstPitch, gameDurationMinutes: minutes, delayDurationMinutes: delay }
+  });
+  const mlb = (id, home, start) => ({
+    id,
+    sport: 'MLB',
+    isFinished: true,
+    startTimeUtc: start,
+    durationMinutes: 999,
+    competitors: [{ name: 'Toronto Blue Jays', homeAway: 'away' }, { name: home, homeAway: 'home' }]
+  });
+
+  test('parseMlbGameEnds: first pitch + game time + delay', () => {
+    const [end] = parseMlbGameEnds({ dates: [{ games: [game(116, '2026-09-23T17:10:00Z', '2026-09-23T17:12:00.000Z', 164, 5)] }] });
+    assert.equal(end.endMs, Date.parse('2026-09-23T17:12:00Z') + 169 * 60_000);
+  });
+
+  test('matches each game of a doubleheader by home team and start time', async () => {
+    const early = mlb('a', 'Baltimore Orioles', '2026-09-23T17:35:00.000Z');
+    const late = mlb('b', 'Baltimore Orioles', '2026-09-23T22:35:00.000Z');
+    const json = {
+      dates: [
+        {
+          games: [
+            game(110, '2026-09-23T17:35:00Z', '2026-09-23T17:36:00.000Z', 158),
+            game(110, '2026-09-23T22:35:00Z', '2026-09-23T22:35:00.000Z', 142)
+          ]
+        }
+      ]
+    };
+    await applyMlbActualEnds([early, late], async () => json);
+    assert.equal(early.durationMinutes, 159);
+    assert.equal(early.actualEndUtc, '2026-09-23T20:14:00.000Z');
+    assert.equal(late.durationMinutes, 142);
+  });
+
+  test('a failed lookup keeps the estimate', async () => {
+    const m = mlb('a', 'Baltimore Orioles', '2026-09-23T17:35:00.000Z');
+    await applyMlbActualEnds([m], async () => {
+      throw new Error('down');
+    });
+    assert.equal(m.durationMinutes, 999);
+    assert.equal(m.actualEndUtc, undefined);
   });
 });

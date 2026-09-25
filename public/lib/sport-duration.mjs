@@ -29,10 +29,14 @@
 
 // ---- MLB --------------------------------------------------------------
 //
-// Real per-team pace varies by close to 20 minutes across the league (a
-// team that works fast on the mound and puts the ball in play often vs.
-// one that runs deep counts and makes a lot of pitching changes) - far
-// too much spread for one flat league-wide average to represent well.
+// Fitted to REAL game lengths (scripts/calibrate-durations.mjs - MLB Stats
+// API first pitch + official game time, measured from the scheduled start,
+// 2,256 clean 2026 games, fitted to the typical game rather than the mean).
+// The hand-set table this replaced spread teams across 19 minutes (Rays
+// -13 to Yankees +6); real games support about 10, and on September games
+// the refit was 0.5 min closer on average (MAE 15.6 vs 16.1). A single
+// game's length varies by ~15 min whatever the formula - rerun the script
+// every few weeks rather than hand-tuning.
 // Offsets are in minutes relative to the 164-minute two-team-average
 // baseline below; keyed by each team's ESPN `team.displayName` exactly
 // (the same field build-data.mjs already reads into `competitor.name`),
@@ -40,39 +44,36 @@
 // is keyed - full display names are what this table was authored against
 // and read more naturally as a standalone reference table.
 export const MLB_TEAM_PACE_OFFSET_MINUTES = {
-  // Fast-pace tier
-  'Tampa Bay Rays': -13,
-  'Cleveland Guardians': -11,
-  'Seattle Mariners': -10,
-  'Milwaukee Brewers': -9,
-  'Detroit Tigers': -9,
-  'Kansas City Royals': -8,
-  'Oakland Athletics': -8,
-  'Minnesota Twins': -7,
-  'Cincinnati Reds': -7,
-  'Pittsburgh Pirates': -6,
-  // Median-pace tier
-  'St. Louis Cardinals': -5,
-  'San Francisco Giants': -4,
-  'Washington Nationals': -3,
-  'Atlanta Braves': -2,
-  'Chicago White Sox': -2,
-  'Miami Marlins': -2,
-  'Baltimore Orioles': -1,
-  'Houston Astros': 0,
-  'Philadelphia Phillies': 0,
+  'Tampa Bay Rays': -5,
+  'Atlanta Braves': -5,
+  'San Francisco Giants': -3,
+  'Detroit Tigers': -3,
+  'Kansas City Royals': -2,
+  'Cleveland Guardians': -2,
+  'Boston Red Sox': -1,
+  'Philadelphia Phillies': -1,
+  'Chicago White Sox': -1,
+  'Seattle Mariners': -1,
+  'Toronto Blue Jays': -1,
+  'Arizona Diamondbacks': 0,
+  'New York Mets': 0,
+  'Los Angeles Dodgers': 0,
+  'Cincinnati Reds': 0,
+  'Colorado Rockies': 0,
+  'Minnesota Twins': 1,
+  Athletics: 1,
+  'St. Louis Cardinals': 1,
   'Texas Rangers': 1,
+  'Pittsburgh Pirates': 1,
+  'Chicago Cubs': 1,
+  'Milwaukee Brewers': 1,
+  'San Diego Padres': 1,
   'Los Angeles Angels': 2,
-  // Slow-pace tier
-  'Toronto Blue Jays': 3,
-  'San Diego Padres': 3,
-  'Chicago Cubs': 3,
-  'New York Mets': 4,
-  'Los Angeles Dodgers': 4,
-  'Colorado Rockies': 5, // + a separate, larger high-altitude venue modifier below - see MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES
-  'Arizona Diamondbacks': 5,
-  'Boston Red Sox': 6,
-  'New York Yankees': 6
+  'Washington Nationals': 2,
+  'Houston Astros': 2,
+  'Baltimore Orioles': 2,
+  'Miami Marlins': 3,
+  'New York Yankees': 5
 };
 
 // Two-team-average, 9-inning MLB broadcast length this table's offsets are
@@ -94,7 +95,8 @@ export const MLB_ABS_CHALLENGE_SYSTEM_PADDING_MINUTES = 1;
 // that it's modeled as its own additive term rather than folded into the
 // Colorado Rockies' own home/away offset above (which only reflects the
 // team's own pace, not their specific ballpark's physics).
-export const MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES = 10;
+// Refit to real games: 5 (was 10).
+export const MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES = 5;
 
 // True for exactly the one venue this module has a specific modifier for.
 // A plain string-equality check (not a substring/case-insensitive match)
@@ -119,11 +121,16 @@ export function isCoorsField(venueFullName) {
 // is one more real signal to weigh, not one that should dominate the
 // team-pace-based estimate this already is.
 export const MLB_LEAGUE_AVG_OVER_UNDER = 8.5;
-export const MLB_ODDS_DURATION_MINUTES_PER_RUN = 2;
+// 0: checked against 372 real games with a pre-game line (see
+// scripts/calibrate-durations.mjs), the total made predictions slightly
+// WORSE (MAE 15.4 with it at 2 min/run vs 15.1 without; the refit
+// coefficient came out at -0.8/run, i.e. noise). Kept as a knob so a later
+// calibration run can turn it back on if real data ever supports it.
+export const MLB_ODDS_DURATION_MINUTES_PER_RUN = 0;
 export const MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES = 8;
 
 export function mlbOddsDurationModifier(oddsOverUnder) {
-  if (!Number.isFinite(oddsOverUnder)) return 0;
+  if (!Number.isFinite(oddsOverUnder) || !MLB_ODDS_DURATION_MINUTES_PER_RUN) return 0;
   const raw = (oddsOverUnder - MLB_LEAGUE_AVG_OVER_UNDER) * MLB_ODDS_DURATION_MINUTES_PER_RUN;
   return Math.max(-MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, Math.min(MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, raw));
 }

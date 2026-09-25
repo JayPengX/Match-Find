@@ -106,6 +106,7 @@ import {
 // added later, against real live responses).
 import {
   fetchMlbStandings,
+  applyMlbActualEnds,
   fetchNbaStandings,
   fetchEplStandings,
   fetchF1TitleRaceIntensity
@@ -1106,8 +1107,11 @@ export async function buildMatches({
   // caller opted out via `enrichOdds: false` (see this function's own top
   // comment) - standings/title-race still always runs, since THOSE feed
   // real scoring (recommendation.mjs), unlike odds.
+  // Real end times of finished MLB games (see sport-signals.mjs's
+  // applyMlbActualEnds) ride along with the same batch.
   const [, [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity]] = await Promise.all([
     enrichOdds ? enrichWithPolymarketOdds(matches, fetchJson) : Promise.resolve(),
+    applyMlbActualEnds(matches, fetchJson),
     Promise.all([
       hasActiveMlb ? fetchMlbStandings(now.getUTCFullYear(), fetchJson) : Promise.resolve(new Map()),
       hasActiveNba ? fetchNbaStandings(fetchJson) : Promise.resolve(new Map()),

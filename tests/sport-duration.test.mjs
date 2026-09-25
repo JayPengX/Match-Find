@@ -11,6 +11,8 @@ import {
   mlbOddsDurationModifier,
   MLB_LEAGUE_AVG_OVER_UNDER,
   MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES,
+  MLB_ODDS_DURATION_MINUTES_PER_RUN,
+  MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES,
   isMlbRivalry,
   MLB_BIG_CLUBS,
   isMlbBigClub,
@@ -37,31 +39,33 @@ describe('MLB duration prediction', () => {
   });
 
   test('a fast-pace team paired with a slow-pace team averages both offsets', () => {
-    // Yankees (+6) @ Rays (-13) -> average -3.5, rounds to -4 once combined with the +1 ABS pad
+    const yankees = MLB_TEAM_PACE_OFFSET_MINUTES['New York Yankees'];
+    const rays = MLB_TEAM_PACE_OFFSET_MINUTES['Tampa Bay Rays'];
+    assert.ok(yankees > 0 && rays < 0);
     const duration = predictMlbDurationMinutes({ awayTeam: 'New York Yankees', homeTeam: 'Tampa Bay Rays', venue: '' });
-    assert.equal(duration, Math.round(MLB_BASE_DURATION_MINUTES + (6 + -13) / 2 + 1));
+    assert.equal(duration, Math.round(MLB_BASE_DURATION_MINUTES + (yankees + rays) / 2 + 1));
   });
 
   test('an unrecognized team contributes a zero offset rather than throwing', () => {
     const duration = predictMlbDurationMinutes({ awayTeam: 'Spring Training All-Stars', homeTeam: 'Tampa Bay Rays', venue: '' });
-    assert.equal(duration, Math.round(MLB_BASE_DURATION_MINUTES + (0 + -13) / 2 + 1));
+    assert.equal(duration, Math.round(MLB_BASE_DURATION_MINUTES + (0 + MLB_TEAM_PACE_OFFSET_MINUTES['Tampa Bay Rays']) / 2 + 1));
   });
 
   test('Coors Field adds its own venue modifier on top of the Rockies\' own team offset', () => {
     const atCoors = predictMlbDurationMinutes({ awayTeam: 'Houston Astros', homeTeam: 'Colorado Rockies', venue: 'Coors Field' });
     const elsewhere = predictMlbDurationMinutes({ awayTeam: 'Houston Astros', homeTeam: 'Colorado Rockies', venue: 'Some Other Park' });
-    assert.equal(atCoors - elsewhere, 10);
+    assert.equal(atCoors - elsewhere, MLB_COORS_FIELD_VENUE_MODIFIER_MINUTES);
   });
 
-  test('mlbOddsDurationModifier is 0 at the league-average total, positive above it, negative below', () => {
+  test('mlbOddsDurationModifier is 0 at the league-average total and MLB_ODDS_DURATION_MINUTES_PER_RUN per run either side', () => {
     assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER), 0);
-    assert.ok(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 1) > 0);
-    assert.ok(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 1) < 0);
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 1), Math.min(MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, MLB_ODDS_DURATION_MINUTES_PER_RUN) || 0);
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 1), -Math.min(MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES, MLB_ODDS_DURATION_MINUTES_PER_RUN) || 0);
   });
 
   test('mlbOddsDurationModifier is capped in both directions and neutral for a missing line', () => {
-    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 100), MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES);
-    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 100), -MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES);
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 100), MLB_ODDS_DURATION_MINUTES_PER_RUN ? MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES : 0);
+    assert.equal(mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER - 100), MLB_ODDS_DURATION_MINUTES_PER_RUN ? -MLB_ODDS_DURATION_MODIFIER_CAP_MINUTES : 0);
     assert.equal(mlbOddsDurationModifier(null), 0);
     assert.equal(mlbOddsDurationModifier(undefined), 0);
   });
@@ -74,7 +78,7 @@ describe('MLB duration prediction', () => {
       oddsOverUnder: MLB_LEAGUE_AVG_OVER_UNDER + 2
     });
     const withoutOdds = predictMlbDurationMinutes({ awayTeam: 'Unknown Team A', homeTeam: 'Unknown Team B', venue: '' });
-    assert.ok(withHighTotal > withoutOdds);
+    assert.equal(withHighTotal - withoutOdds, mlbOddsDurationModifier(MLB_LEAGUE_AVG_OVER_UNDER + 2));
   });
 
   test('isCoorsField only matches the exact venue name', () => {

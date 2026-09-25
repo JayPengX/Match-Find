@@ -2519,27 +2519,19 @@ function collectExistingCardsById(container) {
   return map;
 }
 
-// Whichever match is currently live, or (failing that) the soonest one yet
-// to start, moves to the front - this is the "show current/closest match
-// on top" behavior, layered on top of the plain chronological order the
-// rest of the list keeps. On a fully future day this just happens to be
-// the day's first match anyway, so it's a no-op there; it only visibly
-// reorders anything on the day containing "now".
+// Upcoming and live picks first, in start-time order, then the day's
+// finished picks below them, also in start-time order - "put finished
+// recommendations below the upcoming ones". The first card is therefore
+// always whichever is live right now, or failing that the soonest still to
+// come; on a fully future day nothing moves.
+//
+// isFinished (ESPN's own status, via matchLifecycleState) is authoritative
+// - matchLifecycleState never calls a match ENDED on elapsed time alone
+// (see that function's own comment), so a no-clock sport simply running
+// long stays up top with the live games.
 function pinCurrentOrNext(sortedMatches) {
-  // isFinished (ESPN's own status, via matchLifecycleState) is authoritative
-  // and checked first, same reasoning as pickInitialDay's own comment -
-  // without it, a match that simply ran long past its estimated duration
-  // would look "not current anymore" here even though it's probably still
-  // live, now that a finished match stays in the list instead of
-  // disappearing. The first not-yet-ended match in start-time order is
-  // exactly "whichever is live right now, or failing that, the soonest
-  // still to come" - matchLifecycleState never calls a match ENDED on
-  // elapsed time alone (see that function's own comment), so this can't be
-  // fooled by a no-clock sport simply running long.
-  const pinIndex = sortedMatches.findIndex(m => matchLifecycleState(m) !== LIFECYCLE_STATES.ENDED);
-  if (pinIndex <= 0) return sortedMatches;
-  const pinned = sortedMatches[pinIndex];
-  return [pinned, ...sortedMatches.slice(0, pinIndex), ...sortedMatches.slice(pinIndex + 1)];
+  const ended = m => matchLifecycleState(m) === LIFECYCLE_STATES.ENDED;
+  return [...sortedMatches.filter(m => !ended(m)), ...sortedMatches.filter(ended)];
 }
 
 function matchesForDay(dayKey) {
@@ -3452,7 +3444,12 @@ function mergeFreshMatches(freshMatches) {
     if (previous?.live && !m.isFinished) {
       m.live = previous.live;
       m.durationMinutes = previous.durationMinutes;
-    } else if (m.isFinished && previous && (previous.isFinished || previous.live)) {
+    } else if (m.isFinished && !m.actualEndUtc && previous?.actualEndUtc) {
+      // Already have the real end time (see sport-signals.mjs's
+      // applyMlbActualEnds) - a later build that couldn't fetch it keeps it.
+      m.actualEndUtc = previous.actualEndUtc;
+      m.durationMinutes = previous.durationMinutes;
+    } else if (m.isFinished && !m.actualEndUtc && previous && (previous.isFinished || previous.live)) {
       // FREEZE a finished match's own durationMinutes at whatever it was
       // the FIRST time this browser ever saw it finished, rather than
       // trusting buildMatches()'s own fresh finishedDurationMinutes

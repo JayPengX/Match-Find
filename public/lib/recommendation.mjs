@@ -613,6 +613,8 @@ export function estimateLiveDurationMinutes(sport, startTimeUtc, fallbackMinutes
   const elapsedMinutes = (now - Date.parse(startTimeUtc)) / 60_000;
   if (!Number.isFinite(elapsedMinutes) || elapsedMinutes <= 0) return fallbackMinutes;
 
+  if (sport === 'MLB') return estimateLiveMlbDurationMinutes(elapsedMinutes, fallbackMinutes, live);
+
   const progress = liveGameProgressFraction(sport, live);
   // Too little of the game has happened to extrapolate responsibly yet - an
   // estimate from a handful of minutes is noisier than the pre-game guess,
@@ -636,17 +638,28 @@ export function estimateLiveDurationMinutes(sport, startTimeUtc, fallbackMinutes
 // comment on deliberately not taking on a new dependency for exactly this),
 // so an F1 race simply keeps its pre-race circuit-baseline estimate
 // throughout, same as before this function existed.
+// MLB, tuned against real games (scripts/calibrate-durations.mjs's live
+// check - ESPN play-by-play wallclock at every half-inning start vs. the
+// game's real final play, 248 games 2026-09-05..23): the time already
+// played is known exactly, and the REMAINING innings are best predicted at
+// mostly the pre-game pace, only MLB_LIVE_OBSERVED_PACE_WEIGHT of the pace
+// observed so far - a slow first five innings says little about the last
+// four. Average error 12.2 min from the 3rd inning on, vs 14.2 for
+// extrapolating the observed pace over the whole game (blended 0.7/0.3
+// with the pre-game estimate) and 22.3 for the older version of that which
+// read ESPN's in-progress inning as completed (34 min short in the 3rd).
+// `pregameMinutes` must be the pre-game estimate, never a previous live
+// value (see pollLiveMatches). Past the 9th, half an inning more at a time.
+export const MLB_LIVE_OBSERVED_PACE_WEIGHT = 0.15;
+function estimateLiveMlbDurationMinutes(elapsedMinutes, pregameMinutes, live) {
+  const played = mlbInningsPlayed(live);
+  if (played == null || played < 1) return pregameMinutes;
+  const pace = MLB_LIVE_OBSERVED_PACE_WEIGHT * (elapsedMinutes / played) + (1 - MLB_LIVE_OBSERVED_PACE_WEIGHT) * (pregameMinutes / 9);
+  const remainingInnings = played < 9 ? 9 - played : 0.5;
+  return Math.round(elapsedMinutes + remainingInnings * pace);
+}
+
 function liveGameProgressFraction(sport, live) {
-  if (sport === 'MLB') {
-    // ESPN's period is the inning IN PROGRESS, not innings completed.
-    // Reading it as completed made the estimate saw-tooth: it jumped DOWN
-    // the moment a new inning began (the top of the 8th counted as 8 of 9
-    // played) and then crept up with every poll until the next one - live
-    // 2026-09-25, Rays @ Yankees' shown end time climbing 10:10 -> 10:18
-    // over three minutes of the same half-inning. See mlbInningsPlayed.
-    const played = mlbInningsPlayed(live);
-    return played == null ? null : Math.min(1, played / 9);
-  }
   if (sport === 'NBA') {
     const quarter = Number(live.period);
     if (!Number.isFinite(quarter) || quarter <= 0) return null;
