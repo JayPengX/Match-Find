@@ -204,12 +204,21 @@ export function extractF1LiveUpdates(scoreboardJson) {
           flagAlt: c.athlete?.flag?.alt || '',
           interval: f1DriverInterval(c.statistics)
         }));
-      const lap = Number(session.status?.period);
+      // `period` is only a real race lap for the Race/Sprint. Qualifying
+      // has no shared lap count - live-checked (2026 Azerbaijan GP) ESPN
+      // still fills `period` there (26 mid-Q2, i.e. some driver's own lap
+      // tally), which read as a bogus "第 26 圈" on the card.
+      const lap = abbreviation === 'Qual' ? NaN : Number(session.status?.period);
+      // ESPN's bare generic "In Progress" status (Qualifying never gets
+      // anything more specific) says nothing the card's own LIVE badge
+      // doesn't already, and it's untranslated English - dropped, while
+      // real detail like "Lap 23/53 - Safety Car" still comes through.
+      const detail = statusType.shortDetail || statusType.detail || '';
       updates.set(`f1-${event.id}-${abbreviation.toLowerCase()}`, {
         isLive: statusType.state === 'in',
         isFinished: statusType.state === 'post',
         lap: Number.isFinite(lap) && lap > 0 ? lap : null,
-        statusDetail: statusType.shortDetail || statusType.detail || '',
+        statusDetail: /^in progress$/i.test(detail.trim()) ? '' : detail,
         leaderboard: leaderboard.length ? leaderboard : null
       });
     }

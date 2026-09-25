@@ -175,6 +175,52 @@ describe('extractF1LiveUpdates', () => {
     assert.deepEqual(update.leaderboard, [{ name: 'M. Verstappen', position: 1, flagUrl: '', flagAlt: '', interval: null }]);
   });
 
+  test('a live qualifying session reports no lap and drops the bare "In Progress" status', () => {
+    // Shaped like the live 2026 Azerbaijan GP qualifying response: ESPN
+    // fills `period` (26) even though qualifying has no race lap count.
+    const scoreboard = {
+      events: [
+        {
+          id: '600057444',
+          competitions: [
+            {
+              type: { abbreviation: 'Qual' },
+              status: {
+                period: 26,
+                type: { state: 'in', description: 'In Progress', detail: 'In Progress', shortDetail: 'In Progress' }
+              },
+              competitors: [{ order: 1, athlete: { fullName: 'George Russell', shortName: 'G. Russell' } }]
+            }
+          ]
+        }
+      ]
+    };
+    const update = extractF1LiveUpdates(scoreboard).get('f1-600057444-qual');
+    assert.equal(update.isLive, true);
+    assert.equal(update.lap, null);
+    assert.equal(update.statusDetail, '');
+    assert.equal(update.leaderboard[0].name, 'G. Russell');
+  });
+
+  test('a live race with only the generic "In Progress" status keeps its lap', () => {
+    const scoreboard = {
+      events: [
+        {
+          id: '600057444',
+          competitions: [
+            {
+              type: { abbreviation: 'Race' },
+              status: { period: 19, type: { state: 'in', detail: 'In Progress', shortDetail: 'In Progress' } }
+            }
+          ]
+        }
+      ]
+    };
+    const update = extractF1LiveUpdates(scoreboard).get('f1-600057444-race');
+    assert.equal(update.lap, 19);
+    assert.equal(update.statusDetail, '');
+  });
+
   test('a not-yet-started session (period 0, no competitors yet) has no lap/leaderboard', () => {
     const scoreboard = {
       events: [
