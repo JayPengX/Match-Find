@@ -661,6 +661,17 @@ const dayLabelEls = document.querySelectorAll('[data-day-label]');
 const emptyState = document.getElementById('empty-state');
 const errorState = document.getElementById('error-state');
 const generatedNote = document.getElementById('generated-note');
+
+// The fixed .control-bar's real height, for main#app's top padding and the
+// page's scroll-padding (see .control-bar in styles.css). Re-measured
+// whenever it changes - a sport chip row appearing, a font loading, the
+// app being revealed from its loading state.
+const controlBarEl = document.querySelector('.control-bar');
+if (controlBarEl && 'ResizeObserver' in window) {
+  new ResizeObserver(() => {
+    if (controlBarEl.offsetHeight) document.documentElement.style.setProperty('--control-bar-h', `${controlBarEl.offsetHeight}px`);
+  }).observe(controlBarEl);
+}
 // Hidden on-screen input debugger - tap this line 5 times (see lib/tap-log.mjs).
 installTapLog(generatedNote);
 setTapLogHeader(() => [
