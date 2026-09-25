@@ -389,17 +389,41 @@ const APP_BUILD_ID = '__BUILD_ID__';
 // before the `state` object below even exists, so nothing anywhere in
 // this file needs its own reasoning about which deploy wrote what it just
 // read back out of localStorage.
+//
+// Everything, not just this app's own `matchfind-` keys: the whole of
+// localStorage and sessionStorage, every IndexedDB database, and every
+// Cache Storage cache except the one the new deploy's service worker just
+// filled (sw.js's `matchfind-shell-<build id>` - deleting it would only
+// make the next load go back to the network for the shell). Direct
+// instruction: "existing browser often keep shit, please let it wipe
+// everything every version".
 (function wipeStorageOnNewBuild() {
   try {
     if (localStorage.getItem('matchfind-app-build-id') === APP_BUILD_ID) return;
-    Object.keys(localStorage)
-      .filter(key => key.startsWith('matchfind-'))
-      .forEach(key => localStorage.removeItem(key));
+    localStorage.clear();
     localStorage.setItem('matchfind-app-build-id', APP_BUILD_ID);
   } catch {
     // Private browsing / blocked storage - every load below already
     // tolerates missing/unreadable storage on its own, so there's simply
     // nothing to wipe or mark here.
+    return;
+  }
+  try {
+    sessionStorage.clear();
+  } catch {}
+  // Async, and nothing below reads either store, so no need to wait.
+  if (typeof caches !== 'undefined') {
+    const currentShellCache = `matchfind-shell-${APP_BUILD_ID}`;
+    caches
+      .keys()
+      .then(names => Promise.all(names.filter(name => name !== currentShellCache).map(name => caches.delete(name))))
+      .catch(() => {});
+  }
+  if (typeof indexedDB !== 'undefined' && typeof indexedDB.databases === 'function') {
+    indexedDB
+      .databases()
+      .then(databases => databases.forEach(({ name }) => name && indexedDB.deleteDatabase(name)))
+      .catch(() => {});
   }
 })();
 
