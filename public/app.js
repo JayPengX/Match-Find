@@ -809,6 +809,7 @@ function applyStaticTranslations() {
   setAria(dayScrollerEl, 'daySelectorAriaLabel');
   setAria(filtersRow, 'sportFilterAriaLabel');
   setAria(settingsBtn, 'settingsAriaLabel');
+  setText('app-header-tagline', 'appTagline');
   setText('recommended-heading-text', 'recommendedHeading');
   setText('recommended-empty', 'recommendedEmpty');
   setAria(recommendedLoadingEl, 'loadingAriaLabel');

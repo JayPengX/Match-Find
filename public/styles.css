@@ -82,13 +82,37 @@ button {
   font-family: inherit;
 }
 
-/* No header at all - an installed PWA's own home-screen icon/OS title bar
-   already carries the app's identity, so a masthead here would just be
-   empty space repeating it. Settings now lives as a plain chip button
+/* No header on a phone - an installed PWA's own home-screen icon/OS title
+   bar already carries the app's identity, so a masthead there would just be
+   empty space repeating it. On a desktop browser tab there's room to spare
+   and no home-screen icon, so a slim brand row sits at the top of the
+   pinned control bar instead (see .app-header). Settings now lives as a plain chip button
    inline with the sport filter row instead (see .settings-chip-btn) -
    tried as a floating corner button first, moved here since it reads as
    a more deliberate part of the row of controls rather than a stray
    overlay competing with the cards underneath it. */
+
+.app-header { display: none; }
+@media (min-width: 761px) {
+  .app-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 2px 12px;
+  }
+  .app-header-logo { width: 36px; height: 36px; flex: none; }
+  .app-header-name {
+    font-size: 1.2rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+  .app-header-tagline {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+  }
+}
 
 .settings-backdrop {
   position: fixed;

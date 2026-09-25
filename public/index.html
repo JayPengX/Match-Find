@@ -139,6 +139,14 @@
          with the first section is the actual mobile-centric fix (see
          styles.css's own comment for why this beats a plain static row). -->
     <div class="control-bar">
+      <!-- Desktop only (see .app-header) - on a phone the installed app's own
+           icon/title already says what this is, and every pixel of the
+           pinned bar is better spent on the day/sport controls. -->
+      <header class="app-header">
+        <img class="app-header-logo" src="./favicon.svg" alt="" width="36" height="36" />
+        <span class="app-header-name">Match Find</span>
+        <span class="app-header-tagline" id="app-header-tagline">今晚看什麼</span>
+      </header>
       <section id="day-scroller-section">
         <div id="day-scroller" class="day-scroller" role="tablist" aria-label="選擇日期"></div>
       </section>

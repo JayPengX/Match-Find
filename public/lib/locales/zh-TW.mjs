@@ -29,6 +29,7 @@ export default {
   loadingAriaLabel: '載入中',
   daySelectorAriaLabel: '選擇日期',
   sportFilterAriaLabel: '依運動篩選',
+  appTagline: '今晚看什麼',
   recommendedHeading: '推薦賽事',
   recommendedEmpty: '今天沒有特別推薦的賽事。',
   allMatchesHeading: '所有賽事',

@@ -35,6 +35,7 @@ export default {
   loadingAriaLabel: 'Loading',
   daySelectorAriaLabel: 'Select date',
   sportFilterAriaLabel: 'Filter by sport',
+  appTagline: 'What\'s worth watching tonight',
   recommendedHeading: 'Recommended Matches',
   recommendedEmpty: 'No standout matches recommended today.',
   allMatchesHeading: 'All Matches',
