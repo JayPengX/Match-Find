@@ -748,6 +748,7 @@ const settingsSportList = document.getElementById('settings-sport-list');
 const settingsEnabledSports = document.getElementById('settings-enabled-sports');
 const updateStatusText = document.getElementById('update-status-text');
 const refreshDataBtn = document.getElementById('refresh-data-btn');
+const wipeReloadBtn = document.getElementById('wipe-reload-btn');
 
 // ---- Static UI copy (index.html) --------------------------------------
 //
@@ -798,6 +799,8 @@ function applyStaticTranslations() {
   setText('settings-update-heading', 'updateHeading');
   updateStatusText.textContent = t('updateStatusDefault');
   refreshDataBtn.textContent = t('refreshNowBtn');
+  setText('wipe-reload-hint', 'wipeReloadHint');
+  wipeReloadBtn.textContent = t('wipeReloadBtn');
 
   setAria(loadingStateEl, 'loadingAriaLabel');
   setAria(dayScrollerEl, 'daySelectorAriaLabel');
@@ -4329,6 +4332,38 @@ refreshDataBtn.addEventListener('click', async () => {
     return;
   }
   await refreshFullWindow({ statusEl: updateStatusText, button: refreshDataBtn });
+});
+
+// A manual escape hatch for when this device is stuck on stale state: wipes
+// everything this site stores (localStorage, sessionStorage, the service
+// worker and its caches), then reloads from the network with a cache-busting
+// URL, so the next load is exactly what a first-time visitor gets. Any
+// query string (e.g. ?debug=taps) is kept.
+async function wipeLocalDataAndReload() {
+  try {
+    localStorage.clear();
+  } catch {}
+  try {
+    sessionStorage.clear();
+  } catch {}
+  if ('serviceWorker' in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
+    await Promise.all(registrations.map(registration => registration.unregister().catch(() => {})));
+  }
+  if ('caches' in window) {
+    const names = await caches.keys().catch(() => []);
+    await Promise.all(names.map(name => caches.delete(name).catch(() => {})));
+  }
+  const params = new URLSearchParams(window.location.search);
+  params.set('_', String(Date.now()));
+  window.location.replace(`${window.location.pathname}?${params}${window.location.hash}`);
+}
+wipeReloadBtn.addEventListener('click', async () => {
+  if (!window.confirm(t('wipeReloadConfirm'))) return;
+  wipeReloadBtn.disabled = true;
+  refreshDataBtn.disabled = true;
+  tapLog('[app] wipe local data and reload');
+  await wipeLocalDataAndReload();
 });
 
 // ---- Live score/odds polling (see ./lib/espn.mjs and ./lib/polymarket.mjs) -

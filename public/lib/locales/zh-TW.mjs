@@ -21,6 +21,9 @@ export default {
   updateHeading: '更新',
   updateStatusDefault: '資料會持續自動更新。',
   refreshNowBtn: '立即重新整理',
+  wipeReloadBtn: '清除資料並重新載入',
+  wipeReloadHint: '清除本機儲存的所有資料（偏好、滑選、快取），並重新下載最新版本。',
+  wipeReloadConfirm: '要清除所有本機資料（包含你的偏好設定與滑選）並重新載入最新版本嗎？',
 
   // ---- Page chrome / sections ----
   loadingAriaLabel: '載入中',

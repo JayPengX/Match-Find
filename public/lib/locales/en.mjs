@@ -28,6 +28,9 @@ export default {
   updateHeading: 'Updates',
   updateStatusDefault: 'Data updates automatically.',
   refreshNowBtn: 'Refresh Now',
+  wipeReloadBtn: 'Clear Data & Reload',
+  wipeReloadHint: 'Wipes everything stored on this device (settings, swipes, cached app) and loads the latest version fresh.',
+  wipeReloadConfirm: 'Clear all data stored on this device (including your settings and swipes) and reload the latest version?',
 
   loadingAriaLabel: 'Loading',
   daySelectorAriaLabel: 'Select date',

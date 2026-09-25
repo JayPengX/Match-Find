@@ -1537,6 +1537,13 @@ immediately, in the viewer's own browser — there's no server-side rebuild
 to dispatch and wait 30-60 seconds for anymore; a manual refresh is exactly
 as fast as the automatic ones.
 
+**清除資料並重新載入** (Clear Data & Reload), below it, is the escape hatch
+for a device stuck on stale state: after a confirm, it clears
+localStorage and sessionStorage, unregisters the service worker, deletes
+its caches, and reloads from the network with a cache-busting URL (any
+query string such as `?debug=taps` is kept) - the next load is exactly
+what a first-time visitor gets. Settings, pins and swipes are lost.
+
 It also checks whether a *new version of the page itself* has been
 deployed since this tab loaded, not just whether the match data changed
 (the same check also runs automatically with every full-window refresh).
