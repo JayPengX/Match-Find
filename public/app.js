@@ -991,16 +991,46 @@ function saveLiveStickyIds() {
 }
 state.liveStickyIds = loadLiveStickyIds();
 
+// How many local-calendar days BEFORE today a match is still allowed to
+// linger in state.allRawMatches - 1 keeps "昨天" (Yesterday) reachable, per
+// this site's own established design (see dayLabelFor's own diffDays===-1
+// case), without also keeping the day before that. Enforced in
+// mergeFreshMatches below, not at fetch time in match-builder.mjs: that
+// file's own 2-UTC-day lookback (see fetchTeamLeagueMatches's comment) is a
+// deliberately WIDER net, needed only to correctly capture this viewer's
+// own local "yesterday" from a UTC-anchored query - which days actually get
+// KEPT afterward is a local-calendar-day question only the browser (which
+// alone knows the real viewer's own timezone) can answer correctly.
+const MATCH_RETENTION_PAST_DAYS = 1;
+// One more past day is kept in memory than is ever shown, purely as context
+// for the variety rotation (see rotationMatchesByDayKey): without the day
+// before yesterday, a fresh browser re-planned yesterday as if it were the
+// first day of its series and re-picked the matchup the day before had
+// already had. Live-reported: the home-screen app (whose stored history
+// still held what it had shown) said Rays @ Yankees for yesterday while
+// every freshly wiped Safari tab said Guardians @ Red Sox - the pick from
+// the day BEFORE yesterday.
+//
+// Five days, per direct request ("keep history up to 5 days ... so the
+// schedule has more consistency"): a series run the rotation is sharing
+// out can start several days back, and the further back it can see, the
+// more yesterday's re-plan matches what was actually shown back then.
+// match-builder.mjs's MATCH_LOOKBACK_DAYS fetches this far back.
+const ROTATION_CONTEXT_PAST_DAYS = 5;
+// Declared up here, ahead of the day plan history that loads with
+// ROTATION_CONTEXT_PAST_DAYS at module start (see oldestPlanHistoryDayKey).
+
 // The last plan rendered for each day (per sport filter) - see
 // ./lib/preferences.mjs's dayPlanHistoryKey and recommendation.mjs's
 // startedPlanLockIds. Whatever in it has already started is locked into
 // every later plan for that day, so a game ending (or an app update wiping
-// the match snapshot) can't reshuffle the day around it. Kept back to
-// yesterday, matching MATCH_RETENTION_PAST_DAYS' own 昨天 tab.
+// the match snapshot) can't reshuffle the day around it. Kept as far back
+// as ROTATION_CONTEXT_PAST_DAYS, whose started picks also fix those days'
+// turns for the variety rotation (see lockedIdsByDay).
 const DAY_PLAN_HISTORY_STORAGE_KEY = 'matchfind-day-plan-history';
 function oldestPlanHistoryDayKey() {
   const date = new Date();
-  date.setDate(date.getDate() - 1);
+  date.setDate(date.getDate() - ROTATION_CONTEXT_PAST_DAYS);
   return localDateKey(date);
 }
 // No longer tagged with its own copy of APP_BUILD_ID - the blanket
@@ -3606,27 +3636,6 @@ function pickInitialDay(days, matches) {
 // match set with a result where one league came back empty would delete
 // every match of that league from the page over a single transient
 // network blip, not just fail to refresh it.
-// How many local-calendar days BEFORE today a match is still allowed to
-// linger in state.allRawMatches - 1 keeps "昨天" (Yesterday) reachable, per
-// this site's own established design (see dayLabelFor's own diffDays===-1
-// case), without also keeping the day before that. Enforced in
-// mergeFreshMatches below, not at fetch time in match-builder.mjs: that
-// file's own 2-UTC-day lookback (see fetchTeamLeagueMatches's comment) is a
-// deliberately WIDER net, needed only to correctly capture this viewer's
-// own local "yesterday" from a UTC-anchored query - which days actually get
-// KEPT afterward is a local-calendar-day question only the browser (which
-// alone knows the real viewer's own timezone) can answer correctly.
-const MATCH_RETENTION_PAST_DAYS = 1;
-// One more past day is kept in memory than is ever shown, purely as context
-// for the variety rotation (see rotationMatchesByDayKey): without the day
-// before yesterday, a fresh browser re-planned yesterday as if it were the
-// first day of its series and re-picked the matchup the day before had
-// already had. Live-reported: the home-screen app (whose stored history
-// still held what it had shown) said Rays @ Yankees for yesterday while
-// every freshly wiped Safari tab said Guardians @ Red Sox - the pick from
-// the day BEFORE yesterday.
-const ROTATION_CONTEXT_PAST_DAYS = MATCH_RETENTION_PAST_DAYS + 1;
-
 function isWithinRetentionWindow(match) {
   return daysFromToday(new Date(match.startTimeUtc)) >= -ROTATION_CONTEXT_PAST_DAYS;
 }
@@ -4237,6 +4246,10 @@ async function refreshNearTerm() {
   try {
     const { matches, generatedAt, scheduleCoverage } = await buildMatches({
       daysAhead: NEAR_TERM_DAYS_AHEAD,
+      // Yesterday plus a day of time-zone margin - the hidden rotation-
+      // context days (ROTATION_CONTEXT_PAST_DAYS) come from the full-window
+      // tier, and finished games there don't need re-fetching every minute.
+      lookbackDays: 2,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
       enrichOdds: false,

@@ -403,7 +403,13 @@ export function parseOddsSignal(competition) {
   };
 }
 
-async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage) {
+// UTC days fetched before `now`: the viewer's five hidden rotation-context
+// days (app.js's ROTATION_CONTEXT_PAST_DAYS), plus one day of margin for a
+// US game date landing on the next local day east of the US - see
+// fetchTeamLeagueMatches.
+export const MATCH_LOOKBACK_DAYS = 6;
+
+async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage, lookbackDays = MATCH_LOOKBACK_DAYS) {
   // Queries `now`'s own UTC date AND the two days before it - not just
   // `now` onward. This script runs on a schedule/on push, at whatever UTC
   // instant that happens to be, and ESPN's own `dates=YYYYMMDD` scoreboard
@@ -431,16 +437,15 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
   // outside the real window; only a genuinely FINISHED fixture is exempted
   // from that bound at all - see the isFinished check below).
   //
-  // A THIRD lookback day covers the viewer's day BEFORE yesterday, which
-  // is never shown but which the variety rotation needs to plan yesterday
-  // the way it was planned when it was today (see app.js's
-  // ROTATION_CONTEXT_PAST_DAYS).
+  // Further lookback days (`lookbackDays`, MATCH_LOOKBACK_DAYS by default)
+  // cover the viewer's days before yesterday, which are never shown but which the variety
+  // rotation needs to plan yesterday the way it was planned when it was
+  // today (see app.js's ROTATION_CONTEXT_PAST_DAYS).
   //
-  // length is daysAhead + 4, not + 1: three extra days for the lookback
-  // above, PLUS one more so the loop's own far end actually reaches
-  // windowEndMs.
-  const dates = Array.from({ length: daysAhead + 4 }, (_, i) =>
-    yyyymmddUtc(new Date(now.getTime() + (i - 3) * 86_400_000))
+  // One more date than the lookback, so the loop's own far end actually
+  // reaches windowEndMs.
+  const dates = Array.from({ length: daysAhead + lookbackDays + 1 }, (_, i) =>
+    yyyymmddUtc(new Date(now.getTime() + (i - lookbackDays) * 86_400_000))
   );
   const results = await Promise.allSettled(
     dates.map(date => fetchJson(espnScoreboardUrl(league.sportKey, league.leagueKey, date)))
@@ -652,12 +657,12 @@ const F1_SESSION_TYPES = [
   { abbreviation: 'SR', labelSuffix: ' Sprint', labelSuffixZh: '衝刺賽', durationMinutes: 60 }
 ];
 
-async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
+async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson, lookbackDays = MATCH_LOOKBACK_DAYS) {
   // Starts two days before `now`, same reasoning and same fix as
   // fetchTeamLeagueMatches's own `dates` array above (the Taiwan-viewer
   // "昨天" lookback needs a full 2 UTC-calendar-days of margin, not just 1,
-  // plus one for the rotation's day-before-yesterday context).
-  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - 3 * 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
+  // plus the rotation's hidden context days - see MATCH_LOOKBACK_DAYS).
+  const rangeParam = `${yyyymmddUtc(new Date(now.getTime() - lookbackDays * 86_400_000))}-${yyyymmddUtc(new Date(now.getTime() + daysAhead * 86_400_000))}`;
   let data;
   try {
     data = await fetchJson(espnScoreboardUrl('racing', 'f1', rangeParam));
@@ -1112,7 +1117,12 @@ export async function buildMatches({
   // Optional (id) => boolean - which in-progress fixtures missing a line
   // should have their pre-game line looked up (one extra small request
   // each; see espnCoreOddsUrl). Left null, every such fixture is looked up.
-  needsPregameOdds = null
+  needsPregameOdds = null,
+  // UTC days fetched before `now` - see MATCH_LOOKBACK_DAYS. app.js's
+  // 60-second near-term tier passes a shorter one: it only needs yesterday,
+  // and the hidden rotation-context days come from the 5-minute full-window
+  // tier.
+  lookbackDays = MATCH_LOOKBACK_DAYS
 }) {
   if (typeof fetchJson !== 'function') {
     throw new TypeError('buildMatches requires a fetchJson(url) function - see this file\'s own top comment');
@@ -1150,14 +1160,14 @@ export async function buildMatches({
   const [teamMatchLists, f1Matches] = await Promise.all([
     Promise.all(
       leagues.map(league =>
-        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage).catch(error => {
+        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage, lookbackDays).catch(error => {
           console.warn(`Failed to fetch ${league.label}: ${error.message}`);
           return [];
         })
       )
     ),
     shouldFetchF1
-      ? fetchF1Matches(now, windowEndMs, daysAhead, fetchJson).catch(error => {
+      ? fetchF1Matches(now, windowEndMs, daysAhead, fetchJson, lookbackDays).catch(error => {
           console.warn(`Failed to fetch F1: ${error.message}`);
           return [];
         })
