@@ -56,6 +56,8 @@ import {
   LIVE_PICK_STICKY_BONUS,
   estimateLiveDurationMinutes,
   ALTERNATIVE_MAX_SCORE_GAP,
+  ACCEPTED_OVERLAP_MINUTES,
+  schedulingClash,
   computeVarietyRotation,
   mergeVarietyForcedIds,
   clearRotationIsPreferred,
@@ -543,23 +545,33 @@ function mlbMatch(overrides = {}) {
 }
 
 describe('schedulingInterval / canWatchSequentially (canonical duration model)', () => {
-  test('a high-reliability sport gets no uncertainty shrink - schedulingInterval is just duration + the transition buffer', () => {
+  test('schedulingInterval is the expected time, less the ACCEPTED_OVERLAP_MINUTES a viewer will trade to watch both', () => {
     const a = footballMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z' });
     const interval = schedulingInterval(a);
     assert.equal(interval.start, Date.parse('2026-09-19T18:00:00.000Z'));
-    assert.equal(interval.end, Date.parse('2026-09-19T18:00:00.000Z') + (115 + TRANSITION_BUFFER_MINUTES) * 60_000);
+    assert.equal(interval.end, Date.parse('2026-09-19T18:00:00.000Z') + (115 - ACCEPTED_OVERLAP_MINUTES) * 60_000);
   });
 
-  test('MLB (low reliability) schedulingInterval ends LATER than its nominal length, padded for real overrun risk', () => {
-    const game = mlbMatch({ startTimeUtc: '2026-09-19T18:00:00.000Z' });
-    const nominalEnd = Date.parse('2026-09-19T18:00:00.000Z') + 190 * 60_000;
-    // A no-clock sport is more likely to run LONG than short (extra
-    // innings, rain delays) - see DURATION_OVERRUN_BUFFER_BY_RELIABILITY's
-    // own comment. Padding the reserved block, never shrinking it below
-    // the value judgment that produced it, is the direct fix for the
-    // reported "40-80 minute overlap despite watching sequentially being
-    // clearly unrealistic" bug.
-    assert.ok(schedulingInterval(game).end > nominalEnd);
+  test('two games clash only when their expected times overlap by more than ACCEPTED_OVERLAP_MINUTES', () => {
+    // Live case 2026-09-25 Taiwan time: Rays @ Yankees 07:05 (157 min, over
+    // by 09:42) and Padres @ Dodgers 10:10 - no overlap on expected time, yet
+    // the old MLB padding made them clash and dropped the Dodgers game.
+    const rays = mlbMatch({ id: 'rays', startTimeUtc: '2026-09-24T23:05:00.000Z', durationMinutes: 157 });
+    const padres = mlbMatch({ id: 'padres', startTimeUtc: '2026-09-25T02:10:00.000Z', durationMinutes: 167 });
+    assert.ok(!schedulingClash(rays, padres));
+    // A live game running long: over by 10:18, 8 minutes into the next one.
+    assert.ok(!schedulingClash({ ...rays, durationMinutes: 193 }, padres));
+    // Over by 10:25 - 15 minutes in, more than the viewer trades.
+    assert.ok(schedulingClash({ ...rays, durationMinutes: 200 }, padres));
+  });
+
+  test('a game running past its pre-game estimate never knocks a later pick out mid-day', () => {
+    const rays = mlbMatch({ id: 'rays', startTimeUtc: '2026-09-25T12:05:00.000Z', durationMinutes: 157, effectiveScore: 7 });
+    const padres = mlbMatch({ id: 'padres', startTimeUtc: '2026-09-25T15:10:00.000Z', durationMinutes: 167, effectiveScore: 7.6 });
+    // Extra innings: live estimate now 240 min, planned 157.
+    const long = { ...rays, durationMinutes: 240, plannedDurationMinutes: 157 };
+    assert.ok(!schedulingClash(long, padres));
+    assert.deepEqual(computeDayPlan('2026-09-25', [long, padres], null, { scoreField: 'effectiveScore' }).map(m => m.id), ['rays', 'padres']);
   });
 
   test('resolveSportTiming falls back to a medium default for an unlisted sport', () => {

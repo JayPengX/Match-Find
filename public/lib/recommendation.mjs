@@ -457,9 +457,30 @@ export function schedulingDurationMinutes(match) {
 // buffer AND the transition buffer. Nothing downstream needs to know
 // either of those exist; they just see one interval two matches either do
 // or don't overlap.
+//
+// Now built on the game's EXPECTED time alone (its pre-game estimate, or
+// less once live/finished data says it's shorter), minus
+// ACCEPTED_OVERLAP_MINUTES: two games
+// clash only when their expected times overlap by more than that. Direct
+// instruction, live case 2026-09-25 Taiwan time: Tampa Bay Rays @ New York
+// Yankees (07:05, expected 157 min, so over by 09:42) knocked San Diego
+// Padres @ Los Angeles Dodgers (10:10) out of the plan, because the old
+// padding (+12% for MLB's clock-less uncertainty, plus a 10-minute
+// transition buffer) stretched its block to 10:11 - "it's a few minutes of
+// overlap on expected time, let them overlap". Missing the first few
+// minutes of the next game is an acceptable price for watching both; the
+// padding cost the viewer a whole game to avoid it.
+export const ACCEPTED_OVERLAP_MINUTES = 10;
 export function schedulingInterval(match) {
   const start = Date.parse(match.startTimeUtc);
-  return { start, end: start + schedulingDurationMinutes(match) * 60_000 + TRANSITION_BUFFER_MINUTES * 60_000 };
+  // Never longer than the pre-game estimate the day was planned on, live
+  // or finished (same reasoning as schedulingDurationMinutes' finished
+  // case): a game running long overlaps the next pick, it doesn't knock it
+  // out of the plan halfway through the day.
+  const expectedMinutes = Number.isFinite(match.plannedDurationMinutes)
+    ? Math.min(match.durationMinutes, match.plannedDurationMinutes)
+    : match.durationMinutes;
+  return { start, end: start + Math.max(1, expectedMinutes - ACCEPTED_OVERLAP_MINUTES) * 60_000 };
 }
 
 // The honest "how long will this realistically still be live" clock

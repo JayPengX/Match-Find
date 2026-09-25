@@ -607,9 +607,15 @@ in `public/lib/recommendation.mjs`.
   pre-collapsed to one representative per overlap group ahead of time (an
   earlier version did that and could silently lose the actually-best
   plan).
-- A small fixed buffer (`TRANSITION_BUFFER_MINUTES`) sits between any two
-  back-to-back picks, so "ends at 8:00, starts at 8:00" no longer counts as
-  a real gap.
+- Two games **clash only when their expected times overlap by more than
+  `ACCEPTED_OVERLAP_MINUTES` (10)** — missing the first few minutes of the
+  next game is worth watching both. Expected time is the pre-game length
+  estimate (or less, once live/finished data says the game is shorter):
+  a game running long overlaps the next pick, it never knocks it out of
+  the plan mid-day. This replaced a padded block (+12% for MLB, plus a
+  10-minute transition buffer) that on 9/25 Taiwan time made Rays @
+  Yankees (07:05, over by 09:42) "clash" with Padres @ Dodgers (10:10) and
+  dropped the Dodgers game.
 - Any card whose start overlaps an **earlier** match — regardless of
   whether either one made the plan — gets a small note saying so and for
   how long ("與「X」重疊 45 分鐘"), a plain fact about the schedule shown
