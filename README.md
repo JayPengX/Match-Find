@@ -1374,11 +1374,18 @@ First run (2026-09-25, 2,256 games):
 | Pre-game, refit (shipped) | 14.9 min (bias −0.3) | September 15.4; team spread ~10 min, not 19 |
 | Live, old (inning in progress read as completed) | 22.3 min | 34 min short in the 3rd |
 | Live, observed pace over the whole game | 14.2 min | |
-| Live, played so far + remaining innings at 85% pre-game / 15% observed pace (shipped) | 12.0–12.2 min | 8 min by the 9th |
+| Live, played so far + remaining innings at 85% pre-game / 15% observed pace | 11.9–12.2 min | |
+| Live, + outs, home lead in the 9th, score state from the 7th, 95% pre-game pace (shipped) | 10.7 min on held-out games | 7th 9.3, 8th 6.9, 9th+ 7.4 |
 
 A single game varies by about 15 minutes whatever the formula, so
 pre-game gains are small; the live estimate is where real data helps
 most. Rerun the script every few weeks rather than hand-tuning.
+
+**The live estimate never reaches the planner.** It only sets the card's
+end time. The planner always works from the pre-game estimate
+(`planningDurationMinutes`), so a game running long (or short) never
+reshuffles the day - a finished game's real length counts only when it's
+shorter than planned.
 
 ### Taiwan broadcast source
 

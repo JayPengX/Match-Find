@@ -58,6 +58,8 @@ import {
   ALTERNATIVE_MAX_SCORE_GAP,
   ACCEPTED_OVERLAP_MINUTES,
   MLB_LIVE_OBSERVED_PACE_WEIGHT,
+  MLB_LIVE_END_OF_GAME_MINUTES,
+  planningDurationMinutes,
   schedulingClash,
   computeVarietyRotation,
   mergeVarietyForcedIds,
@@ -564,6 +566,24 @@ describe('schedulingInterval / canWatchSequentially (canonical duration model)',
     assert.ok(!schedulingClash({ ...rays, durationMinutes: 193 }, padres));
     // Over by 10:25 - 15 minutes in, more than the viewer trades.
     assert.ok(schedulingClash({ ...rays, durationMinutes: 200 }, padres));
+  });
+
+  test('the planner never reads the live estimate - longer or shorter, the plan stays as made', () => {
+    const rays = mlbMatch({ id: 'rays', startTimeUtc: '2026-09-25T12:05:00.000Z', durationMinutes: 157, plannedDurationMinutes: 157, effectiveScore: 7 });
+    const padres = mlbMatch({ id: 'padres', startTimeUtc: '2026-09-25T15:10:00.000Z', durationMinutes: 167, plannedDurationMinutes: 167, effectiveScore: 7.6 });
+    // A late game that only fits if Rays ends early - a shorter live
+    // estimate must not pull it into the plan either.
+    const early = mlbMatch({ id: 'early', startTimeUtc: '2026-09-25T14:20:00.000Z', durationMinutes: 40, plannedDurationMinutes: 40, effectiveScore: 3 });
+    const baseline = computeDayPlan('2026-09-25', [rays, padres, early], null, { scoreField: 'effectiveScore' }).map(m => m.id);
+    for (const liveMinutes of [120, 240]) {
+      const live = { ...rays, durationMinutes: liveMinutes };
+      assert.equal(planningDurationMinutes(live), 157);
+      assert.deepEqual(schedulingInterval(live), schedulingInterval(rays));
+      assert.deepEqual(computeDayPlan('2026-09-25', [live, padres, { ...early }], null, { scoreField: 'effectiveScore' }).map(m => m.id), baseline);
+    }
+    // Finished: the real length counts only when it's shorter.
+    assert.equal(planningDurationMinutes({ ...rays, isFinished: true, durationMinutes: 140 }), 140);
+    assert.equal(planningDurationMinutes({ ...rays, isFinished: true, durationMinutes: 200 }), 157);
   });
 
   test('a game running past its pre-game estimate never knocks a later pick out mid-day', () => {
@@ -1224,23 +1244,48 @@ describe('estimateLiveDurationMinutes (real-time correction from ESPN live perio
     assert.ok(slow > fast);
   });
 
-  test('MLB: time played plus the remaining innings at mostly the pre-game pace, read by half-inning', () => {
-    // Live 2026-09-25, Rays @ Yankees: 150 minutes in, top of the 8th - 7.25
-    // innings played (ESPN's period is the inning IN PROGRESS), 1.75 to go.
+  test('MLB: time played plus the remaining innings at mostly the pre-game pace, counting outs', () => {
+    // 150 minutes in, top of the 8th with 2 out, away team leading: 7 + 2/6
+    // innings played, the rest to go.
     const at = startMs + 150 * 60_000;
-    const top8 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 8, shortDetail: 'Top 8th' }, at);
-    const pace = MLB_LIVE_OBSERVED_PACE_WEIGHT * (150 / 7.25) + (1 - MLB_LIVE_OBSERVED_PACE_WEIGHT) * (157 / 9);
-    assert.equal(top8, Math.round(150 + 1.75 * pace));
-    // The end of the 7th and the top of the 8th a moment later are nearly the
-    // same point in the game - nearly the same estimate (the old inning/9
-    // reading jumped 7/9 -> 8/9 there).
-    const end7 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 7, shortDetail: 'End 7th' }, at);
-    assert.ok(Math.abs(end7 - top8) <= 5);
+    const live = { isLive: true, period: 8, shortDetail: 'Top 8th', situation: { outs: 2 }, scores: [5, 3] };
+    const played = 7 + 2 / 6;
+    const pace = MLB_LIVE_OBSERVED_PACE_WEIGHT * (150 / played) + (1 - MLB_LIVE_OBSERVED_PACE_WEIGHT) * (157 / 9);
+    const remaining = 9 - played;
+    assert.equal(
+      estimateLiveDurationMinutes('MLB', START, 157, live, at),
+      Math.round(150 + remaining * pace + MLB_LIVE_END_OF_GAME_MINUTES * Math.min(1, remaining / 3))
+    );
+    // More outs, less left.
+    const noOuts = estimateLiveDurationMinutes('MLB', START, 157, { ...live, situation: { outs: 0 } }, at);
+    assert.ok(noOuts > estimateLiveDurationMinutes('MLB', START, 157, live, at));
+  });
+
+  test('MLB: the end of the 7th and the top of the 8th a moment later give nearly the same estimate', () => {
+    const at = startMs + 150 * 60_000;
+    const end7 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 7, shortDetail: 'End 7th', scores: [5, 3] }, at);
+    const top8 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 8, shortDetail: 'Top 8th', situation: { outs: 0 }, scores: [5, 3] }, at);
+    assert.ok(Math.abs(end7 - top8) <= 3);
+  });
+
+  test('MLB: a home lead in the top of the 9th leaves only the rest of the top half', () => {
+    const at = startMs + 160 * 60_000;
+    const homeLeads = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 9, shortDetail: 'Top 9th', situation: { outs: 2 }, scores: [2, 4] }, at);
+    const awayLeads = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 9, shortDetail: 'Top 9th', situation: { outs: 2 }, scores: [4, 2] }, at);
+    assert.ok(homeLeads - 160 <= 5);
+    assert.ok(awayLeads - homeLeads >= 8); // the bottom half still to play
+  });
+
+  test('MLB: from the 7th, a home lead expects a shorter finish and a tie a longer one', () => {
+    const at = startMs + 130 * 60_000;
+    const est = scores => estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 7, shortDetail: 'Top 7th', situation: { outs: 0 }, scores }, at);
+    assert.ok(est([1, 3]) < est([3, 1]));
+    assert.ok(est([2, 2]) > est([3, 1]));
   });
 
   test('MLB: extra innings keep half an inning more ahead', () => {
     const at = startMs + 200 * 60_000;
-    assert.ok(estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 10, shortDetail: 'Top 10th' }, at) > 200);
+    assert.ok(estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 10, shortDetail: 'Top 10th', scores: [3, 3] }, at) > 200);
   });
 
   test('never estimates less than the time that has already genuinely elapsed', () => {

@@ -29,9 +29,9 @@
 //
 // Last, the LIVE estimate (recommendation.mjs's estimateLiveDurationMinutes)
 // is checked the same way: for the last `--live-days` days, ESPN's play-by-
-// play gives the real wallclock at every half-inning start and at the final
-// play, so the estimate can be scored at each half-inning from the 3rd on
-// against when the game really ended.
+// play gives the real wallclock, inning, outs and score on every play and
+// at the final play, so the estimate can be scored every few plays from the
+// 3rd inning on against when the game really ended.
 //
 // Usage: node scripts/calibrate-durations.mjs [--season 2026] [--split 2026-09-01] [--odds-days 30] [--live-days 14]
 import {
@@ -266,18 +266,28 @@ if (liveDays > 0) {
     const team = side => competition.competitors.find(c => c.homeAway === side)?.team?.displayName;
     const pregame = predictMlbDurationMinutes({ awayTeam: team('away'), homeTeam: team('home'), venue: competition.venue?.fullName });
     used++;
+    // Every 4th play from the 3rd inning on, as the live poll would see it:
+    // inning, half, outs after the play, and the score.
+    const halfName = { Top: 'Top', Bottom: 'Bot', Mid: 'Mid', End: 'End' };
     plays
-      .filter(p => p.type?.type === 'start-inning' && p.period?.number >= 3 && p.period.number <= 9)
+      .filter((p, k) => k % 4 === 0 && p.period?.number >= 3 && Date.parse(p.wallclock) < endMs)
       .forEach(p => {
-        const live = { isLive: true, period: p.period.number, shortDetail: `${p.period.type} ${p.period.number}` };
+        const live = {
+          isLive: true,
+          period: p.period.number,
+          shortDetail: `${halfName[p.period.type] || ''} ${p.period.number}`,
+          situation: { outs: p.outs ?? null },
+          scores: [p.awayScore, p.homeScore]
+        };
         const predicted = estimateLiveDurationMinutes('MLB', event.date, pregame, live, Date.parse(p.wallclock));
-        if (!byInning.has(p.period.number)) byInning.set(p.period.number, []);
-        byInning.get(p.period.number).push(predicted - actual);
+        const key = Math.min(9, p.period.number);
+        if (!byInning.has(key)) byInning.set(key, []);
+        byInning.get(key).push(predicted - actual);
       });
   });
   const all = [...byInning.values()].flat();
   const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
-  console.log(`\nLive estimate vs real end, ${used} games over the last ${liveDays} days (error in minutes at each half-inning start):`);
+  console.log(`\nLive estimate vs real end, ${used} games over the last ${liveDays} days (error in minutes, checked every few plays; 9 = 9th and later):`);
   console.log(`  all checkpoints: MAE ${mean(all.map(Math.abs)).toFixed(1)}, bias ${mean(all).toFixed(1)}`);
   console.log(
     '  by inning (bias / MAE): ' +

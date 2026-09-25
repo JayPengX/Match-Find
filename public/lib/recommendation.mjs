@@ -272,10 +272,13 @@ export function overlapMinutes(a, b) {
 // minute count: 45 shared minutes is nearly all of a 55-minute F1 sprint
 // but barely a quarter of a 190-minute MLB game.
 export const NEAR_TOTAL_OVERLAP_FRACTION = 0.75;
+// Planner-side (a pin's exclusions, conflict clusters), so it reads
+// planningDurationMinutes, never a live estimate - see that function.
 export function isNearTotalOverlap(a, b) {
-  const overlapMins = overlapMinutes(a, b);
+  const planned = m => ({ ...m, durationMinutes: planningDurationMinutes(m) });
+  const overlapMins = overlapMinutes(planned(a), planned(b));
   if (overlapMins <= 0) return false;
-  const shorter = Math.min(a.durationMinutes, b.durationMinutes);
+  const shorter = Math.min(planningDurationMinutes(a), planningDurationMinutes(b));
   return shorter > 0 && overlapMins / shorter >= NEAR_TOTAL_OVERLAP_FRACTION;
 }
 
@@ -473,14 +476,22 @@ export function schedulingDurationMinutes(match) {
 export const ACCEPTED_OVERLAP_MINUTES = 10;
 export function schedulingInterval(match) {
   const start = Date.parse(match.startTimeUtc);
-  // Never longer than the pre-game estimate the day was planned on, live
-  // or finished (same reasoning as schedulingDurationMinutes' finished
-  // case): a game running long overlaps the next pick, it doesn't knock it
-  // out of the plan halfway through the day.
-  const expectedMinutes = Number.isFinite(match.plannedDurationMinutes)
-    ? Math.min(match.durationMinutes, match.plannedDurationMinutes)
-    : match.durationMinutes;
-  return { start, end: start + Math.max(1, expectedMinutes - ACCEPTED_OVERLAP_MINUTES) * 60_000 };
+  return { start, end: start + Math.max(1, planningDurationMinutes(match) - ACCEPTED_OVERLAP_MINUTES) * 60_000 };
+}
+
+// The length the PLANNER works with - always the pre-game estimate the day
+// was planned on, never the live estimate: direct instruction, "the
+// estimate must not influence the planner, so a game running on doesn't
+// just push the next one off". The live estimate (see
+// estimateLiveDurationMinutes, written to durationMinutes by app.js's
+// pollLiveMatches) is for the card's end time only. A finished game uses
+// its real length when that's SHORTER than planned (it's over - nothing
+// after it is blocked); when longer, the plan made around it stands.
+// Falls back to durationMinutes only for a match built without a pre-game
+// estimate (hand-built test fixtures, a build that predates the field).
+export function planningDurationMinutes(match) {
+  if (!Number.isFinite(match.plannedDurationMinutes)) return match.durationMinutes;
+  return match.isFinished ? Math.min(match.durationMinutes, match.plannedDurationMinutes) : match.plannedDurationMinutes;
 }
 
 // The honest "how long will this realistically still be live" clock
@@ -639,24 +650,53 @@ export function estimateLiveDurationMinutes(sport, startTimeUtc, fallbackMinutes
 // so an F1 race simply keeps its pre-race circuit-baseline estimate
 // throughout, same as before this function existed.
 // MLB, tuned against real games (scripts/calibrate-durations.mjs's live
-// check - ESPN play-by-play wallclock at every half-inning start vs. the
-// game's real final play, 248 games 2026-09-05..23): the time already
-// played is known exactly, and the REMAINING innings are best predicted at
-// mostly the pre-game pace, only MLB_LIVE_OBSERVED_PACE_WEIGHT of the pace
-// observed so far - a slow first five innings says little about the last
-// four. Average error 12.2 min from the 3rd inning on, vs 14.2 for
-// extrapolating the observed pace over the whole game (blended 0.7/0.3
-// with the pre-game estimate) and 22.3 for the older version of that which
-// read ESPN's in-progress inning as completed (34 min short in the 3rd).
+// check: ESPN play-by-play wallclock at every few plays vs. the game's real
+// final play; constants fitted on 2026-08-25..09-09, scored on 09-10..24,
+// ~23,000 checkpoints from the 3rd inning on).
+//
+// The time already played is known exactly; the REMAINING innings go at
+// mostly the pre-game pace (only MLB_LIVE_OBSERVED_PACE_WEIGHT of the pace
+// seen so far - a slow first five innings says little about the last
+// four), plus:
+// - outs within the half-inning (the live `situation.outs`);
+// - in the 9th or later, a home team leading in the top half means the
+//   bottom half won't be played - only the rest of the top is left;
+// - from the 7th, the score says what's likely: a home lead probably skips
+//   the bottom of the 9th (MLB_LIVE_HOME_LEAD_SKIP_INNINGS), a tie may go
+//   to extra innings (MLB_LIVE_TIE_EXTRA_INNINGS);
+// - MLB_LIVE_END_OF_GAME_MINUTES for the wrap-up after the final out,
+//   scaled down as the remaining innings run out.
+// Average error 10.7 min on the held-out games (7th: 9.3, 8th: 6.9, 9th+:
+// 7.4), vs 11.9 for time played + remaining innings alone, 14.2 for
+// extrapolating the observed pace over the whole game and 22.3 for the
+// original version, which read ESPN's in-progress inning as completed.
 // `pregameMinutes` must be the pre-game estimate, never a previous live
-// value (see pollLiveMatches). Past the 9th, half an inning more at a time.
-export const MLB_LIVE_OBSERVED_PACE_WEIGHT = 0.15;
+// value (see pollLiveMatches).
+export const MLB_LIVE_OBSERVED_PACE_WEIGHT = 0.05;
+export const MLB_LIVE_HOME_LEAD_SKIP_INNINGS = 0.5;
+export const MLB_LIVE_TIE_EXTRA_INNINGS = 0.25;
+export const MLB_LIVE_END_OF_GAME_MINUTES = 2;
 function estimateLiveMlbDurationMinutes(elapsedMinutes, pregameMinutes, live) {
-  const played = mlbInningsPlayed(live);
-  if (played == null || played < 1) return pregameMinutes;
+  const state = mlbLiveState(live);
+  if (!state || state.played < 1) return pregameMinutes;
+  const { inning, half, outs, played, awayScore, homeScore } = state;
+  const scoreKnown = Number.isFinite(awayScore) && Number.isFinite(homeScore);
+  const homeLeads = scoreKnown && homeScore > awayScore;
+  const tied = scoreKnown && homeScore === awayScore;
+  let remaining;
+  if (inning >= 9 && homeLeads && (half === 'top' || half === 'mid')) {
+    remaining = half === 'top' ? (3 - outs) / 6 : 0;
+  } else {
+    remaining = played < 9 ? 9 - played : 0.5;
+    if (inning >= 7 && (inning <= 8 || (inning === 9 && half === 'top'))) {
+      if (homeLeads) remaining -= MLB_LIVE_HOME_LEAD_SKIP_INNINGS;
+      else if (tied) remaining += MLB_LIVE_TIE_EXTRA_INNINGS;
+    }
+    remaining = Math.max(0, remaining);
+  }
   const pace = MLB_LIVE_OBSERVED_PACE_WEIGHT * (elapsedMinutes / played) + (1 - MLB_LIVE_OBSERVED_PACE_WEIGHT) * (pregameMinutes / 9);
-  const remainingInnings = played < 9 ? 9 - played : 0.5;
-  return Math.round(elapsedMinutes + remainingInnings * pace);
+  const wrapUp = MLB_LIVE_END_OF_GAME_MINUTES * Math.min(1, remaining / 3);
+  return Math.max(Math.round(elapsedMinutes), Math.round(elapsedMinutes + remaining * pace + wrapUp));
 }
 
 function liveGameProgressFraction(sport, live) {
@@ -679,17 +719,22 @@ function liveGameProgressFraction(sport, live) {
   return null;
 }
 
-// Innings actually played, from ESPN's in-progress inning (`period`) and
-// its half-inning ("Top 8th" / "Mid 8th" / "Bot 8th" / "End 8th", in
-// shortDetail - pollLiveMatches passes it through as `shortDetail`, a
-// stored `.live` has it as `detail`). Mid-half is the average position
-// within a half-inning; with no half-inning text, the middle of the inning.
-function mlbInningsPlayed(live) {
+// Where an MLB game stands, from ESPN's in-progress inning (`period`), its
+// half-inning ("Top 8th" / "Mid 8th" / "Bot 8th" / "End 8th" - `shortDetail`
+// on a live poll update, `detail` on a stored `.live`), the outs in that
+// half (`situation.outs`) and the score (`scores`: [away, home]). `played`
+// is innings actually completed, counting outs: the top of the 8th with 2
+// out is 7 + 2/6. With no outs known, the middle of the half-inning.
+function mlbLiveState(live) {
   const inning = Number(live.period);
   if (!Number.isFinite(inning) || inning <= 0) return null;
-  const half = /^\s*(top|mid|bot|end)/i.exec(live.shortDetail || live.detail || '')?.[1]?.toLowerCase();
-  const withinInning = { top: 0.25, mid: 0.5, bot: 0.75, end: 1 }[half] ?? 0.5;
-  return inning - 1 + withinInning;
+  const half = /^\s*(top|mid|bot|end)/i.exec(live.shortDetail || live.detail || '')?.[1]?.toLowerCase() || null;
+  const rawOuts = Number(live.situation?.outs);
+  const outs = Number.isFinite(rawOuts) ? Math.min(3, Math.max(0, rawOuts)) : null;
+  const intoHalf = outs == null ? 0.25 : outs / 6;
+  const withinInning = { top: intoHalf, mid: 0.5, bot: 0.5 + intoHalf, end: 1 }[half] ?? 0.5;
+  const [awayScore, homeScore] = Array.isArray(live.scores) ? live.scores.map(Number) : [];
+  return { inning, half, outs: outs ?? 1.5, played: inning - 1 + withinInning, awayScore, homeScore };
 }
 
 function parseClockMinutesLeft(displayClock) {
