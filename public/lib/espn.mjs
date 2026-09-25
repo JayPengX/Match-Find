@@ -14,13 +14,14 @@
 // /sports-proxy route (see app.js), never straight to ESPN - browsers can't
 // read a cross-origin response ESPN itself sends no CORS headers for.
 //
-// This module no longer reads win% odds at all - see ./polymarket.mjs for
-// that (ESPN's own sportsbook feed doesn't cover every sport this app
-// tracks, F1 in particular). Score/status and the spread/over-under
-// signal the scoring engine (not this odds display) uses still come from
-// here, unaffected.
+// The win% odds bar reads Polymarket first - see ./polymarket.mjs (ESPN's
+// own sportsbook feed doesn't cover every sport this app tracks, F1 in
+// particular, and moves slower). The sportsbook moneyline read below is
+// only its pre-game fallback (see ./sportsbook-odds.mjs). Score/status and
+// the spread/over-under signal the scoring engine uses also come from here.
 
 import { parsePlayoffInfo } from './playoff.mjs';
+import { parseSportsbookWinPct } from './sportsbook-odds.mjs';
 
 export function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
   const base = `https://site.api.espn.com/apis/site/v2/sports/${sportKey}/${leagueKey}/scoreboard`;
@@ -128,6 +129,8 @@ export function extractLiveUpdates(sport, scoreboardJson) {
       situation,
       oddsSpread: Number.isFinite(spread) ? spread : null,
       oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null,
+      // Pre-game only (null once 'in'/'post' - ESPN drops the line then).
+      bookOdds: statusType.state === 'pre' ? parseSportsbookWinPct(competition, { hasDraw: sport === 'Premier League' }) : null,
       // The series score moves the moment a playoff game ends - carried
       // here so the card's series line updates with the final score
       // instead of waiting for the next full rebuild.

@@ -71,6 +71,10 @@ import {
   resolveF1WinnerOdds,
   resolvePoleWinnerOdds
 } from './polymarket.mjs';
+// ESPN's own sportsbook moneyline - the odds bar's fallback when
+// Polymarket has no usable price for a not-yet-started fixture (see that
+// module's top comment for why it's the fallback, not the primary).
+import { parseSportsbookWinPct } from './sportsbook-odds.mjs';
 // Deterministic, per-fixture broadcast-length formulas (MLB team pace,
 // NBA/EPL modifiers, F1 circuit baselines), plus the rivalry/derby/
 // national-broadcast detectors the objective scoring engine below reuses
@@ -512,6 +516,8 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       const isPostseason = event.season?.type === 3 || event.season?.type === 5;
       const playoff = isPostseason ? parsePlayoffInfo(competition) : null;
       const oddsSignal = parseOddsSignal(competition);
+      // Pre-game only: ESPN drops the line once a game is underway.
+      const bookOdds = isLive || isFinished ? null : parseSportsbookWinPct(competition, { hasDraw: league.label === 'Premier League' });
       const id = `${league.id}-${event.id}`;
       const pregameEstimateMinutes = computeDurationMinutes(
         league,
@@ -579,6 +585,16 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         // quietly move a fixture's ranking.
         oddsMarketWinPctAway: null,
         oddsMarketWinPctHome: null,
+        // The Polymarket market's liquidity, so the card can tell a thin,
+        // barely-traded price from a real one (see sportsbook-odds.mjs's
+        // resolveDisplayOdds) - set with oddsWinPctAway/Home above.
+        oddsMarketLiquidity: null,
+        // ESPN's sportsbook moneyline, devigged - the odds bar's fallback
+        // (see ./sportsbook-odds.mjs). Display only, never scored.
+        oddsBookWinPctAway: bookOdds?.away ?? null,
+        oddsBookWinPctHome: bookOdds?.home ?? null,
+        oddsBookWinPctDraw: bookOdds?.draw ?? null,
+        oddsBookProvider: bookOdds?.provider || null,
         durationMinutes: isFinished
           ? finishedDurationMinutes(new Date(startMs).toISOString(), now, league.label, pregameEstimateMinutes)
           : pregameEstimateMinutes,
@@ -1003,6 +1019,7 @@ export async function enrichWithPolymarketOdds(matches, fetchJson) {
       match.oddsWinPctAway = result.away;
       match.oddsWinPctHome = result.home;
       match.oddsWinPctDraw = result.draw;
+      match.oddsMarketLiquidity = Number.isFinite(result.liquidity) ? result.liquidity : null;
       // Gated separately from the display fields above - see
       // POLYMARKET_MIN_LIQUIDITY_FOR_SCORING's own comment for the live
       // liquidity investigation behind this threshold. A fixture whose

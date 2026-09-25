@@ -89,7 +89,8 @@ identity, and a masthead here was just empty space repeating that. Settings
   [Broadcast Service Registry](#broadcast-service-registry)).
 - **Live win% odds** — sourced from Polymarket, devigged, shown per fixture
   where a real market exists, including F1 outright and pole-position
-  markets (see [Live Win% Odds](#live-win-odds)).
+  markets, with ESPN's sportsbook moneyline as a pre-game fallback and a
+  small source label under the bar (see [Live Win% Odds](#live-win-odds)).
 - **Live in-progress detail** — a sport-specific live status widget
   (baseball diamond with runners/outs, NBA/EPL clock, F1 flags and running
   order) on any card that is currently live (see [Live Score/Odds
@@ -2058,6 +2059,23 @@ event and devigged together. Each side of a two-/three-way bar is colored
 with that team's own real brand color (`public/lib/color.mjs`'s WCAG
 contrast check — falling back to a fixed sport accent only when neither of
 a team's two colors reads legibly against the card's current background).
+
+### Sportsbook fallback (ESPN)
+
+Polymarket stays the primary source: its price moves with every trade and
+the 30-second live poll picks that up, while a sportsbook line is repriced
+by the book, carries its margin, and vanishes from ESPN's scoreboard the
+moment a game starts. But ESPN's scoreboard already carries the
+sportsbook's (DraftKings') moneyline for game-day fixtures at no extra
+request, so `public/lib/sportsbook-odds.mjs` devigs it
+(`oddsBookWinPctAway/Home/Draw`) and `resolveDisplayOdds` uses it **before
+kickoff only**, when Polymarket has no market for the fixture or one below
+`POLYMARKET_MIN_LIQUIDITY_FOR_SCORING`. Once a game starts, the bar is
+Polymarket or nothing. A small label under the bar names the source
+("Polymarket" or the book's name). The sportsbook numbers are display-only
+and never feed the score. Live-checked 2026-09-25: ESPN posts the MLB
+moneyline on game day only, and it sat within ~2 points of Polymarket on
+every game that day.
 
 F1's own outright markets (Race winner, Pole position) use a different
 devig function than the team-sport markets above — `devigPowerMethod`

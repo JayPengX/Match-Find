@@ -106,6 +106,7 @@ import {
   resolveF1WinnerOdds,
   resolvePoleWinnerOdds
 } from './lib/polymarket.mjs';
+import { resolveDisplayOdds } from './lib/sportsbook-odds.mjs';
 // The one shared fetch+score pipeline - see that module's own top comment
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
@@ -2225,62 +2226,60 @@ function updateMatchCard(node, match) {
   liveStatusEl.replaceChildren(...(liveStatusNode ? [liveStatusNode] : []));
   liveStatusEl.hidden = !liveStatusNode;
 
-  // A real Polymarket prediction market's own devigged trade price (see
-  // ./lib/polymarket.mjs) as a live win-probability bar - only rendered
-  // when a real market has actually opened for this fixture. Never a
-  // guessed/defaulted 50/50 - hidden entirely rather than showing a fake
-  // number when the market itself hasn't weighed in. EPL's own market is a
-  // real three-outcome one (away/draw/home) rather than MLB/NBA's two, so
-  // this renders a middle draw segment whenever oddsWinPctDraw is real,
-  // and otherwise falls back to the plain two-segment bar. Hidden once the
-  // game is over, too: Polymarket often takes a while to resolve the
-  // market, so its price right after the final whistle can still read as
-  // a stale mid-game probability rather than the actual result.
+  // A live win-probability bar - Polymarket's devigged trade price first
+  // (see ./lib/polymarket.mjs), with ESPN's sportsbook moneyline as the
+  // pre-game fallback when Polymarket has no price or only a thin one
+  // (see ./lib/sportsbook-odds.mjs's resolveDisplayOdds). A small label
+  // under the bar says which source it is. Only rendered when a real price
+  // exists - never a guessed/defaulted 50/50. EPL's own market is a real
+  // three-outcome one (away/draw/home) rather than MLB/NBA's two, so this
+  // renders a middle draw segment whenever a draw price is real, and
+  // otherwise the plain two-segment bar. Hidden once the game is over,
+  // too: Polymarket often takes a while to resolve the market, so its
+  // price right after the final whistle can still read as a stale
+  // mid-game probability rather than the actual result.
   const oddsEl = node.querySelector('.match-odds');
-  if (
-    !match.isFinished &&
-    match.competitors &&
-    match.competitors.length === 2 &&
-    Number.isFinite(match.oddsWinPctAway) &&
-    Number.isFinite(match.oddsWinPctHome)
-  ) {
+  const displayOdds = match.isFinished ? null : resolveDisplayOdds(match);
+  if (displayOdds && match.competitors && match.competitors.length === 2) {
     const [away, home] = match.competitors;
-    const hasDraw = Number.isFinite(match.oddsWinPctDraw);
+    const hasDraw = Number.isFinite(displayOdds.draw);
     oddsEl.hidden = false;
-    oddsEl.querySelector('.match-odds-away').textContent = `${Math.round(match.oddsWinPctAway)}%`;
-    oddsEl.querySelector('.match-odds-home').textContent = `${Math.round(match.oddsWinPctHome)}%`;
+    oddsEl.querySelector('.match-odds-away').textContent = `${Math.round(displayOdds.away)}%`;
+    oddsEl.querySelector('.match-odds-home').textContent = `${Math.round(displayOdds.home)}%`;
     const awaySeg = oddsEl.querySelector('.match-odds-seg-away');
     const drawSeg = oddsEl.querySelector('.match-odds-seg-draw');
     const homeSeg = oddsEl.querySelector('.match-odds-seg-home');
     // Each segment gets ITS OWN team's real color (see ./lib/color.mjs) -
     // never one fixed color for both sides, which read as arbitrary rather
     // than "which team is this" at a glance.
-    awaySeg.style.width = `${match.oddsWinPctAway}%`;
+    awaySeg.style.width = `${displayOdds.away}%`;
     awaySeg.style.background = teamOddsColor(away, match.sport);
-    homeSeg.style.width = `${match.oddsWinPctHome}%`;
+    homeSeg.style.width = `${displayOdds.home}%`;
     homeSeg.style.background = teamOddsColor(home, match.sport);
     drawSeg.hidden = !hasDraw;
     if (hasDraw) {
-      drawSeg.style.width = `${match.oddsWinPctDraw}%`;
-      drawSeg.querySelector('.match-odds-seg-label').textContent = `${Math.round(match.oddsWinPctDraw)}%`;
+      drawSeg.style.width = `${displayOdds.draw}%`;
+      drawSeg.querySelector('.match-odds-seg-label').textContent = `${Math.round(displayOdds.draw)}%`;
     }
-    oddsEl.setAttribute(
-      'aria-label',
-      hasDraw
-        ? t('winProbAriaWithDraw', {
-            away: away.name,
-            awayPct: Math.round(match.oddsWinPctAway),
-            drawPct: Math.round(match.oddsWinPctDraw),
-            home: home.name,
-            homePct: Math.round(match.oddsWinPctHome)
-          })
-        : t('winProbAria', {
-            away: away.name,
-            awayPct: Math.round(match.oddsWinPctAway),
-            home: home.name,
-            homePct: Math.round(match.oddsWinPctHome)
-          })
-    );
+    const sourceLabel = displayOdds.provider || t('oddsSourceSportsbook');
+    const sourceEl = oddsEl.querySelector('.match-odds-source');
+    sourceEl.textContent = sourceLabel;
+    sourceEl.dataset.source = displayOdds.source;
+    const ariaLabel = hasDraw
+      ? t('winProbAriaWithDraw', {
+          away: away.name,
+          awayPct: Math.round(displayOdds.away),
+          drawPct: Math.round(displayOdds.draw),
+          home: home.name,
+          homePct: Math.round(displayOdds.home)
+        })
+      : t('winProbAria', {
+          away: away.name,
+          awayPct: Math.round(displayOdds.away),
+          home: home.name,
+          homePct: Math.round(displayOdds.home)
+        });
+    oddsEl.setAttribute('aria-label', ariaLabel + t('oddsSourceAria', { source: sourceLabel }));
   } else {
     // Explicit reset, not just "leave it as the template default" - this
     // node may be a REUSED one (see this function's own top comment) that
@@ -3562,6 +3561,7 @@ function mergeFreshMatches(freshMatches, scheduleCoverage = null) {
       if (m.oddsWinPctAway == null && previous.oddsWinPctAway != null) m.oddsWinPctAway = previous.oddsWinPctAway;
       if (m.oddsWinPctHome == null && previous.oddsWinPctHome != null) m.oddsWinPctHome = previous.oddsWinPctHome;
       if (m.oddsWinPctDraw == null && previous.oddsWinPctDraw != null) m.oddsWinPctDraw = previous.oddsWinPctDraw;
+      if (m.oddsMarketLiquidity == null && previous.oddsMarketLiquidity != null) m.oddsMarketLiquidity = previous.oddsMarketLiquidity;
       if (!m.oddsFavorites && previous.oddsFavorites) m.oddsFavorites = previous.oddsFavorites;
       if (m.oddsSpread == null && previous.oddsSpread != null) m.oddsSpread = previous.oddsSpread;
       if (m.oddsOverUnder == null && previous.oddsOverUnder != null) m.oddsOverUnder = previous.oddsOverUnder;
@@ -4597,6 +4597,19 @@ async function pollLiveMatches() {
         if (Date.parse(match.startTimeUtc) > Date.now()) {
           if (update.oddsSpread != null) match.oddsSpread = update.oddsSpread;
           if (update.oddsOverUnder != null) match.oddsOverUnder = update.oddsOverUnder;
+          // The sportsbook fallback for the odds bar (see
+          // ./lib/sportsbook-odds.mjs) - same response, no extra request.
+          const book = update.bookOdds;
+          if (
+            book &&
+            (match.oddsBookWinPctAway !== book.away || match.oddsBookWinPctHome !== book.home || match.oddsBookWinPctDraw !== book.draw)
+          ) {
+            match.oddsBookWinPctAway = book.away;
+            match.oddsBookWinPctHome = book.home;
+            match.oddsBookWinPctDraw = book.draw;
+            match.oddsBookProvider = book.provider || null;
+            changed = true;
+          }
         }
         if (update.isFinished && !match.isFinished) {
           match.isFinished = true;
@@ -4680,6 +4693,11 @@ async function pollLiveMatches() {
           }
           if (match.oddsWinPctDraw !== result.draw) {
             match.oddsWinPctDraw = result.draw;
+            changed = true;
+          }
+          const liquidity = Number.isFinite(result.liquidity) ? result.liquidity : null;
+          if (match.oddsMarketLiquidity !== liquidity) {
+            match.oddsMarketLiquidity = liquidity;
             changed = true;
           }
         });

@@ -82,6 +82,8 @@ export default {
   commaSeparator: ', ',
   winProbAriaWithDraw: 'Win probability: {away} {awayPct}%, Draw {drawPct}%, {home} {homePct}%',
   winProbAria: 'Win probability: {away} {awayPct}%, {home} {homePct}%',
+  oddsSourceSportsbook: 'Sportsbook',
+  oddsSourceAria: ' ({source})',
   titleOdds: 'Title Odds',
   poleOdds: 'Pole Position Odds',
   playoffsLabel: 'Playoffs',

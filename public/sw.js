@@ -44,6 +44,7 @@ const SHELL_FILES = [
   './lib/recommendation.mjs',
   './lib/sport-duration.mjs',
   './lib/sport-signals.mjs',
+  './lib/sportsbook-odds.mjs',
   './lib/tap-log.mjs',
   './lib/team-names.mjs',
   './lib/locales/en.mjs',

@@ -862,9 +862,20 @@ main#app {
    shows one (see .match-odds-seg-draw[hidden] taking zero space). */
 .match-odds {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin: 10px 0 0;
+}
+/* Which feed the bar above is showing (Polymarket, or the ESPN sportsbook
+   fallback - see public/lib/sportsbook-odds.mjs) - its own full-width line
+   under the bar, kept faint so it never competes with the numbers. */
+.match-odds-source {
+  flex-basis: 100%;
+  margin-top: -3px;
+  text-align: center;
+  font-size: 0.62rem;
+  color: var(--text-faint);
 }
 /* Same cascade gap as .match-watch[hidden] below: an author `display: flex`
    rule has the same specificity as the UA stylesheet's `[hidden] {

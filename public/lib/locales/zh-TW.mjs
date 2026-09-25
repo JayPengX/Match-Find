@@ -82,6 +82,8 @@ export default {
   commaSeparator: '，',
   winProbAriaWithDraw: '獲勝機率：{away} {awayPct}%，和局 {drawPct}%，{home} {homePct}%',
   winProbAria: '獲勝機率：{away} {awayPct}%，{home} {homePct}%',
+  oddsSourceSportsbook: '博彩盤口',
+  oddsSourceAria: '（{source}）',
   titleOdds: '奪冠機率',
   poleOdds: '桿位機率',
   playoffsLabel: '季後賽',
