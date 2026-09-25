@@ -397,7 +397,7 @@ export function parseOddsSignal(competition) {
   };
 }
 
-async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds) {
+async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage) {
   // Queries `now`'s own UTC date AND the two days before it - not just
   // `now` onward. This script runs on a schedule/on push, at whatever UTC
   // instant that happens to be, and ESPN's own `dates=YYYYMMDD` scoreboard
@@ -440,8 +440,18 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
   // espnCoreOddsUrl) - backfilled with their pre-game line after the loop.
   const pregameBackfills = [];
   const seenIds = new Set();
-  for (const result of results) {
+  for (const [dateIndex, result] of results.entries()) {
     if (result.status !== 'fulfilled') continue;
+    // Only a response that really is a scoreboard counts as having covered
+    // this league/date - see scheduleKey below for what that's used for.
+    // Every event it lists is recorded BEFORE any of the filters below: a
+    // fixture this particular refresh skips (past a shorter refresh tier's
+    // window end, say) is still on ESPN's schedule, not removed from it.
+    const scheduleKey = `${league.id}:${dates[dateIndex]}`;
+    if (scheduleCoverage && Array.isArray(result.value?.events)) {
+      scheduleCoverage.keys.add(scheduleKey);
+      for (const event of result.value.events) scheduleCoverage.listedIds.add(`${league.id}-${event.id}`);
+    }
     for (const event of result.value.events || []) {
       if (seenIds.has(event.id)) continue; // a doubleheader's 2nd game can appear under both query dates near midnight UTC
       const competition = event.competitions?.[0];
@@ -492,11 +502,13 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       const broadcast = (competition.broadcasts || [])
         .flatMap(b => b.names || [])
         .slice(0, 1)[0];
-      // ESPN's season.type is 2 for the regular season and 3 for the
-      // postseason (confirmed against the live API) - feeds the objective
-      // scoring engine's stakes calculation (see computeMatchObjectiveScore
-      // below).
-      const isPostseason = event.season?.type === 3;
+      // ESPN's season.type is 2 for the regular season, 3 for the
+      // postseason, and 5 for the NBA play-in (confirmed against the live
+      // API: 2025's "NBA Play-In - East - 9th Place vs 10th Place" was
+      // season.type=5) - an elimination game, so it counts as postseason
+      // too. Feeds the objective scoring engine's stakes calculation (see
+      // computeMatchObjectiveScore below).
+      const isPostseason = event.season?.type === 3 || event.season?.type === 5;
       const oddsSignal = parseOddsSignal(competition);
       const id = `${league.id}-${event.id}`;
       const pregameEstimateMinutes = computeDurationMinutes(
@@ -531,6 +543,14 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         // only a placeholder and the client (public/app.js) knows not to
         // schedule or display this fixture by clock time at all.
         timeTbd,
+        // Which league/ESPN-date query this fixture came from. ESPN deletes
+        // a postseason "If Necessary" game outright once its series ends
+        // early (confirmed live: 2025 NLWC Game 3, Reds @ Dodgers, simply
+        // vanished from the 2025-10-02 scoreboard) rather than marking it
+        // canceled - public/app.js's mergeFreshMatches uses this key plus
+        // buildMatches's scheduleCoverage to drop a fixture a fresh,
+        // successful query of that same date no longer lists.
+        scheduleKey,
         // isFinished is authoritative (ESPN's own status), unlike "is this
         // live right now" which the client derives itself from the current
         // time against startTimeUtc/durationMinutes.
@@ -993,6 +1013,27 @@ export async function enrichWithPolymarketOdds(matches, fetchJson) {
   }
 }
 
+// True when a not-yet-finished fixture has been taken off ESPN's schedule.
+// ESPN deletes an unneeded postseason "If Necessary" game outright once its
+// series ends early instead of marking it canceled, so without this it
+// lingered on an open page (public/app.js's mergeFreshMatches otherwise
+// only ever upserts) - and once its start time passed, read as LIVE
+// forever, since it never gets a final status. Only true when the build
+// behind `scheduleCoverage` successfully re-fetched the exact league/ESPN
+// date the fixture came from (see fetchTeamLeagueMatches's scheduleKey)
+// and that response no longer lists it, so a failed fetch, a disabled
+// sport, or a shorter refresh tier that never looked at that date drops
+// nothing. `scheduleCoverage` is {keys: Set, listedIds: Set}.
+export function isDroppedFromSchedule(match, scheduleCoverage) {
+  return Boolean(
+    scheduleCoverage &&
+      !match.isFinished &&
+      match.scheduleKey &&
+      scheduleCoverage.keys.has(match.scheduleKey) &&
+      !scheduleCoverage.listedIds.has(match.id)
+  );
+}
+
 // The one exported entry point - fetches every fixture in [now, now +
 // daysAhead days], enriches it with Polymarket odds and the
 // MLB-standings/F1-title-race signals, scores it, and returns the flat
@@ -1057,6 +1098,10 @@ export async function buildMatches({
   // tier - fetching (and, via hasActiveX below, standings-fetching and
   // Polymarket-odds-enriching) fixtures for a league nothing on screen
   // will ever show.
+  // Every league/ESPN-date scoreboard query that came back successfully,
+  // and every fixture id those responses listed - see
+  // fetchTeamLeagueMatches's scheduleKey comment.
+  const scheduleCoverage = { keys: new Set(), listedIds: new Set() };
   const leagues = enabledSports ? TEAM_LEAGUES.filter(league => enabledSports.has(league.label)) : TEAM_LEAGUES;
   const shouldFetchF1 = !enabledSports || enabledSports.has('F1');
 
@@ -1073,7 +1118,7 @@ export async function buildMatches({
   const [teamMatchLists, f1Matches] = await Promise.all([
     Promise.all(
       leagues.map(league =>
-        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds).catch(error => {
+        fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetchJson, needsPregameOdds, scheduleCoverage).catch(error => {
           console.warn(`Failed to fetch ${league.label}: ${error.message}`);
           return [];
         })
@@ -1207,5 +1252,10 @@ export async function buildMatches({
 
   matches.sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
 
-  return { generatedAt: now.toISOString(), daysAhead, matches };
+  return {
+    generatedAt: now.toISOString(),
+    daysAhead,
+    matches,
+    scheduleCoverage: { keys: [...scheduleCoverage.keys], listedIds: [...scheduleCoverage.listedIds] }
+  };
 }

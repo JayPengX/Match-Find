@@ -21,6 +21,7 @@ import {
   enrichWithPolymarketOdds,
   PREGAME_SCORING_FIELDS,
   buildMatches,
+  isDroppedFromSchedule,
 } from '../public/lib/match-builder.mjs';
 import { POLYMARKET_MIN_LIQUIDITY_FOR_SCORING } from '../public/lib/polymarket.mjs';
 
@@ -663,5 +664,68 @@ describe('buildMatches end to end', () => {
     assert.equal(finished.actualEndUtc, '2026-09-25T01:59:00.000Z');
     assert.equal(finished.durationMinutes, 174);
     assert.ok(Number.isFinite(matches.find(m => m.id === 'mlb-2')?.score));
+  });
+
+  test('records which ESPN dates it covered and tags postseason/play-in games', async () => {
+    const now = new Date('2026-10-01T03:00:00Z');
+    const event = (id, date, seasonType) => ({
+      id,
+      date,
+      season: { type: seasonType },
+      competitions: [
+        {
+          status: { type: { state: 'pre', shortDetail: '10/1 - 7:05 PM EDT' } },
+          competitors: [
+            { homeAway: 'away', team: { displayName: 'Tampa Bay Rays', abbreviation: 'TB' } },
+            { homeAway: 'home', team: { displayName: 'New York Yankees', abbreviation: 'NYY' } }
+          ]
+        }
+      ]
+    });
+    const fetchJson = async url => {
+      if (url.includes('dates=20261001')) {
+        // One in-window game, one playoff slot still waiting on a team
+        // (skipped from matches, but still on ESPN's schedule).
+        const tbd = event('9', '2026-10-01T23:05Z', 3);
+        tbd.competitions[0].competitors[0].team = { displayName: 'TBD', abbreviation: 'TBD' };
+        return { events: [event('1', '2026-10-01T23:05Z', 3), tbd] };
+      }
+      if (url.includes('dates=20261002')) return { events: [event('2', '2026-10-02T23:05Z', 5)] };
+      if (url.includes('dates=20261003')) throw new Error('network blip');
+      if (url.includes('/scoreboard')) return { events: [] };
+      return {};
+    };
+    const { matches, scheduleCoverage } = await buildMatches({ now, daysAhead: 2, fetchJson, enrichOdds: false, enabledSports: new Set(['MLB']) });
+    const playoff = matches.find(m => m.id === 'mlb-1');
+    const playIn = matches.find(m => m.id === 'mlb-2');
+    assert.equal(playoff.isPostseason, true);
+    assert.equal(playoff.scheduleKey, 'mlb:20261001');
+    assert.equal(playIn.isPostseason, true);
+    assert.ok(scheduleCoverage.keys.includes('mlb:20261001'));
+    assert.ok(!scheduleCoverage.keys.includes('mlb:20261003'), 'a failed fetch covers nothing');
+    assert.ok(scheduleCoverage.listedIds.includes('mlb-9'), 'listed even though it was skipped');
+  });
+});
+
+describe('isDroppedFromSchedule', () => {
+  const coverage = { keys: new Set(['mlb:20261001']), listedIds: new Set(['mlb-1']) };
+  const match = overrides => ({ id: 'mlb-3', scheduleKey: 'mlb:20261001', isFinished: false, ...overrides });
+
+  test('drops an unfinished game its own date no longer lists (an unneeded "If Necessary" game)', () => {
+    assert.equal(isDroppedFromSchedule(match(), coverage), true);
+  });
+
+  test('keeps a game its date still lists', () => {
+    assert.equal(isDroppedFromSchedule(match({ id: 'mlb-1' }), coverage), false);
+  });
+
+  test('keeps a game whose date this build never fetched successfully', () => {
+    assert.equal(isDroppedFromSchedule(match({ scheduleKey: 'mlb:20261003' }), coverage), false);
+  });
+
+  test('keeps finished games, games without a key, and everything when there is no coverage', () => {
+    assert.equal(isDroppedFromSchedule(match({ isFinished: true }), coverage), false);
+    assert.equal(isDroppedFromSchedule(match({ scheduleKey: undefined }), coverage), false);
+    assert.equal(isDroppedFromSchedule(match(), null), false);
   });
 });

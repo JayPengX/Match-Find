@@ -110,7 +110,7 @@ import {
 // for why this now runs live, in every viewer's own browser, instead of
 // once at build time.
 import { mlbStandingsUrl, nbaStandingsUrl, eplStandingsUrl, f1DriverStandingsUrl } from './lib/sport-signals.mjs';
-import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, PREGAME_SCORING_FIELDS, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
+import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, isDroppedFromSchedule, PREGAME_SCORING_FIELDS, DEFAULT_DAYS_AHEAD } from './lib/match-builder.mjs';
 // UI copy/locale layer - see that module's own top comment. Every piece of
 // genuine UI chrome (labels, hints, status text, aria-labels) goes through
 // t() rather than a hardcoded literal, so this file itself never has to
@@ -3418,9 +3418,16 @@ function isWithinRetentionWindow(match) {
   return daysFromToday(new Date(match.startTimeUtc)) >= -MATCH_RETENTION_PAST_DAYS;
 }
 
-function mergeFreshMatches(freshMatches) {
-  const byId = new Map(state.allRawMatches.map(m => [m.id, m]));
-  const byTbdKey = new Map(state.tbdMatches.map(m => [m.id, m]));
+// The one exception to "upsert only": a not-yet-finished fixture ESPN has
+// since taken off its schedule - see isDroppedFromSchedule's own comment.
+function mergeFreshMatches(freshMatches, scheduleCoverage = null) {
+  const coverage = scheduleCoverage && {
+    keys: new Set(scheduleCoverage.keys),
+    listedIds: new Set(scheduleCoverage.listedIds)
+  };
+  const stillScheduled = m => !isDroppedFromSchedule(m, coverage);
+  const byId = new Map(state.allRawMatches.filter(stillScheduled).map(m => [m.id, m]));
+  const byTbdKey = new Map(state.tbdMatches.filter(stillScheduled).map(m => [m.id, m]));
   freshMatches.forEach(m => {
     if (m.timeTbd) {
       byTbdKey.set(m.id, m);
@@ -3723,14 +3730,14 @@ function needsPregameOdds(id) {
 // tiers below (and the initial load, which is just the full-window tier's
 // own first run), so "how a fresh batch of matches turns into what's on
 // screen" only exists in one place.
-function applyFreshBuild(matches, generatedAt) {
+function applyFreshBuild(matches, generatedAt, scheduleCoverage = null) {
   tapLog(`[app] data ${generatedAt} (${matches?.length ?? 0} matches)`);
   // Both snapshot paints and every real refresh funnel through here (see
   // this function's own call sites), so the loading screen is lifted from
   // the paths below - immediately when there's nothing to show, or via
   // revealApp once the first real render's logos are in.
   const previousIds = new Set(state.allRawMatches.map(m => m.id));
-  const { rawMatches, tbdMatches } = mergeFreshMatches(matches);
+  const { rawMatches, tbdMatches } = mergeFreshMatches(matches, scheduleCoverage);
   // A genuine add/remove (a new fixture entering the window, a
   // postponement) invalidates last render's frozen stack membership (see
   // state.stackMembershipByDay's own comment) - but a routine refresh that
@@ -4008,7 +4015,7 @@ const FIRST_PAINT_ODDS_GRACE_MS = 1500;
 
 async function refreshNearTerm() {
   try {
-    const { matches, generatedAt } = await buildMatches({
+    const { matches, generatedAt, scheduleCoverage } = await buildMatches({
       daysAhead: NEAR_TERM_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
@@ -4022,7 +4029,7 @@ async function refreshNearTerm() {
     // comment on refreshFullWindow for why this only ever goes true on a
     // real resolve - same reasoning, one tier down.
     state.nearTermLoaded = true;
-    applyFreshBuild(matches, generatedAt);
+    applyFreshBuild(matches, generatedAt, scheduleCoverage);
     enrichOddsInBackground();
   } catch (error) {
     console.error('near-term refresh failed', error);
@@ -4253,7 +4260,7 @@ async function refreshFullWindow({ silent = false, statusEl, button, waitForOdds
     if (button) button.disabled = true;
   }
   try {
-    const { matches, generatedAt } = await buildMatches({
+    const { matches, generatedAt, scheduleCoverage } = await buildMatches({
       daysAhead: DEFAULT_DAYS_AHEAD,
       fetchJson: proxyFetchJson,
       enabledSports: state.enabledSports,
@@ -4279,7 +4286,7 @@ async function refreshFullWindow({ silent = false, statusEl, button, waitForOdds
     // real resolve, never optimistically before one. See isDayPending's
     // own comment for what this unlocks.
     state.fullWindowLoaded = true;
-    applyFreshBuild(matches, generatedAt);
+    applyFreshBuild(matches, generatedAt, scheduleCoverage);
     enrichOddsInBackground();
     if (!silent && statusEl) statusEl.textContent = t('dataUpdated');
     // Rides along with this same periodic data grab rather than keeping its
