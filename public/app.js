@@ -2171,9 +2171,13 @@ function updateMatchCard(node, match) {
   // number when the market itself hasn't weighed in. EPL's own market is a
   // real three-outcome one (away/draw/home) rather than MLB/NBA's two, so
   // this renders a middle draw segment whenever oddsWinPctDraw is real,
-  // and otherwise falls back to the plain two-segment bar.
+  // and otherwise falls back to the plain two-segment bar. Hidden once the
+  // game is over, too: Polymarket often takes a while to resolve the
+  // market, so its price right after the final whistle can still read as
+  // a stale mid-game probability rather than the actual result.
   const oddsEl = node.querySelector('.match-odds');
   if (
+    !match.isFinished &&
     match.competitors &&
     match.competitors.length === 2 &&
     Number.isFinite(match.oddsWinPctAway) &&
@@ -2227,9 +2231,10 @@ function updateMatchCard(node, match) {
   // whole grid, not a two-sided bar (see ./lib/polymarket.mjs and this
   // element's own CSS comment for why this needs an entirely different
   // shape) - just the top few favorites, each already a real devigged
-  // win% for that specific driver.
+  // win% for that specific driver. Same finished-game gate as the odds
+  // bar above - an unresolved market is no better than no odds at all.
   const outrightEl = node.querySelector('.match-odds-outright');
-  if (Array.isArray(match.oddsFavorites) && match.oddsFavorites.length) {
+  if (!match.isFinished && Array.isArray(match.oddsFavorites) && match.oddsFavorites.length) {
     outrightEl.hidden = false;
     const items = outrightEl.querySelectorAll('.match-odds-outright-item');
     items.forEach((item, i) => {
