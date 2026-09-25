@@ -228,6 +228,24 @@ describe('extractF1LiveUpdates', () => {
     assert.equal(update.leaderboard[0].name, 'G. Russell');
   });
 
+  for (const abbreviation of ['Race', 'SR']) {
+    test(`an ended ${abbreviation} counts as finished too, both while ESPN says "End of Session" and once it says Final`, () => {
+      for (const type of [
+        { name: 'STATUS_SESSION_COMPLETE', state: 'in', detail: 'End of Session', shortDetail: '' },
+        { name: 'STATUS_FINAL', state: 'post', detail: 'Final', shortDetail: 'Final' }
+      ]) {
+        const scoreboard = {
+          events: [{ id: '1', competitions: [{ type: { abbreviation }, status: { period: 57, type }, competitors: [{ order: 1, winner: true, athlete: { shortName: 'L. Norris' } }] }] }]
+        };
+        const update = extractF1LiveUpdates(scoreboard).get(`f1-1-${abbreviation.toLowerCase()}`);
+        assert.equal(update.isFinished, true, type.name);
+        assert.equal(update.isLive, false, type.name);
+        assert.equal(update.statusDetail, '', type.name);
+        assert.equal(update.leaderboard[0].name, 'L. Norris', type.name);
+      }
+    });
+  }
+
   test('a live race with only the generic "In Progress" status keeps its lap', () => {
     const scoreboard = {
       events: [
