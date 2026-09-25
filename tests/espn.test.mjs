@@ -202,6 +202,31 @@ describe('extractF1LiveUpdates', () => {
     assert.equal(update.leaderboard[0].name, 'G. Russell');
   });
 
+  test('an ended-but-still-"in" qualifying session is flagged sessionComplete, top 3 kept', () => {
+    // Live 2026 Azerbaijan GP response right after qualifying ended.
+    const scoreboard = {
+      events: [
+        {
+          id: '600057444',
+          competitions: [
+            {
+              type: { abbreviation: 'Qual' },
+              status: {
+                period: 26,
+                type: { name: 'STATUS_SESSION_COMPLETE', state: 'in', detail: 'End of Session', shortDetail: '' }
+              },
+              competitors: [{ order: 1, athlete: { shortName: 'G. Russell' } }]
+            }
+          ]
+        }
+      ]
+    };
+    const update = extractF1LiveUpdates(scoreboard).get('f1-600057444-qual');
+    assert.equal(update.sessionComplete, true);
+    assert.equal(update.statusDetail, '');
+    assert.equal(update.leaderboard[0].name, 'G. Russell');
+  });
+
   test('a live race with only the generic "In Progress" status keeps its lap', () => {
     const scoreboard = {
       events: [
@@ -237,6 +262,7 @@ describe('extractF1LiveUpdates', () => {
     };
     const update = extractF1LiveUpdates(scoreboard).get('f1-600057444-race');
     assert.equal(update.isLive, false);
+    assert.equal(update.statusDetail, '', 'a scheduled start time is not live status');
     assert.equal(update.lap, null);
     assert.equal(update.leaderboard, null);
   });

@@ -1440,11 +1440,13 @@ function f1LiveNode(match) {
   const live = match.live;
   if (!live) return null;
   const lapLabel = Number.isFinite(live.lap) ? t('lapLabel', { n: live.lap }) : '';
-  const text = [lapLabel, live.statusDetail].filter(Boolean).join('．');
+  const text = live.sessionComplete
+    ? t('sessionEnded')
+    : [lapLabel, live.statusDetail].filter(Boolean).join('．');
   if (!text) return null;
   const wrap = document.createElement('span');
   wrap.className = 'live-chip';
-  wrap.appendChild(f1FlagIcon(live.statusDetail));
+  wrap.appendChild(f1FlagIcon(live.sessionComplete ? 'checkered' : live.statusDetail));
   const textEl = document.createElement('span');
   textEl.className = 'live-chip-text';
   textEl.textContent = text;
@@ -4614,7 +4616,17 @@ async function pollLiveMatches() {
         extractF1LiveUpdates(scoreboard).forEach((update, id) => {
           const match = byId.get(id);
           if (!match || match.isFinished) return;
-          applyLiveDetail(match, { lap: update.lap, statusDetail: update.statusDetail, leaderboard: update.leaderboard });
+          // A 'pre' reading for a session this page already has live data
+          // for is a stale ESPN/CDN copy from before the start (seen live:
+          // it wiped qualifying's top 3 and put the start time in the
+          // status chip) - never let it overwrite newer live detail.
+          if (!update.isLive && !update.isFinished && match.live) return;
+          applyLiveDetail(match, {
+            lap: update.lap,
+            statusDetail: update.statusDetail,
+            sessionComplete: update.sessionComplete,
+            leaderboard: update.leaderboard
+          });
           if (update.isFinished && !match.isFinished) {
             match.isFinished = true;
             changed = true;

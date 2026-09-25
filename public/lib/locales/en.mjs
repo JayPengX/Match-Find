@@ -77,6 +77,7 @@ export default {
   secondHalf: '2nd Half',
   lapLabel: 'Lap {n}',
   currentOrder: 'Current Order',
+  sessionEnded: 'Session ended',
 
   homeShort: 'H',
   awayShort: 'A',

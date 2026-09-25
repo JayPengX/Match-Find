@@ -213,10 +213,18 @@ export function extractF1LiveUpdates(scoreboardJson) {
       // anything more specific) says nothing the card's own LIVE badge
       // doesn't already, and it's untranslated English - dropped, while
       // real detail like "Lap 23/53 - Safety Car" still comes through.
-      const detail = statusType.shortDetail || statusType.detail || '';
+      // Only a live session's detail means anything: a 'pre' one's is just
+      // its scheduled start ("9/25 - 8:00 AM EDT"). ESPN also keeps a
+      // just-finished session 'in' as STATUS_SESSION_COMPLETE ("End of
+      // Session") for a while - flagged separately so the card can show a
+      // localized "ended" + checkered flag instead of raw English.
+      const isLive = statusType.state === 'in';
+      const sessionComplete = statusType.name === 'STATUS_SESSION_COMPLETE';
+      const detail = isLive && !sessionComplete ? statusType.shortDetail || statusType.detail || '' : '';
       updates.set(`f1-${event.id}-${abbreviation.toLowerCase()}`, {
-        isLive: statusType.state === 'in',
+        isLive,
         isFinished: statusType.state === 'post',
+        sessionComplete,
         lap: Number.isFinite(lap) && lap > 0 ? lap : null,
         statusDetail: /^in progress$/i.test(detail.trim()) ? '' : detail,
         leaderboard: leaderboard.length ? leaderboard : null
