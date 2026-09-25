@@ -1,29 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7aa2ff"/>
-      <stop offset="1" stop-color="#4a6fe0"/>
-    </linearGradient>
-    <radialGradient id="hl" cx="0.28" cy="0.22" r="0.75">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="matchfind-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#047857"/></linearGradient>
+    <radialGradient id="matchfind-hl" cx="0.25" cy="0.18" r="0.8"><stop offset="0" stop-color="#fff" stop-opacity="0.32"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="matchfind-disc" cx="0.38" cy="0.32" r="0.75"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e9ecf5"/></radialGradient>
   </defs>
-  <rect width="180" height="180" rx="42" fill="url(#g)"/>
-  <rect width="180" height="180" rx="42" fill="url(#hl)"/>
-  <!-- A ball with an interior cross-seam pattern - reads as "sport" at any
-       size, unlike a plain checkmark which carries no sport meaning at all.
-       The seam curves stay well inside the ball's own r=40 boundary
-       (an earlier version traced arcs AT r=40, exactly retracing the ball's
-       own outline and reading as a doubled ring instead of a seam) so they
-       show up as pattern lines, not a second circle. Kept to bold, simple
-       shapes (no fine detail) so it still holds up at 16-32px. -->
-  <circle cx="90" cy="90" r="40" fill="#ffffff"/>
-  <path d="M90 52 V128" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
-  <path d="M60 60 Q90 90 60 120" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
-  <path d="M120 60 Q90 90 120 120" fill="none" stroke="#4a6fe0" stroke-width="6" stroke-linecap="round"/>
-  <!-- A short motion streak trailing the ball - suggests "in play", not a
-       static object sitting there. -->
-  <path d="M20 132 L44 122" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.55"/>
-  <path d="M14 116 L34 108" stroke="#ffffff" stroke-width="9" stroke-linecap="round" opacity="0.32"/>
+  <rect width="512" height="512" rx="116" fill="url(#matchfind-bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#matchfind-hl)"/>
+  <g transform="translate(256 256) scale(0.92) translate(-256 -256)">
+  <path d="M -222 0 A 222 150 0 0 1 222 0" transform="translate(256 256) rotate(-24)" fill="none" stroke="#fff" stroke-opacity="0.5" stroke-width="14"/>
+  <circle cx="256" cy="256" r="128" fill="url(#matchfind-disc)"/>
+  
+    <path d="M256 150 V362" stroke="#047857" stroke-width="22" stroke-linecap="round" fill="none"/>
+    <path d="M190 172 Q246 256 190 340" stroke="#047857" stroke-width="22" stroke-linecap="round" fill="none"/>
+    <path d="M322 172 Q266 256 322 340" stroke="#047857" stroke-width="22" stroke-linecap="round" fill="none"/>
+  <path d="M 222 0 A 222 150 0 0 1 -222 0" transform="translate(256 256) rotate(-24)" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="0" cy="0" r="26" fill="#fff" transform="translate(256 256) rotate(-24) translate(189 -78)"/>
+  </g>
 </svg>
