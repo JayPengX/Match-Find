@@ -2314,7 +2314,7 @@ infrastructure in the `JayPengX` GitHub account:
   Cloudflare Worker backend, including the `/sports-proxy` route this site
   depends on for all live data (see [The Shared Proxy
   Architecture](#the-shared-proxy-architecture)).
-- **[Orbit](https://github.com/JayPengX/Orbit)** and
+- **[Orbit Class](https://github.com/JayPengX/Orbit-Class)** and
   **[Orbit-Vocab](https://github.com/JayPengX/Orbit-Vocab)** —
   sibling sites that share the same Worker infrastructure (a different,
   Gemini-backed deployment of it), though not Match Find's own
