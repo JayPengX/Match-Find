@@ -19,7 +19,8 @@ import {
   freezeStartedMatchScoring,
   parsePregameCoreOdds,
   enrichWithPolymarketOdds,
-  PREGAME_SCORING_FIELDS
+  PREGAME_SCORING_FIELDS,
+  buildMatches,
 } from '../public/lib/match-builder.mjs';
 import { POLYMARKET_MIN_LIQUIDITY_FOR_SCORING } from '../public/lib/polymarket.mjs';
 
@@ -609,5 +610,58 @@ describe('freezeStartedMatchScoring with a backfilled pre-game line', () => {
     assert.equal(result.score, 7.5);
     assert.equal(result.oddsSpread, -1.5);
     assert.equal(result.durationMinutes, 180);
+  });
+});
+
+describe('buildMatches end to end', () => {
+  // A whole build against canned responses - one finished MLB game, one
+  // upcoming - so a wiring mistake in the pipeline itself (live case: an
+  // added step shifted the standings results by one slot and every build
+  // threw "undefined is not iterable") fails here, not in production.
+  test('builds, scores, and attaches a finished MLB game\'s real end time', async () => {
+    const now = new Date('2026-09-25T03:00:00Z');
+    const event = (id, date, state) => ({
+      id,
+      date,
+      season: { type: 2 },
+      competitions: [
+        {
+          status: { type: { state, shortDetail: state === 'post' ? 'Final' : '9/25 - 7:05 PM EDT' } },
+          venue: { fullName: 'Yankee Stadium' },
+          competitors: [
+            { homeAway: 'away', team: { displayName: 'Tampa Bay Rays', abbreviation: 'TB' } },
+            { homeAway: 'home', team: { displayName: 'New York Yankees', abbreviation: 'NYY' } }
+          ]
+        }
+      ]
+    });
+    const fetchJson = async url => {
+      if (url.includes('/baseball/mlb/scoreboard')) {
+        return { events: [event('1', '2026-09-24T23:05Z', 'post'), event('2', '2026-09-25T23:05Z', 'pre')] };
+      }
+      if (url.includes('statsapi.mlb.com/api/v1/schedule')) {
+        return {
+          dates: [
+            {
+              games: [
+                {
+                  gameDate: '2026-09-24T23:05:00Z',
+                  status: { abstractGameState: 'Final' },
+                  teams: { home: { team: { id: 147 } } },
+                  gameInfo: { firstPitch: '2026-09-24T23:08:00.000Z', gameDurationMinutes: 171, delayDurationMinutes: 0 }
+                }
+              ]
+            }
+          ]
+        };
+      }
+      return {};
+    };
+    const { matches } = await buildMatches({ now, daysAhead: 2, fetchJson, enrichOdds: false, enabledSports: new Set(['MLB']) });
+    const finished = matches.find(m => m.id === 'mlb-1');
+    assert.ok(finished?.isFinished);
+    assert.equal(finished.actualEndUtc, '2026-09-25T01:59:00.000Z');
+    assert.equal(finished.durationMinutes, 174);
+    assert.ok(Number.isFinite(matches.find(m => m.id === 'mlb-2')?.score));
   });
 });

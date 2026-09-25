@@ -1109,7 +1109,7 @@ export async function buildMatches({
   // real scoring (recommendation.mjs), unlike odds.
   // Real end times of finished MLB games (see sport-signals.mjs's
   // applyMlbActualEnds) ride along with the same batch.
-  const [, [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity]] = await Promise.all([
+  const [, , [mlbStandings, nbaStandings, eplStandings, f1TitleRaceIntensity]] = await Promise.all([
     enrichOdds ? enrichWithPolymarketOdds(matches, fetchJson) : Promise.resolve(),
     applyMlbActualEnds(matches, fetchJson),
     Promise.all([
