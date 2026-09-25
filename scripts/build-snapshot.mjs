@@ -19,7 +19,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from '../public/lib/match-builder.mjs';
 
-const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/jaypengx-collab/Match-Find)';
+const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/JayPengX/Match-Find)';
 
 async function fetchJson(url) {
   const response = await fetch(url, {

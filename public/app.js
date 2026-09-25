@@ -119,7 +119,7 @@ import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
 import { isPlayInRound, localizePlayoffRound, playoffSeriesState } from './lib/playoff.mjs';
 import { installTapLog, isTapLogOn, setTapLogHeader, tapLog } from './lib/tap-log.mjs';
 
-// jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
+// JayPengX/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
 // anything truly hidden anyway - see that repo's own sports-proxy-worker.js
 // comment on /sports-proxy).
@@ -160,7 +160,7 @@ const PROXY_URL = 'https://sports-proxy.pengzjay.workers.dev';
 // uncached direct fetches (see that function) are NOT routed through this -
 // live score/odds polling needs a guaranteed fresh request every tick, not
 // a cached one; the shared Worker's own short-TTL edge cache (see
-// jaypengx-collab/shared-proxy's sports-proxy-worker.js) is what keeps THAT tier's real
+// JayPengX/shared-proxy's sports-proxy-worker.js) is what keeps THAT tier's real
 // upstream cost down instead, across every viewer, not just this tab.
 const PROXY_FETCH_CACHE_TTL_MS = 45_000;
 const proxyFetchCache = new Map(); // url -> { data, expiresAt }
@@ -3691,7 +3691,7 @@ function loadMatchSnapshot() {
 // deploy's rendering code another deploy's data shape) and is recent
 // enough. Ignored entirely in a local checkout (no real build id), so
 // local changes to the pipeline are never masked by the published data.
-const SERVER_SNAPSHOT_URL = 'https://raw.githubusercontent.com/jaypengx-collab/Match-Find/data/matches.json';
+const SERVER_SNAPSHOT_URL = 'https://raw.githubusercontent.com/JayPengX/Match-Find/data/matches.json';
 const SERVER_SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
 const SERVER_SNAPSHOT_TIMEOUT_MS = 6_000;
 const IS_DEPLOYED_BUILD = !APP_BUILD_ID.startsWith('__');

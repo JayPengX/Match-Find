@@ -323,7 +323,7 @@ reasons - see "Round 3" immediately below for which of these have since
 been done:
 
 - **A structured evidence layer for online/public context** (Phase 4) -
-  requires changing the shared proxy's (`jaypengx-collab/shared-proxy`)
+  requires changing the shared proxy's (`JayPengX/shared-proxy`)
   Gemini prompt/response schema, a different repo, and is a materially
   larger change than a scheduling fix. **Done - see Round 3.**
 - **A full score-architecture rename** - surveyed properly in Round 3 (see
@@ -353,7 +353,7 @@ scheduler no longer needs it for correctness.
 
 ### 1. Structured evidence (Phase 4)
 
-The shared proxy's (`jaypengx-collab/shared-proxy`) `/match-recommend` used
+The shared proxy's (`JayPengX/shared-proxy`) `/match-recommend` used
 to fold ONE free-text "note" from its grounded Google-Search pass straight
 into the scoring prompt's `context` and then discard it - real, current
 information, but never durable, never structured, never shown to a viewer.
@@ -566,7 +566,7 @@ alongside the AI's one-sentence `reason`, but never actually told the
 model writing that sentence to USE it - a fixture with real, current
 evidence behind its score could still get a generic "雙方戰績接近" (the
 two teams are evenly matched) that said nothing case-specific. The
-shared proxy's (`jaypengx-collab/shared-proxy`) `buildMatchRecommendPrompt`/
+shared proxy's (`JayPengX/shared-proxy`) `buildMatchRecommendPrompt`/
 `buildMatchRefinePrompt` now explicitly instruct grounding `reason` in
 the `[Recent: ...]`/`[Odds: ...]` clause when one is present, falling
 back to general knowledge exactly as before when neither exists - a
@@ -858,7 +858,7 @@ configured - this is the PRIMARY score now, not a fallback.
 
 ### 2. Gemini's role: validation and refinement, not scoring
 
-The shared proxy's (`jaypengx-collab/shared-proxy`) `/match-recommend` and
+The shared proxy's (`JayPengX/shared-proxy`) `/match-recommend` and
 `/match-recommend-refine` used to score each fixture from scratch. They now
 receive each fixture's own already-computed `objective` score and its
 `factors`, and are asked ONLY for a small, bounded adjustment
@@ -1100,7 +1100,7 @@ time. `node --test` (279/279) and `node --check public/app.js` both still
 pass.
 
 **What this round did NOT find broken**: the live `/match-recommend`
-proxy (`jaypengx-collab/shared-proxy`) was hit directly during this
+proxy (`JayPengX/shared-proxy`) was hit directly during this
 investigation and returned a valid, fast, correctly-shaped response;
 the deployed `matches.json` carries real, current AI-validated reasons
 (not stale/fallback objective-only scores); and `scripts/
@@ -1199,7 +1199,7 @@ AI validation, checked the live `matches.json` directly: 0 of 135
 fixtures carry any grounded evidence at all, despite 115 of them
 otherwise going through successful AI validation. Root-caused via a
 purpose-built diagnostic added to the shared proxy
-(`jaypengx-collab/shared-proxy`'s `debugGrounding` request flag): every
+(`JayPengX/shared-proxy`'s `debugGrounding` request flag): every
 model in `MATCH_RECOMMEND_MODELS` returns an immediate `429
 RESOURCE_EXHAUSTED` for the grounded (Google Search tool) request
 specifically, while the exact same models succeed instantly for the
@@ -1366,7 +1366,7 @@ fetch goes through) and, for defense in depth, every fetch in
 `scripts/sport-signals.mjs` (MLB Stats API, Jolpica F1 - not currently
 affected, but free to fix preemptively) now sends an honest,
 self-identifying `User-Agent: Match-Find-Bot/1.0 (+https://github.com/
-jaypengx-collab/Match-Find)` - confirmed live to return a normal 200 with
+JayPengX/Match-Find)` - confirmed live to return a normal 200 with
 real fixture data. Verified end to end after the fix: a real run wrote
 **135 matches** with a real score spread (min 1, max 10, avg 7.24) and
 legible, factor-grounded reason text for every one, entirely without
@@ -2173,7 +2173,7 @@ present) and after (bug confirmed gone) the fix, as documented above.
   succeeded in production either, silently - `pollLiveMatches`'s own
   try/catch swallows a failed fetch with no visible symptom, since the
   card's initial (Node-fetched, build-time) numbers already looked
-  correct. Fixed in `jaypengx-collab/Shared-Proxy` by adding the same
+  correct. Fixed in `JayPengX/Shared-Proxy` by adding the same
   `Match-Find-Bot/1.0` UA to the Worker's own outbound fetch, deployed,
   and re-verified live (HTTP 403 → HTTP 200, real MLB scoreboard JSON back)
   before relying on it for this round's own architecture.
@@ -2200,7 +2200,7 @@ present) and after (bug confirmed gone) the fix, as documented above.
   recommendations" step entirely - the opt-in `debug_day_plan` manual dump
   now runs `node scripts/build-data.mjs` itself first (only when actually
   invoked) rather than relying on a build step that no longer exists.
-  `jaypengx-collab/Shared-Proxy`'s own `/match-dispatch` route, its
+  `JayPengX/Shared-Proxy`'s own `/match-dispatch` route, its
   `MATCH_FIND_DISPATCH_TOKEN` secret setup docs, and Match-Find's own
   README sections describing the old build/deploy/update-check cycle were
   all removed/rewritten to match, rather than left stale.
@@ -2320,7 +2320,7 @@ findings, not one:
   real upstream requests per 60s tick and the full-window tier
   (`daysAhead=14`) making 57 per 5min tick - roughly 1,080 + 684 = ~1,764
   requests/hour from these two tiers ALONE on a single open tab, before
-  live-poll's own load is even added - about 3x `jaypengx-collab/shared-
+  live-poll's own load is even added - about 3x `JayPengX/shared-
   proxy`'s own `SPORTS_PROXY_RATE_LIMIT` (600/hr per IP), with zero caching
   anywhere to absorb any of it. The single biggest source of waste: on
   every page load, `refreshNearTerm()` runs, then `refreshFullWindow()`
@@ -2336,7 +2336,7 @@ findings, not one:
     Deliberately NOT applied to `pollLiveMatches`'s own direct fetches -
     that tier needs a genuinely fresh request every 30s.
   - A shared edge cache (`SPORTS_PROXY_CACHE_TTL_SECONDS`, 20s, in
-    `jaypengx-collab/shared-proxy`'s `worker.js`) - caches every successful
+    `JayPengX/shared-proxy`'s `worker.js`) - caches every successful
     upstream response keyed by the upstream URL alone (never by viewer/IP),
     so concurrent viewers - and this tab's own live-poll tier, which the
     in-tab cache above doesn't touch - share one real upstream fetch. A
@@ -2800,7 +2800,7 @@ cycle"):
     standings/F1-title-race fetch even started - 4 serial round-trip
     stages where 2 would do, since within each pair neither result depends
     on the other. Merged each pair into one `Promise.all`.
-  - The Shared-Proxy Worker's own `/sports-proxy` route (jaypengx-collab/
+  - The Shared-Proxy Worker's own `/sports-proxy` route (JayPengX/
     shared-proxy) let a single cache-miss upstream request hang for up to
     15 seconds (`AbortSignal.timeout(15_000)`) before giving up - since
     every caller already treats a failed/slow sports-proxy request as "no
@@ -2883,7 +2883,7 @@ same as a first-ever visit, rather than risking an incompatible instant
 paint.
 
 **2. The user's own hypothesis was right, and was the dominant cause.**
-Re-read `jaypengx-collab/shared-proxy`'s `wrangler.toml` end to end rather
+Re-read `JayPengX/shared-proxy`'s `wrangler.toml` end to end rather
 than re-measuring `buildMatches` again (Round 25's own sandboxed
 measurements had already been unable to reproduce the reported magnitude,
 which in hindsight was itself a clue rather than a dead end - see below).
@@ -3641,7 +3641,7 @@ knowledge of the specific teams/players, which is what the original
 un-grounded validation call (Round 9's own finding) always succeeded at
 anyway, the grounding tool was the part that failed.
 
-**Shared-Proxy (`jaypengx-collab/shared-proxy`) changes** - new
+**Shared-Proxy (`JayPengX/shared-proxy`) changes** - new
 `POST /match-recommend` route in `worker.js`, reusing the existing
 `GEMINI_API_KEY` secret/`gemini-3.5-flash-lite` model/`buildGenerationConfig`/
 `isRateLimited`/`json` helpers `/gemini` and `/vocab-ai` already established
@@ -4251,7 +4251,7 @@ per this codebase's own "don't keep unused code around" convention:
 `saveGeminiTieBreakCache`/the whole Gemini cache section from `public/
 app.js` (`renderRecommendedSection` now calls `computeDayPlan` directly
 again); and the entire `/match-recommend` route (`handleMatchRecommendRequest`
-and its dozen `MATCH_RECOMMEND_*` constants) from `jaypengx-collab/
+and its dozen `MATCH_RECOMMEND_*` constants) from `JayPengX/
 shared-proxy`'s `worker.js`, along with `/match-recommend`'s entry in
 `GEMINI_BILLED_PATHS` and every stale doc cross-reference in both repos'
 README.md.

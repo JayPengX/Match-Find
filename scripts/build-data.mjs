@@ -29,7 +29,7 @@ import { buildMatches, DEFAULT_DAYS_AHEAD } from '../public/lib/match-builder.mj
 // a script polling a public, no-auth, no-rate-limit-documented endpoint
 // like this one) is both the more honest choice and the one confirmed
 // live to work, unlike pretending to be a browser this script isn't.
-const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/jaypengx-collab/Match-Find)';
+const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/JayPengX/Match-Find)';
 
 async function fetchJson(url) {
   const response = await fetch(url, {
