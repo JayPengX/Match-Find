@@ -43,6 +43,7 @@
 // and its ±2 clamp meant it could never fix what the formula got wrong).
 //
 import { parsePlayoffInfo } from './playoff.mjs';
+import { f1TopThree, isF1SessionOver } from './espn.mjs';
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // Confidence is computed from exactly the same source/refined fields this
 // module sets on each match below (see computeConfidence's own comment) -
@@ -466,8 +467,8 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       // page the moment its status changes (see isFinished below for how
       // the client renders each state).
       if (!['pre', 'in', 'post'].includes(statusType?.state)) continue;
-      const isLive = statusType.state === 'in';
-      const isFinished = statusType.state === 'post';
+      const isFinished = isF1SessionOver(statusType);
+      const isLive = statusType.state === 'in' && !isFinished;
       const timeTbd = isTimeTbd(statusType);
       const startMs = Date.parse(event.date);
       if (!Number.isFinite(startMs)) continue;
@@ -711,7 +712,10 @@ async function fetchF1Matches(now, windowEndMs, daysAhead, fetchJson) {
         venue,
         broadcast: broadcast || '',
         logo: F1_LOGO,
-        competitors: []
+        competitors: [],
+        // The finished session's final top 3 (see f1TopThree) - kept on the
+        // match itself so it survives reloads/snapshots, unlike match.live.
+        f1Result: isFinished ? f1TopThree(session) : null
       });
     }
   }

@@ -186,6 +186,32 @@ function f1DriverInterval(statistics) {
   return typeof stat?.displayValue === 'string' && stat.displayValue ? stat.displayValue : null;
 }
 
+// A session's top 3 by ESPN's own `order` (see the comment above) - shared
+// by the live poll here and match-builder.mjs's schedule, which keeps it on
+// a finished session as its final result.
+export function f1TopThree(session) {
+  const top = (session?.competitors || [])
+    .slice()
+    .sort((a, b) => (Number(a.order) || 999) - (Number(b.order) || 999))
+    .slice(0, 3)
+    .map(c => ({
+      name: c.athlete?.shortName || c.athlete?.fullName || '',
+      position: Number(c.order) || null,
+      flagUrl: c.athlete?.flag?.href || '',
+      flagAlt: c.athlete?.flag?.alt || '',
+      interval: f1DriverInterval(c.statistics)
+    }));
+  return top.length ? top : null;
+}
+
+// ESPN's scoreboard keeps a just-ended session at state 'in' with
+// STATUS_SESSION_COMPLETE ("End of Session") for a good while - live-
+// checked (2026 Azerbaijan GP qualifying) 30+ minutes after the core API
+// already called it Final. It's over, so it counts as finished.
+export function isF1SessionOver(statusType) {
+  return statusType?.state === 'post' || statusType?.name === 'STATUS_SESSION_COMPLETE';
+}
+
 export function extractF1LiveUpdates(scoreboardJson) {
   const updates = new Map();
   for (const event of scoreboardJson?.events || []) {
@@ -193,17 +219,7 @@ export function extractF1LiveUpdates(scoreboardJson) {
       const session = (event.competitions || []).find(c => c.type?.abbreviation === abbreviation);
       const statusType = session?.status?.type;
       if (!session || !statusType) continue;
-      const leaderboard = (session.competitors || [])
-        .slice()
-        .sort((a, b) => (Number(a.order) || 999) - (Number(b.order) || 999))
-        .slice(0, 3)
-        .map(c => ({
-          name: c.athlete?.shortName || c.athlete?.fullName || '',
-          position: Number(c.order) || null,
-          flagUrl: c.athlete?.flag?.href || '',
-          flagAlt: c.athlete?.flag?.alt || '',
-          interval: f1DriverInterval(c.statistics)
-        }));
+      const leaderboard = f1TopThree(session);
       // `period` is only a real race lap for the Race/Sprint. Qualifying
       // has no shared lap count - live-checked (2026 Azerbaijan GP) ESPN
       // still fills `period` there (26 mid-Q2, i.e. some driver's own lap
@@ -214,20 +230,17 @@ export function extractF1LiveUpdates(scoreboardJson) {
       // doesn't already, and it's untranslated English - dropped, while
       // real detail like "Lap 23/53 - Safety Car" still comes through.
       // Only a live session's detail means anything: a 'pre' one's is just
-      // its scheduled start ("9/25 - 8:00 AM EDT"). ESPN also keeps a
-      // just-finished session 'in' as STATUS_SESSION_COMPLETE ("End of
-      // Session") for a while - flagged separately so the card can show a
-      // localized "ended" + checkered flag instead of raw English.
-      const isLive = statusType.state === 'in';
-      const sessionComplete = statusType.name === 'STATUS_SESSION_COMPLETE';
-      const detail = isLive && !sessionComplete ? statusType.shortDetail || statusType.detail || '' : '';
+      // its scheduled start ("9/25 - 8:00 AM EDT"), a finished one's is
+      // "Final"/"End of Session".
+      const isFinished = isF1SessionOver(statusType);
+      const isLive = statusType.state === 'in' && !isFinished;
+      const detail = isLive ? statusType.shortDetail || statusType.detail || '' : '';
       updates.set(`f1-${event.id}-${abbreviation.toLowerCase()}`, {
         isLive,
-        isFinished: statusType.state === 'post',
-        sessionComplete,
+        isFinished,
         lap: Number.isFinite(lap) && lap > 0 ? lap : null,
         statusDetail: /^in progress$/i.test(detail.trim()) ? '' : detail,
-        leaderboard: leaderboard.length ? leaderboard : null
+        leaderboard
       });
     }
   }

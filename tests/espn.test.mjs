@@ -202,7 +202,7 @@ describe('extractF1LiveUpdates', () => {
     assert.equal(update.leaderboard[0].name, 'G. Russell');
   });
 
-  test('an ended-but-still-"in" qualifying session is flagged sessionComplete, top 3 kept', () => {
+  test('an ended-but-still-"in" qualifying session counts as finished, top 3 kept', () => {
     // Live 2026 Azerbaijan GP response right after qualifying ended.
     const scoreboard = {
       events: [
@@ -222,7 +222,8 @@ describe('extractF1LiveUpdates', () => {
       ]
     };
     const update = extractF1LiveUpdates(scoreboard).get('f1-600057444-qual');
-    assert.equal(update.sessionComplete, true);
+    assert.equal(update.isFinished, true);
+    assert.equal(update.isLive, false);
     assert.equal(update.statusDetail, '');
     assert.equal(update.leaderboard[0].name, 'G. Russell');
   });

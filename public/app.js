@@ -1440,13 +1440,11 @@ function f1LiveNode(match) {
   const live = match.live;
   if (!live) return null;
   const lapLabel = Number.isFinite(live.lap) ? t('lapLabel', { n: live.lap }) : '';
-  const text = live.sessionComplete
-    ? t('sessionEnded')
-    : [lapLabel, live.statusDetail].filter(Boolean).join('．');
+  const text = [lapLabel, live.statusDetail].filter(Boolean).join('．');
   if (!text) return null;
   const wrap = document.createElement('span');
   wrap.className = 'live-chip';
-  wrap.appendChild(f1FlagIcon(live.sessionComplete ? 'checkered' : live.statusDetail));
+  wrap.appendChild(f1FlagIcon(live.statusDetail));
   const textEl = document.createElement('span');
   textEl.className = 'live-chip-text';
   textEl.textContent = text;
@@ -1474,16 +1472,18 @@ function buildLiveStatusNode(match) {
 // line - the same reasoning as buildLiveStatusNode's own top comment.
 const LEADERBOARD_MEDAL_CLASS = ['is-gold', 'is-silver', 'is-bronze'];
 
-function f1LeaderboardNode(match) {
-  const live = match.live;
-  if (!live || !Array.isArray(live.leaderboard) || !live.leaderboard.length) return null;
+// `finished` shows the session's final top 3 (match.f1Result) instead of
+// the live running order.
+function f1LeaderboardNode(match, { finished = false } = {}) {
+  const drivers = finished ? match.f1Result || match.live?.leaderboard : match.live?.leaderboard;
+  if (!Array.isArray(drivers) || !drivers.length) return null;
   const wrap = document.createElement('span');
   wrap.className = 'live-leaderboard';
   const label = document.createElement('span');
   label.className = 'live-leaderboard-label';
-  label.textContent = t('currentOrder');
+  label.textContent = t(finished ? 'finalOrder' : 'currentOrder');
   wrap.appendChild(label);
-  live.leaderboard.forEach((driver, i) => {
+  drivers.forEach((driver, i) => {
     const chip = document.createElement('span');
     chip.className = `live-leaderboard-chip ${LEADERBOARD_MEDAL_CLASS[i] || ''}`.trim();
     const rank = document.createElement('i');
@@ -2392,13 +2392,15 @@ function updateMatchCard(node, match) {
     outrightEl.hidden = true; // see the odds bar's own reset comment just above
   }
 
-  // The race's own current running order (see f1LeaderboardNode above) -
-  // extra live context sitting right under the static outright odds above,
-  // only while the race is actually LIVE (a pre-race outright market has
-  // no "current leader" to show yet, and a finished one already has its
-  // own final result reflected in match.oddsFavorites/winner elsewhere).
+  // The session's own running order (see f1LeaderboardNode above) while
+  // it's LIVE, and its final top 3 once it's finished (a pre-session one
+  // has no order to show yet).
   const leaderboardEl = node.querySelector('.match-live-leaderboard');
-  const leaderboardNode = isCurrentlyLive ? f1LeaderboardNode(match) : null;
+  const leaderboardNode = match.isFinished
+    ? f1LeaderboardNode(match, { finished: true })
+    : isCurrentlyLive
+      ? f1LeaderboardNode(match)
+      : null;
   leaderboardEl.replaceChildren(...(leaderboardNode ? [leaderboardNode] : []));
   leaderboardEl.hidden = !leaderboardNode;
 
@@ -4621,14 +4623,10 @@ async function pollLiveMatches() {
           // it wiped qualifying's top 3 and put the start time in the
           // status chip) - never let it overwrite newer live detail.
           if (!update.isLive && !update.isFinished && match.live) return;
-          applyLiveDetail(match, {
-            lap: update.lap,
-            statusDetail: update.statusDetail,
-            sessionComplete: update.sessionComplete,
-            leaderboard: update.leaderboard
-          });
+          applyLiveDetail(match, { lap: update.lap, statusDetail: update.statusDetail, leaderboard: update.leaderboard });
           if (update.isFinished && !match.isFinished) {
             match.isFinished = true;
+            if (update.leaderboard) match.f1Result = update.leaderboard;
             changed = true;
           }
         });

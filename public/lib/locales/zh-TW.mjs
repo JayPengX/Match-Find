@@ -76,7 +76,7 @@ export default {
   secondHalf: '下半場',
   lapLabel: '第 {n} 圈',
   currentOrder: '目前領先',
-  sessionEnded: '本場已結束',
+  finalOrder: '最終排名',
 
   // ---- Match card ----
   homeShort: '主',
