@@ -638,8 +638,14 @@ export function estimateLiveDurationMinutes(sport, startTimeUtc, fallbackMinutes
 // throughout, same as before this function existed.
 function liveGameProgressFraction(sport, live) {
   if (sport === 'MLB') {
-    const inning = Number(live.period);
-    return Number.isFinite(inning) && inning > 0 ? Math.min(1, inning / 9) : null;
+    // ESPN's period is the inning IN PROGRESS, not innings completed.
+    // Reading it as completed made the estimate saw-tooth: it jumped DOWN
+    // the moment a new inning began (the top of the 8th counted as 8 of 9
+    // played) and then crept up with every poll until the next one - live
+    // 2026-09-25, Rays @ Yankees' shown end time climbing 10:10 -> 10:18
+    // over three minutes of the same half-inning. See mlbInningsPlayed.
+    const played = mlbInningsPlayed(live);
+    return played == null ? null : Math.min(1, played / 9);
   }
   if (sport === 'NBA') {
     const quarter = Number(live.period);
@@ -658,6 +664,19 @@ function liveGameProgressFraction(sport, live) {
     return minute == null ? null : Math.min(1, minute / 90);
   }
   return null;
+}
+
+// Innings actually played, from ESPN's in-progress inning (`period`) and
+// its half-inning ("Top 8th" / "Mid 8th" / "Bot 8th" / "End 8th", in
+// shortDetail - pollLiveMatches passes it through as `shortDetail`, a
+// stored `.live` has it as `detail`). Mid-half is the average position
+// within a half-inning; with no half-inning text, the middle of the inning.
+function mlbInningsPlayed(live) {
+  const inning = Number(live.period);
+  if (!Number.isFinite(inning) || inning <= 0) return null;
+  const half = /^\s*(top|mid|bot|end)/i.exec(live.shortDetail || live.detail || '')?.[1]?.toLowerCase();
+  const withinInning = { top: 0.25, mid: 0.5, bot: 0.75, end: 1 }[half] ?? 0.5;
+  return inning - 1 + withinInning;
 }
 
 function parseClockMinutesLeft(displayClock) {

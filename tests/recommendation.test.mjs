@@ -1223,6 +1223,19 @@ describe('estimateLiveDurationMinutes (real-time correction from ESPN live perio
     assert.ok(slow > fast);
   });
 
+  test('MLB: reads the half-inning, so the estimate does not jump down when a new inning starts', () => {
+    // Live 2026-09-25, Rays @ Yankees: 150 minutes in, top of the 8th - about
+    // 7.25 innings played, not 8, so a ~186-minute pace, not ~169.
+    const at = startMs + 150 * 60_000;
+    const top8 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 8, shortDetail: 'Top 8th' }, at);
+    assert.equal(top8, Math.round((150 / (7.25 / 9)) * 0.7 + 157 * 0.3));
+    // End of the 7th vs top of the 8th a moment later: nearly the same
+    // position, nearly the same estimate (the old inning/9 reading jumped
+    // 7/9 -> 8/9 here).
+    const end7 = estimateLiveDurationMinutes('MLB', START, 157, { isLive: true, period: 7, shortDetail: 'End 7th' }, at);
+    assert.ok(Math.abs(end7 - top8) <= 5);
+  });
+
   test('never estimates less than the time that has already genuinely elapsed', () => {
     const result = estimateLiveDurationMinutes('MLB', START, 50, { isLive: true, period: 9 }, startMs + 300 * 60_000);
     assert.ok(result >= 300);

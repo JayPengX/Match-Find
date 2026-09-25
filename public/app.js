@@ -2048,7 +2048,13 @@ function updateMatchCard(node, match) {
   // live-reported as "MLB almost always runs past its shown end time",
   // which this app's own internal padding had already anticipated but
   // never actually showed on the card itself.
-  const end = start + (match.isFinished ? match.durationMinutes : estimatedDurationMinutes(match)) * 60_000;
+  //
+  // Once a live poll has corrected the duration from the game's real pace
+  // (match.live), that estimate is shown as is - padding it again for
+  // pre-game uncertainty double-counted it (a 183-minute live estimate
+  // showed as 10:33 instead of 10:08).
+  const end =
+    start + (match.isFinished || (match.live && isCurrentlyLive) ? match.durationMinutes : estimatedDurationMinutes(match)) * 60_000;
 
   if (match.timeTbd) {
     // startTimeUtc is only a placeholder for a TBD fixture (see
@@ -4527,7 +4533,11 @@ async function pollLiveMatches() {
         // this repo's own reported "MLB drops 30-60 minutes off its
         // estimate" bug this is meant to narrow.
         if (!update.isFinished) {
-          const liveDuration = estimateLiveDurationMinutes(match.sport, match.startTimeUtc, match.durationMinutes, update);
+          // Blended with the PRE-GAME estimate, not the last live value -
+          // blending with its own previous output compounded every 30s
+          // poll's drift into the next one.
+          const pregameMinutes = Number.isFinite(match.plannedDurationMinutes) ? match.plannedDurationMinutes : match.durationMinutes;
+          const liveDuration = estimateLiveDurationMinutes(match.sport, match.startTimeUtc, pregameMinutes, update);
           if (liveDuration !== match.durationMinutes) {
             match.durationMinutes = liveDuration;
             changed = true;
