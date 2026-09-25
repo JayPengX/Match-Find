@@ -293,11 +293,20 @@ main#app {
   padding-left: max(16px, calc((100% - 760px) / 2 + 16px));
   padding-right: max(16px, calc((100% - 760px) / 2 + 16px));
   border-bottom: 1px solid var(--border);
+  /* Its own compositing layer, so the date row's sideways scroller inside
+     it is drawn relative to the bar rather than the bouncing page - on iOS
+     WebKit that scroller (the only one here that actually overflows at
+     phone width; the sport row fits) went missing while the rest of the
+     fixed bar stayed. */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 .day-scroller {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  /* Sideways only - overflow-x alone makes the vertical axis scrollable too. */
+  overflow-y: hidden;
   padding: 4px 2px 10px;
   scrollbar-width: none;
 }

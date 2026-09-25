@@ -2682,8 +2682,18 @@ function renderDayScroller() {
   });
 
   dayScrollerEl.replaceChildren(...nodes);
+  // Centers the selected day by setting the row's own scrollLeft - not
+  // scrollIntoView, which is free to scroll every ancestor too, the page
+  // included. With the row inside the fixed .control-bar, iOS WebKit could
+  // act on that mid-bounce; reported as the date row (only - the sport row
+  // never calls this) disappearing once the bar was made fixed.
   const activePill = dayScrollerEl.querySelector('[aria-selected="true"]');
-  if (activePill) activePill.scrollIntoView({ inline: 'center', block: 'nearest' });
+  if (activePill) {
+    const rowBox = dayScrollerEl.getBoundingClientRect();
+    const pillBox = activePill.getBoundingClientRect();
+    dayScrollerEl.scrollLeft += pillBox.left + pillBox.width / 2 - (rowBox.left + rowBox.width / 2);
+  }
+  tapLog(`[app] day pills ${nodes.length} selected=${state.selectedDayKey} scrollLeft=${Math.round(dayScrollerEl.scrollLeft)} row=${Math.round(dayScrollerEl.getBoundingClientRect().height)}px`);
 }
 
 function renderFilters() {
