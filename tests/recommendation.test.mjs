@@ -608,30 +608,27 @@ describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () =>
     const plan = computeDayPlan('2026-09-19', [a, b, c]);
     assert.deepEqual(plan.map(m => m.id), ['b', 'c']);
     assert.equal(a.recommended, false);
-    // A is still visible to the viewer as a real alternative, never deleted
-    // (Invariant: a diversity/sequencing loss can't delete the event).
-    assert.ok(b.alternativeIds?.includes('a') || c.alternativeIds?.includes('a'));
+    // A clashes with BOTH picks, so swapping it in for either one breaks the
+    // B -> C chain - it isn't a swipe alternative to either (see
+    // computeDayPlan's alternativeIds comment). It's still a normal
+    // candidate in the full match list, never deleted.
+    assert.ok(!b.alternativeIds?.includes('a') && !c.alternativeIds?.includes('a'));
   });
 
-  test('b and c each expose the SAME slotKey - the whole 3-way cluster\'s, not just their own 2-member stack', () => {
-    // Reproduces the "some cards are unswipable" report: b and c both
-    // render as their own separate swipeable stack (each showing only 'a'
-    // as its alternative, per the test above), but a pin against either
-    // stack has to land somewhere computeDayPlan will actually look it up
-    // from on the next render - that's the full cluster's key, always
-    // slotKeyFromMembers([a, b, c]), never slotKeyFromMembers([b, a]) or
-    // slotKeyFromMembers([c, a]) (what app.js's old members-based key
-    // would have produced for each stack individually, and what silently
-    // dropped every pin against a cluster like this one before this fix).
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
-    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
-    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
-    computeDayPlan('2026-09-19', [a, b, c]);
-    const fullClusterKey = slotKeyFromMembers([a, b, c]);
-    assert.equal(b.slotKey, fullClusterKey);
-    assert.equal(c.slotKey, fullClusterKey);
-    assert.notEqual(fullClusterKey, slotKeyFromMembers([b, a]));
-    assert.notEqual(fullClusterKey, slotKeyFromMembers([c, a]));
+  test('a game that clashes with only ONE pick is that pick\'s alternative, however little it overlaps', () => {
+    // The real 9/26 Taiwan-time shape: Cubs @ Red Sox at 06:00 (doubleheader
+    // night game), Orioles @ Yankees at 07:05 - 62% overlap, under the old
+    // 75% threshold - and a 10:15 game both connect to. The viewer can only
+    // watch one of the first two, so Orioles is Cubs' alternative.
+    const cubs = makeMatch({ id: 'cubs', startTimeUtc: '2026-09-26T12:00:00.000Z', durationMinutes: 170, effectiveScore: 7.6 });
+    const orioles = makeMatch({ id: 'orioles', startTimeUtc: '2026-09-26T13:05:00.000Z', durationMinutes: 168, effectiveScore: 7.2 });
+    const late = makeMatch({ id: 'late', startTimeUtc: '2026-09-26T16:15:00.000Z', durationMinutes: 165, effectiveScore: 6.8 });
+    assert.ok(!isNearTotalOverlap(cubs, orioles));
+    const plan = computeDayPlan('2026-09-26', [cubs, orioles, late]);
+    assert.deepEqual(plan.map(m => m.id), ['cubs', 'late']);
+    assert.deepEqual(cubs.alternativeIds, ['orioles']);
+    assert.equal(cubs.slotKey, slotKeyFromMembers([cubs, orioles]));
+    assert.equal(late.alternativeIds, null);
   });
 
   test('a pin keyed by the full 3-way cluster reaches a member that only conflicts with the OTHER two individually', () => {
@@ -1051,12 +1048,13 @@ describe('a pinned choice only excludes matches it directly conflicts with', () 
     // an earlier version listed every OTHER member of the whole transitive
     // cluster here, so on a real MLB night a single stack could carry 10+
     // cards, most of which never conflicted with the one actually picked.
-    assert.deepEqual(a.alternativeIds, ['b']);
-    assert.deepEqual(c.alternativeIds, ['b']);
-    // slotKey stays the full cluster's own key regardless - see this
-    // function's own comment on why the pin LOOKUP key and the displayed
-    // alternatives are deliberately two different notions of "cluster".
-    assert.equal(a.slotKey, c.slotKey);
+    //
+    // b clashes with BOTH picks, so swapping it in for either one breaks
+    // the a/c pair - it's no longer either pick's alternative (app.js's
+    // planStackAlternativeIds still offers it as the pinned c's way back,
+    // as the displaced baseline pick).
+    assert.equal(a.alternativeIds, null);
+    assert.equal(c.alternativeIds, null);
   });
 });
 
@@ -1896,6 +1894,17 @@ describe('variety rotation: strongest contenders first, started picks fixed (the
       ]]
     ]);
     assert.deepEqual(winners(computeVarietyRotation(days)), { '2026-09-26': 'cubs', '2026-09-27': 'orioles' });
+  });
+
+  test('a rival close on only one day still rotates in when the run has no rival that recurs (Orioles moved into a 9/26 doubleheader)', () => {
+    // ESPN moved Orioles @ Yankees' 9/27 game to 9/26, so it's close to
+    // Cubs @ Red Sox on 9/26 only, and nothing else is within the gap on
+    // 9/27. With no recurring rival to protect, it's the run's only variety.
+    const days = new Map([
+      ['2026-09-26', [game('cubs', '2026-09-26', 7.6, 'Chicago Cubs', 'Boston Red Sox'), game('orioles', '2026-09-26', 7.2, 'Baltimore Orioles', 'New York Yankees')]],
+      ['2026-09-27', [game('cubs', '2026-09-27', 7.6, 'Chicago Cubs', 'Boston Red Sox'), game('raysPhi', '2026-09-27', 6.9, 'Tampa Bay Rays', 'Philadelphia Phillies')]]
+    ]);
+    assert.deepEqual(winners(computeVarietyRotation(days)), { '2026-09-26': 'orioles', '2026-09-27': 'cubs' });
   });
 });
 

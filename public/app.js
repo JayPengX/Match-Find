@@ -67,7 +67,6 @@ import {
   isUnderway,
   schedulingInterval,
   computeOverlapRange,
-  isNearTotalOverlap,
   applyLiveExcitementBonus,
   matchLifecycleState,
   LIFECYCLE_STATES,
@@ -2380,8 +2379,8 @@ function updateMatchCard(node, match) {
   // "you could be watching X instead" case. If no overlapping match is
   // actually recommended, this simply shows nothing, rather than a
   // meaningless overlap against a random card.
-  // Excludes any match that's a NEAR-TOTAL overlap of this one (see
-  // isNearTotalOverlap) - those are this match's own swipe-stack alternates
+  // Excludes this match's own swipe-stack mates (it's one of the earlier
+  // pick's alternativeIds - see computeDayPlan) - those are its alternates
   // (see buildMatchStack/computeDayPlan's alternativeIds), not a genuine
   // "you could be watching a different, earlier game instead" conflict.
   // Reported directly: this note was comparing a card against its OWN
@@ -2401,7 +2400,7 @@ function updateMatchCard(node, match) {
       m =>
         (match.overlappingIds || []).includes(m.id) &&
         Date.parse(m.startTimeUtc) < Date.parse(match.startTimeUtc) &&
-        !isNearTotalOverlap(match, m) &&
+        !(m.alternativeIds || []).includes(match.id) &&
         m.recommended
     )
     .sort((a, b) => Date.parse(b.startTimeUtc) - Date.parse(a.startTimeUtc));

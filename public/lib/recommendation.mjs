@@ -477,6 +477,15 @@ export function estimatedDurationMinutes(match) {
 // before the later one starts. A consistent pairwise definition, not
 // dependent on which match happens to be considered "first" or which
 // other matches are in play, unlike the old anchor-claiming grouping.
+// True when the two matches' scheduling intervals overlap at all - i.e. the
+// plan can't hold both. The one conflict test a swipe stack is built on (see
+// computeDayPlan's alternativeIds): no overlap-percentage threshold.
+export function schedulingClash(a, b) {
+  const ai = schedulingInterval(a);
+  const bi = schedulingInterval(b);
+  return ai.start < bi.end && bi.start < ai.end;
+}
+
 export function canWatchSequentially(a, b) {
   const aStart = Date.parse(a.startTimeUtc);
   const bStart = Date.parse(b.startTimeUtc);
@@ -1013,11 +1022,7 @@ export function computeDayPlan(
   const pinnedIds = new Set(forcedIds);
   if (lockedIds && lockedIds.size) {
     const pinnedMatches = candidates.filter(m => pinnedIds.has(m.id));
-    const clashes = (a, b) => {
-      const ai = schedulingInterval(a);
-      const bi = schedulingInterval(b);
-      return ai.start < bi.end && bi.start < ai.end;
-    };
+    const clashes = schedulingClash;
     candidates
       .filter(m => lockedIds.has(m.id))
       .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc))
@@ -1120,15 +1125,27 @@ export function computeDayPlan(
   // entirely, including the case where the pick only won because it's a
   // hard pin (see forcedIds above) against a much stronger natural
   // candidate.
+  //
+  // Which games count as a pick's alternatives is judged against the PLAN,
+  // not by comparing the two games' own overlap: a game is an alternative
+  // when it clashes with this pick (the plan can't hold both) and doesn't
+  // clash with any OTHER pick (swapping it in still connects with the rest
+  // of the day). This replaced a 75%-of-the-shorter-game overlap threshold
+  // (isNearTotalOverlap), which judged the pair in isolation - live case
+  // (2026-09-26 Taiwan time): the Red Sox doubleheader put Chicago Cubs @
+  // Boston Red Sox at 06:00, an hour before Baltimore Orioles @ New York
+  // Yankees (0.4 behind). Only 62% overlap, so Orioles wasn't an
+  // alternative, even though the viewer can only watch one of the two and
+  // either connects to the 10:15 game after. Conversely, a game that
+  // overlaps 75%+ but would ALSO clash with the next pick isn't a real
+  // swap - taking it breaks the day's chain.
+  const pickedMatches = picks.map(p => p.choice);
   picks.forEach(({ choice }) => {
-    const cluster = clusterByMatchId.get(choice.id);
-    if (!cluster || cluster.members.length < 2) return;
-    choice.slotKey = slotKeyFromMembers(cluster.members);
     // Excluding any live-pick stickiness (see applyLiveExcitementBonus) -
     // that's a "don't switch away mid-game" nudge, not a real quality gap.
     const gapScore = m => getScore(m) - (m.liveStickyBonus || 0);
     const pickedScore = gapScore(choice);
-    const alternatives = cluster.members.filter(
+    const alternatives = candidates.filter(
       m =>
         m.id !== choice.id &&
         !m.recommended &&
@@ -1138,10 +1155,15 @@ export function computeDayPlan(
         // unswipeable 已結束 card) blocked every live game it overlapped
         // out of the plan with no way to swipe back.
         (choice.isFinished || !m.isFinished) &&
-        isNearTotalOverlap(m, choice) &&
+        schedulingClash(m, choice) &&
+        !pickedMatches.some(other => other !== choice && schedulingClash(m, other)) &&
         pickedScore - gapScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
     );
-    if (alternatives.length) choice.alternativeIds = alternatives.map(m => m.id);
+    if (!alternatives.length) return;
+    choice.alternativeIds = alternatives.map(m => m.id);
+    // The stack's own members - what app.js's pinSlotChoice treats as "the
+    // same slot" when a swipe replaces an earlier pin in it.
+    choice.slotKey = slotKeyFromMembers([choice, ...alternatives]);
   });
 
   return picks.map(p => p.choice);
@@ -1581,9 +1603,18 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
         closeDaysByMember.get(key).add(dayKey);
       });
     });
-    [...poolKeys].forEach(key => {
-      if (key !== run.matchupKey && (closeDaysByMember.get(key)?.size ?? 0) < 2) poolKeys.delete(key);
-    });
+    //
+    // Only when the run HAS a recurring rival, though. With none, a one-day
+    // rival is the run's only variety and has no multi-day rival to bump -
+    // live case (2026-09-26/27 Taiwan time): ESPN moved Orioles @ Yankees'
+    // 9/27 game into a 9/26 doubleheader, so its only close day is 9/26,
+    // and dropping it left Cubs @ Red Sox winning both days.
+    const recurring = [...poolKeys].filter(key => key !== run.matchupKey && (closeDaysByMember.get(key)?.size ?? 0) >= 2);
+    if (recurring.length) {
+      [...poolKeys].forEach(key => {
+        if (key !== run.matchupKey && !recurring.includes(key)) poolKeys.delete(key);
+      });
+    }
     // Days already fixed by a started pick (see `lockedByDay` above): the
     // locked match is either the run's own game or one of its direct
     // conflicts - one in some unrelated slot that day doesn't touch this run.
@@ -1591,7 +1622,7 @@ export function computeVarietyRotation(matchesByDayKey, pinnedChoices = new Map(
     run.entries.forEach(({ dayKey, match }) => {
       const locks = lockedByDay.get(dayKey);
       if (!locks || !locks.size) return;
-      const locked = [...locks].map(id => byIdByDay.get(dayKey).get(id)).find(m => m && (m.id === match.id || isNearTotalOverlap(m, match)));
+      const locked = [...locks].map(id => byIdByDay.get(dayKey).get(id)).find(m => m && (m.id === match.id || schedulingClash(m, match)));
       if (!locked) return;
       const key = matchupKey(locked);
       poolKeys.add(key);

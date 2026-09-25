@@ -572,13 +572,17 @@ in `public/lib/recommendation.mjs`.
   threshold, and not "highest score wins its own little slot, everything
   else nearby is quality-gated or dropped" (both were tried in earlier
   versions and either hid good games or stopped producing an actual plan).
-- Two fixtures that overlap so much they genuinely can't be sequenced — the
-  overlap covers at least 75% of the *shorter* one's own length
-  (`NEAR_TOTAL_OVERLAP_FRACTION`, checked by `isNearTotalOverlap`) — render
-  as one swipeable card stack instead of two separate picks. Anything
-  overlapping less than that isn't forced into a choice; the scheduler
-  simply resolves it on its own. This grouping is a **presentation label
-  only**, computed *after* the plan is already decided — every individual
+- A pick's swipeable card stack holds every fixture that **clashes with
+  that pick** (the plan can't hold both) **but with no other pick** of the
+  day, so swapping it in still connects with the rest of the plan
+  (`computeDayPlan`'s `alternativeIds`, `schedulingClash`). It's judged
+  against the plan, not by how much the two games overlap each other. An
+  earlier version required the overlap to cover 75% of the shorter game
+  (`isNearTotalOverlap`), which hid a real either/or when a doubleheader
+  moved one game an hour earlier (9/26 Taiwan time: Cubs @ Red Sox 06:00
+  vs Orioles @ Yankees 07:05, 62% overlap). A game that clashes with two
+  picks isn't in either stack, since taking it would break the chain.
+  This grouping is a **presentation label only**, computed *after* the plan is already decided — every individual
   fixture is always a real candidate for the scheduler itself, never
   pre-collapsed to one representative per overlap group ahead of time (an
   earlier version did that and could silently lose the actually-best
@@ -852,7 +856,11 @@ unlike the earlier cross-day penalty, which only ever looked backward:
    (0.4 behind both days) on 9/26, so Orioles was only a same-slot
    alternative on 9/27. Judged by slot alone it looked like a one-off,
    and Cubs @ Red Sox won both days. A member still only gets a day where
-   it really is a same-slot alternative.
+   it really is a same-slot alternative. And when the run has no rival
+   that recurs across days at all, a one-day rival is kept: it's the
+   only variety the run has, with no multi-day rival for it to bump.
+   Live case: ESPN moved Orioles @ Yankees' 9/27 game into a 9/26
+   doubleheader, leaving it close on 9/26 only.
 4. If the (now-filtered) pool has more than one member, assign each day to
    a distinct pool member via a **maximum bipartite matching** (Kuhn's
    algorithm — days on one side, pool members on the other, an edge
@@ -1096,7 +1104,7 @@ judgment.
 ### The swipeable card stack
 
 A recommended fixture with a genuinely can't-watch-both alternative
-(overlap ≥ 75% of the shorter fixture's length, see [The Viewing Plan
+(clashes with it and with no other pick, see [The Viewing Plan
 Algorithm](#the-viewing-plan-algorithm)) renders as a **horizontally
 swipeable card stack** — only one card is on screen by default, the other
 a deliberate swipe away, with dots marking how many there are. Swiping is a
