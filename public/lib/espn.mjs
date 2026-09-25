@@ -20,6 +20,8 @@
 // signal the scoring engine (not this odds display) uses still come from
 // here, unaffected.
 
+import { parsePlayoffInfo } from './playoff.mjs';
+
 export function espnScoreboardUrl(sportKey, leagueKey, datesParam) {
   const base = `https://site.api.espn.com/apis/site/v2/sports/${sportKey}/${leagueKey}/scoreboard`;
   return datesParam ? `${base}?dates=${datesParam}` : base;
@@ -125,7 +127,11 @@ export function extractLiveUpdates(sport, scoreboardJson) {
       shortDetail: statusType.shortDetail || '',
       situation,
       oddsSpread: Number.isFinite(spread) ? spread : null,
-      oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null
+      oddsOverUnder: Number.isFinite(overUnder) ? overUnder : null,
+      // The series score moves the moment a playoff game ends - carried
+      // here so the card's series line updates with the final score
+      // instead of waiting for the next full rebuild.
+      playoff: event.season?.type === 3 || event.season?.type === 5 ? parsePlayoffInfo(competition) : null
     });
   }
   return updates;

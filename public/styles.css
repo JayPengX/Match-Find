@@ -11,6 +11,7 @@
   --good: #3ddc97;
   --good-soft: rgba(61, 220, 151, 0.14);
   --warn: #ffb84d;
+  --warn-text: #ffb84d;
   --radius: 20px;
   --radius-sm: 12px;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.45);
@@ -26,6 +27,8 @@
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f4f5f9;
+    /* --warn itself is too pale for text on white. */
+    --warn-text: #b86e00;
     --bg-elevated: #ffffff;
     --bg-raised: #ffffff;
     --border: #e6e8f0;
@@ -791,6 +794,19 @@ main#app {
 .recommended-tag.is-preferred {
   color: var(--accent);
   background: var(--accent-soft);
+}
+/* A postseason fixture's round + series score (see app.js's
+   renderPlayoffLine), with tonight's stakes - winner-take-all, or a team
+   facing elimination - picked out in the warning color. */
+.match-playoff {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.match-playoff[hidden] { display: none; }
+.playoff-stakes {
+  color: var(--warn-text);
 }
 .match-venue {
   margin: 4px 0 0;

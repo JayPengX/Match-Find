@@ -42,6 +42,7 @@
 // docs/recommendation-engine-audit.md's Round 11 (quota couldn't sustain it,
 // and its ±2 clamp meant it could never fix what the formula got wrong).
 //
+import { parsePlayoffInfo } from './playoff.mjs';
 import { teamNameZh, f1RaceNameZh } from './team-names.mjs';
 // Confidence is computed from exactly the same source/refined fields this
 // module sets on each match below (see computeConfidence's own comment) -
@@ -509,6 +510,7 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
       // too. Feeds the objective scoring engine's stakes calculation (see
       // computeMatchObjectiveScore below).
       const isPostseason = event.season?.type === 3 || event.season?.type === 5;
+      const playoff = isPostseason ? parsePlayoffInfo(competition) : null;
       const oddsSignal = parseOddsSignal(competition);
       const id = `${league.id}-${event.id}`;
       const pregameEstimateMinutes = computeDurationMinutes(
@@ -556,6 +558,9 @@ async function fetchTeamLeagueMatches(league, now, windowEndMs, daysAhead, fetch
         // time against startTimeUtc/durationMinutes.
         isFinished,
         isPostseason,
+        // Round/series context for the card (see ./playoff.mjs's
+        // parsePlayoffInfo) - null outside the postseason.
+        playoff,
         oddsSpread: oddsSignal.spread,
         oddsOverUnder: oddsSignal.overUnder,
         // Filled in afterward, once per build, by enrichWithPolymarketOdds

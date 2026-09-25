@@ -116,6 +116,7 @@ import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, isDr
 // t() rather than a hardcoded literal, so this file itself never has to
 // change again to add a third language, only ./lib/i18n.mjs does.
 import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
+import { isPlayInRound, localizePlayoffRound, playoffSeriesState } from './lib/playoff.mjs';
 import { installTapLog, isTapLogOn, setTapLogHeader, tapLog } from './lib/tap-log.mjs';
 
 // jaypengx-collab/shared-proxy's dedicated `sports-proxy` Worker - a plain,
@@ -1986,6 +1987,51 @@ function renderVenue(el, match) {
   el.textContent = match.venue || '';
 }
 
+// A postseason fixture's own context line - "季後賽 · 美聯分區系列賽 第4戰
+// · 系列賽 2-2 平手 · 決勝戰" - from match.playoff (see ./lib/playoff.mjs).
+// Series counts come straight from ESPN, which already folds a finished
+// game's own result in, so they always read as the series' CURRENT state;
+// the stakes tag (winner-take-all / facing elimination) is about tonight's
+// game, so playoffSeriesState only reports it before the game is over.
+function renderPlayoffLine(el, match) {
+  const playoff = match.isPostseason ? match.playoff : null;
+  el.hidden = !playoff;
+  if (!playoff) {
+    el.replaceChildren();
+    return;
+  }
+  const locale = getLocale();
+  const [away, home] = match.competitors || [];
+  const teamLabel = team => (locale === 'zh-TW' && team?.nameZh) || team?.abbreviation || team?.name || '';
+  const parts = [];
+  const round = localizePlayoffRound(playoff.round, locale);
+  // A play-in round's own name already says "play-in" - no separate prefix.
+  if (!isPlayInRound(playoff.round)) parts.push(t('playoffsLabel'));
+  if (round) parts.push(round);
+  const series = playoffSeriesState(playoff, match.isFinished);
+  // A 0-0 series (Game 1, not yet over) has no score worth showing.
+  if (series && series.leaderWins > 0) {
+    const score = `${series.leaderWins}-${series.trailerWins}`;
+    const leaderTeam = series.leader === 'away' ? away : home;
+    parts.push(
+      !series.leader
+        ? t('seriesTied', { score })
+        : t(series.decided ? 'seriesWon' : 'seriesLeads', { team: teamLabel(leaderTeam), score })
+    );
+  }
+  const nodes = parts.flatMap((text, i) => (i ? [' · ', text] : [text]));
+  if (series?.stakes) {
+    const stakesEl = document.createElement('strong');
+    stakesEl.className = 'playoff-stakes';
+    stakesEl.textContent =
+      series.stakes === 'decider'
+        ? t('playoffDecider')
+        : t('playoffElimination', { team: teamLabel(series.eliminationSide === 'away' ? away : home) });
+    nodes.push(' · ', stakesEl);
+  }
+  el.replaceChildren(...nodes);
+}
+
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -2270,6 +2316,7 @@ function updateMatchCard(node, match) {
   leaderboardEl.hidden = !leaderboardNode;
 
   renderVenue(node.querySelector('.match-venue'), match);
+  renderPlayoffLine(node.querySelector('.match-playoff'), match);
 
   const watchEl = node.querySelector('.match-watch');
   if (match.whereToWatchTw && match.whereToWatchTw !== '無已知台灣轉播') {
@@ -4516,6 +4563,12 @@ async function pollLiveMatches() {
             match.competitors[1].score = homeScore;
             changed = true;
           }
+        }
+        // The series score changes the instant a playoff game ends - see
+        // extractLiveUpdates's own playoff comment.
+        if (update.playoff && JSON.stringify(update.playoff) !== JSON.stringify(match.playoff)) {
+          match.playoff = update.playoff;
+          changed = true;
         }
         applyLiveDetail(match, {
           period: update.period,

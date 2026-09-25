@@ -38,6 +38,7 @@ const SHELL_FILES = [
   './lib/i18n.mjs',
   './lib/match-builder.mjs',
   './lib/objective-score.mjs',
+  './lib/playoff.mjs',
   './lib/polymarket.mjs',
   './lib/preferences.mjs',
   './lib/recommendation.mjs',
