@@ -121,10 +121,10 @@ function footballMatch(overrides = {}) {
 
 describe('computePlannerOracle', () => {
   test('a genuinely optimal plan (as computeDayPlan itself would produce) scores a 100% ratio', () => {
-    // Same "A alone (10) loses to B+C (9+9=18)" scenario as
+    // Same "A alone (9.5) loses to B+C (9+9=18)" scenario as
     // recommendation.test.mjs's Test 3 - let the real scheduler decide,
     // then verify the oracle agrees it was optimal.
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     computeDayPlan('2026-09-19', [a, b, c]);

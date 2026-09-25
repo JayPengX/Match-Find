@@ -330,14 +330,20 @@ playoff race with no fame signal at all — lost every single day from
 team, even to a merely-present Chicago Cubs game against a mediocre Miami
 Marlins side.
 
+The target is "the best game of the day — what TV thinks the most people
+will watch", so Fame carries 55% (raised from 40%, Quality lowered from
+30% to 15%): team quality mostly already shows up in fame and stakes, and
+at 30% it let two good-but-obscure teams outrank the game the networks
+actually put on air.
+
 `bestMatchScore` is now a weighted blend of four axes
 (`BEST_MATCH_WEIGHTS` in `public/lib/recommendation.mjs`), each still
 computed from real data — no vibes, no AI:
 
 | Axis | Weight | What it measures |
 |---|---|---|
-| `watchability` (**Fame**) | 0.4 | Is this a mainstream draw on name recognition alone — a historic rivalry, a big-market/marquee franchise, national broadcast placement? |
-| `skill` (**Quality**) | 0.3 | How *good* are the two teams actually, independent of tonight's pairing |
+| `watchability` (**Fame**) | 0.55 | Is this a mainstream draw on name recognition alone — a historic rivalry, a big-market/marquee franchise, national broadcast placement? |
+| `skill` (**Quality**) | 0.15 | How *good* are the two teams actually, independent of tonight's pairing |
 | `stakes` (**Stakes**) | 0.2 | How much does this game matter for the season/championship race right now |
 | `competitiveness` (**Closeness**) | 0.1 | How close is tonight's specific score expected to be |
 
@@ -572,6 +578,20 @@ in `public/lib/recommendation.mjs`.
   threshold, and not "highest score wins its own little slot, everything
   else nearby is quality-gated or dropped" (both were tried in earlier
   versions and either hid good games or stopped producing an actual plan).
+- **Best game of the day first.** When that highest-total chain would
+  trade the day's single best game for two lesser ones fitting either
+  side of it, the best game is forced in and the rest of the day planned
+  around it (`BEST_OF_DAY`). Only when it's clearly the best — more than
+  `VARIETY_CLOSE_CALL_GAP` (0.6) ahead of every game it would push out;
+  inside that gap the games count as equally good and the fuller day
+  wins. It's looked for around forced picks (pins, variety turns, F1), so
+  it never undoes a variety rotation.
+- **F1 always takes its slot** (`ALWAYS_PICK_SPORTS`), whatever else is on
+  and however the scores compare — before started-game locks and the
+  best-game rule. Whatever it overlaps (typically a Premier League match on
+  a European evening) stays in its swipe stack regardless of the score
+  gap, and F1 stays in that game's stack after a swipe, so it's always
+  swappable both ways. A viewer's pin beats it; quiet hours still apply.
 - A pick's swipeable card stack holds every fixture that **clashes with
   that pick** (the plan can't hold both) **but with no other pick** of the
   day, so swapping it in still connects with the rest of the plan

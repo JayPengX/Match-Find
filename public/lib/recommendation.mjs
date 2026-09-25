@@ -92,13 +92,13 @@ export function resolveService(whereToWatchTw) {
 // own undiluted +2 dwarfed the ~0.6-point gap the variety-rotation
 // mechanism needs to treat two matchups as real rivals. Replaced with one
 // clean, four-factor blend, no patch layer:
-//   - FAME (40%) - is this a mainstream draw on name recognition alone
+//   - FAME (55%) - is this a mainstream draw on name recognition alone
 //     (a historic rivalry, a big-market/marquee franchise, national
 //     broadcast placement)? See public/lib/objective-score.mjs's own
 //     `watchability` - now a clean, unblended read of exactly this,
 //     never mixed with skill/stakes/momentum and never gated by or capped
 //     against competitiveness.
-//   - QUALITY (30%) - how good are the two teams actually, independent of
+//   - QUALITY (15%) - how good are the two teams actually, independent of
 //     tonight's own pairing (`skill` - the better team's own win%, so a
 //     genuinely elite team gets credit even against a weak opponent).
 //   - STAKES (20%) - how much does this game matter for the season/
@@ -108,6 +108,12 @@ export function resolveService(whereToWatchTw) {
 //     be (`competitiveness`) - a real but minor factor: a coin-flip game
 //     earns a little extra credit, but isn't the deciding signal the way
 //     it used to be.
+// Re-weighted (FAME 40% -> 55%, QUALITY 30% -> 15%), direct instruction:
+// "the target is simple, best game of the day - what TV thinks the most
+// people watch". Fame is the TV-draw signal itself (rivalry, marquee
+// franchise, national broadcast); team quality mostly already shows up
+// there and in stakes, and at 30% it let two good-but-obscure teams
+// outrank the game the networks actually put on air.
 // `bestMatchScore` is a weighted blend of whichever of these four fields a
 // match actually has, renormalized over just the present ones so a sport
 // with no skill signal at all (F1 - see objective-score.mjs's own comment)
@@ -116,8 +122,8 @@ export function resolveService(whereToWatchTw) {
 // weightedAverage uses. Falls back to the build-time composite
 // `match.score` only when NONE of these dimensions are set at all.
 export const BEST_MATCH_WEIGHTS = {
-  watchability: 0.4, // FAME - mainstream/TV draw on name recognition alone
-  skill: 0.3, // QUALITY - how good the two teams actually are
+  watchability: 0.55, // FAME - mainstream/TV draw on name recognition alone
+  skill: 0.15, // QUALITY - how good the two teams actually are
   stakes: 0.2, // STAKES - how much this matters for the season/championship
   competitiveness: 0.1 // CLOSENESS - how close tonight's specific score is
 };
@@ -893,6 +899,28 @@ export function startedPlanLockIds(planIds, dayMatches, now = Date.now()) {
   );
 }
 
+// Sports whose sessions always take their slot in the day plan, whatever
+// else is on and however the scores compare - direct instruction: "F1
+// should always override whatever is there". Its scores can't be compared
+// with a team sport's anyway (no skill signal, every session of a weekend
+// scoring the same). Still never a trap: anything it overlaps (typically a
+// Premier League match on a European evening) stays in its swipe stack
+// regardless of ALTERNATIVE_MAX_SCORE_GAP, so a viewer can swipe to it and
+// back, and a viewer's own pin always beats it. Quiet hours still apply,
+// as for every other game.
+export const ALWAYS_PICK_SPORTS = new Set(['F1']);
+
+// BEST_OF_DAY: the plan's first goal is the day's single best game - "the
+// target is simple, best game of the day". Filling the rest of the day is
+// secondary, so the highest-total schedule is never allowed to drop that
+// game for two lesser ones that happen to fit either side of it (e.g. a
+// 7.6 at 07:00 losing to a 6.9 at 05:30 plus a 6.4 at 09:40). Variety is
+// unaffected: a rotation turn is a forced pick, and the best game is only
+// looked for among what doesn't clash with forced picks. Only when it's
+// clearly the best, though - more than VARIETY_CLOSE_CALL_GAP ahead of
+// every game it would push out. Games within that gap are "equally good"
+// (the same line the variety rotation draws), and then the fuller day wins.
+
 // `lockedIds` (optional Set<matchId>, see startedPlanLockIds) - earlier
 // plan picks that have already started. Each is forced into the plan the
 // same way a pin is (its direct conflicts excluded, the free candidates
@@ -911,6 +939,7 @@ export function computeDayPlan(
     match.alternativeIds = null;
     match.isPreferred = false;
     match.slotKey = null;
+    match.planAnchor = null;
   });
   const candidates = dayMatches.filter(m => !isQuietHours(m));
   if (!candidates.length) return [];
@@ -1020,43 +1049,84 @@ export function computeDayPlan(
   });
 
   const pinnedIds = new Set(forcedIds);
+  const forcedMatches = () => candidates.filter(m => forcedIds.has(m.id));
+  const clashesWithForced = match => forcedMatches().some(f => f.id !== match.id && schedulingClash(f, match));
+
+  // An ALWAYS_PICK_SPORTS session (F1) takes its slot whatever else is on,
+  // unless the viewer pinned something that clashes with it - see
+  // ALWAYS_PICK_SPORTS. Forced before locks: it outranks everything the
+  // system itself chose, and a lock that clashes with it (only possible if
+  // the session appeared after that game was already recommended) gives way.
+  const autoForcedIds = new Set();
+  candidates
+    .filter(m => ALWAYS_PICK_SPORTS.has(m.sport))
+    .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc))
+    .forEach(session => {
+      if (forcedIds.has(session.id) || excludedIds.has(session.id) || clashesWithForced(session)) return;
+      forceIntoPlan(session);
+      autoForcedIds.add(session.id);
+    });
+
   if (lockedIds && lockedIds.size) {
-    const pinnedMatches = candidates.filter(m => pinnedIds.has(m.id));
-    const clashes = schedulingClash;
     candidates
       .filter(m => lockedIds.has(m.id))
       .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc))
       .forEach(locked => {
         if (forcedIds.has(locked.id) || excludedIds.has(locked.id)) return;
-        if (pinnedMatches.some(p => clashes(p, locked))) return;
+        if (clashesWithForced(locked)) return;
         forceIntoPlan(locked);
       });
   }
 
   const toItem = match => ({ interval: schedulingInterval(match), choice: match });
-  const forced = candidates
-    .filter(m => forcedIds.has(m.id))
-    .map(toItem)
-    .sort((a, b) => a.interval.start - b.interval.start);
-  const free = candidates.filter(m => !forcedIds.has(m.id) && !excludedIds.has(m.id)).map(toItem);
-
   // Pinned picks split the day into independent gaps - the free candidates
   // in each gap get their own scheduling run, bounded so nothing scheduled
   // there can creep into a pinned pick's own fixed window.
-  const picks = [];
-  let cursor = -Infinity;
-  forced.forEach(f => {
-    picks.push(
-      ...weightedIntervalSchedule(
-        free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start),
-        getScore
-      )
-    );
-    picks.push(f);
-    cursor = f.interval.end;
-  });
-  picks.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor), getScore));
+  function schedule() {
+    const forced = candidates
+      .filter(m => forcedIds.has(m.id))
+      .map(toItem)
+      .sort((a, b) => a.interval.start - b.interval.start);
+    const free = candidates.filter(m => !forcedIds.has(m.id) && !excludedIds.has(m.id)).map(toItem);
+    const result = [];
+    let cursor = -Infinity;
+    forced.forEach(f => {
+      result.push(
+        ...weightedIntervalSchedule(
+          free.filter(r => r.interval.start >= cursor && r.interval.end <= f.interval.start),
+          getScore
+        )
+      );
+      result.push(f);
+      cursor = f.interval.end;
+    });
+    result.push(...weightedIntervalSchedule(free.filter(r => r.interval.start >= cursor), getScore));
+    return result;
+  }
 
+  let picks = schedule();
+  let bestOfDayId = null;
+
+  // Best game of the day - see BEST_OF_DAY's comment. The best game still
+  // watchable around what's forced is guaranteed a place: when the plain
+  // "highest total" schedule traded it for two lesser games either side of
+  // it, it's forced in and the rest of the day re-planned around it.
+  const watchable = candidates.filter(m => !forcedIds.has(m.id) && !excludedIds.has(m.id) && !clashesWithForced(m));
+  if (watchable.length) {
+    const bestScore = Math.max(...watchable.map(getScore));
+    const best = watchable
+      .filter(m => getScore(m) >= bestScore - 1e-9)
+      .sort((a, b) => Date.parse(a.startTimeUtc) - Date.parse(b.startTimeUtc));
+    const displaced = picks.filter(p => schedulingClash(p.choice, best[0]));
+    if (
+      !picks.some(p => best.includes(p.choice)) &&
+      displaced.every(p => bestScore - getScore(p.choice) > VARIETY_CLOSE_CALL_GAP + 1e-9)
+    ) {
+      forceIntoPlan(best[0]);
+      bestOfDayId = best[0].id;
+      picks = schedule();
+    }
+  }
   picks.sort((a, b) => a.interval.start - b.interval.start);
   picks.forEach(({ choice }) => {
     choice.recommended = true;
@@ -1068,6 +1138,9 @@ export function computeDayPlan(
     // the scheduler chose it on its own merits. A lock (see `lockedIds`)
     // is forced too, but it's the system's own earlier pick, so it isn't.
     choice.isPreferred = pinnedIds.has(choice.id);
+    // Why a system pick holds its slot regardless of the scheduler's total
+    // (read by explainWhyNotRecommended).
+    choice.planAnchor = autoForcedIds.has(choice.id) ? 'alwaysPickSport' : choice.id === bestOfDayId ? 'bestOfDay' : null;
   });
 
   // alternativeIds is purely presentational, computed AFTER scheduling:
@@ -1157,7 +1230,11 @@ export function computeDayPlan(
         (choice.isFinished || !m.isFinished) &&
         schedulingClash(m, choice) &&
         !pickedMatches.some(other => other !== choice && schedulingClash(m, other)) &&
-        pickedScore - gapScore(m) <= ALTERNATIVE_MAX_SCORE_GAP
+        // An F1 session and whatever it overlaps are always swappable both
+        // ways, however far apart their scores - see ALWAYS_PICK_SPORTS.
+        (ALWAYS_PICK_SPORTS.has(choice.sport) ||
+          ALWAYS_PICK_SPORTS.has(m.sport) ||
+          pickedScore - gapScore(m) <= ALTERNATIVE_MAX_SCORE_GAP)
     );
     if (!alternatives.length) return;
     choice.alternativeIds = alternatives.map(m => m.id);
@@ -1895,6 +1972,21 @@ export function explainWhyNotRecommended(candidateId, dayKey, dayMatches, pinned
   }
 
   const actualValue = actualPicks.reduce((sum, m) => sum + getScore(m), 0);
+
+  // Lost its slot to a pick that holds it by rule, not by score - an F1
+  // session (ALWAYS_PICK_SPORTS) or the day's best game (BEST_OF_DAY).
+  const anchoredRivals = actualPicks.filter(m => m.planAnchor && schedulingClash(m, actualMatch));
+  if (anchoredRivals.length) {
+    const reason = anchoredRivals.some(m => m.planAnchor === 'alwaysPickSport') ? 'lostToAlwaysPickSport' : 'lostToBestOfDay';
+    return {
+      reason,
+      detail:
+        reason === 'lostToAlwaysPickSport'
+          ? `It overlaps ${anchoredRivals.map(m => m.name || m.id).join(', ')}, which always takes its slot - swipe to pick this instead.`
+          : `It clashes with ${anchoredRivals.map(m => m.name || m.id).join(', ')}, the best game of the day, which the plan always keeps.`,
+      conflictsWith: anchoredRivals.map(m => m.id)
+    };
+  }
 
   // Force this exact candidate in via the same pinning mechanism a real
   // viewer swipe uses (see pinSlotChoice in app.js) - pinnedForDay is a

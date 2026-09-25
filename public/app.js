@@ -3243,7 +3243,12 @@ function logRenderedPlan(dayKey, ordered, rotationForced) {
   if (!isTapLogOn()) return;
   const pins = state.pinnedChoices.get(dayKey) || new Set();
   const plan = ordered
-    .map(m => logName(m) + (pins.has(m.id) ? '(pin)' : rotationForced?.has(m.id) ? '(rot)' : '') + (m.isFinished ? '(done)' : ''))
+    .map(
+      m =>
+        logName(m) +
+        (pins.has(m.id) ? '(pin)' : rotationForced?.has(m.id) ? '(rot)' : m.planAnchor === 'alwaysPickSport' ? '(f1)' : m.planAnchor === 'bestOfDay' ? '(best)' : '') +
+        (m.isFinished ? '(done)' : '')
+    )
     .join(', ');
   const stacks = [...recommendedListEl.querySelectorAll('.match-stack')].map(stack => {
     const names = [...stack.querySelectorAll('.match-stack-dot')].map(dot => dot.dataset.logName);

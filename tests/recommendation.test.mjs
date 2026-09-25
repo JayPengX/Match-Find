@@ -595,12 +595,69 @@ describe('Test 2 - three-event continuation', () => {
   });
 });
 
+describe('Best game of the day and F1 priority', () => {
+  test('a clearly-best game (more than VARIETY_CLOSE_CALL_GAP ahead) is never traded for two lesser games around it', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
+    assert.deepEqual(plan.map(m => m.id), ['a']);
+    assert.equal(a.planAnchor, 'bestOfDay');
+    assert.equal(a.isPreferred, false); // still the system's own pick
+    assert.equal(explainWhyNotRecommended('b', '2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' }).reason, 'lostToBestOfDay');
+  });
+
+  test('the best game is looked for around a forced pick, not through it', () => {
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
+    const plan = computeDayPlan('2026-09-19', [a, b, c], new Set(['b']), { scoreField: 'effectiveScore' });
+    assert.deepEqual(plan.map(m => m.id), ['b', 'c']);
+  });
+
+  test('an F1 session always takes its slot, and the higher-scoring game it overlaps stays swappable', () => {
+    const race = makeMatch({ id: 'race', sport: 'F1', startTimeUtc: '2026-09-19T13:00:00.000Z', durationMinutes: 92, effectiveScore: 4.6 });
+    const epl = footballMatch({ id: 'epl', startTimeUtc: '2026-09-19T14:00:00.000Z', effectiveScore: 8 });
+    const plan = computeDayPlan('2026-09-19', [race, epl], null, { scoreField: 'effectiveScore' });
+    assert.deepEqual(plan.map(m => m.id), ['race']);
+    assert.equal(race.planAnchor, 'alwaysPickSport');
+    assert.equal(race.isPreferred, false);
+    assert.deepEqual(race.alternativeIds, ['epl']);
+    assert.equal(explainWhyNotRecommended('epl', '2026-09-19', [race, epl], null, { scoreField: 'effectiveScore' }).reason, 'lostToAlwaysPickSport');
+  });
+
+  test('a lower-scoring game overlapping F1 is swappable too, past ALTERNATIVE_MAX_SCORE_GAP', () => {
+    const race = makeMatch({ id: 'race', sport: 'F1', startTimeUtc: '2026-09-19T13:00:00.000Z', durationMinutes: 92, effectiveScore: 8 });
+    const epl = footballMatch({ id: 'epl', startTimeUtc: '2026-09-19T14:00:00.000Z', effectiveScore: 8 - ALTERNATIVE_MAX_SCORE_GAP - 1 });
+    computeDayPlan('2026-09-19', [race, epl], null, { scoreField: 'effectiveScore' });
+    assert.deepEqual(race.alternativeIds, ['epl']);
+  });
+
+  test('a viewer pin beats F1, and F1 stays in the pinned game\'s stack to swipe back to', () => {
+    const race = makeMatch({ id: 'race', sport: 'F1', startTimeUtc: '2026-09-19T13:00:00.000Z', durationMinutes: 92, effectiveScore: 4.6 });
+    const epl = footballMatch({ id: 'epl', startTimeUtc: '2026-09-19T14:00:00.000Z', effectiveScore: 2 });
+    const plan = computeDayPlan('2026-09-19', [race, epl], new Set(['epl']), { scoreField: 'effectiveScore' });
+    assert.deepEqual(plan.map(m => m.id), ['epl']);
+    assert.equal(epl.isPreferred, true);
+    assert.deepEqual(epl.alternativeIds, ['race']);
+    const slotKey = slotKeyFromMembers([race, epl]);
+    assert.equal(naturalSlotChoice('2026-09-19', [race, epl], slotKey, new Set(['epl']), { scoreField: 'effectiveScore' }), 'race');
+  });
+
+  test('F1 in quiet hours is not forced', () => {
+    const race = makeMatch({ id: 'race', sport: 'F1', startTimeUtc: '2026-09-19T02:00:00.000Z', durationMinutes: 92, effectiveScore: 4.6 });
+    assert.deepEqual(computeDayPlan('2026-09-19', [race]).map(m => m.id), []);
+  });
+});
+
 describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () => {
   test('the scheduler compares "A alone" against "B then C", not just each match\'s own score', () => {
-    // A (score 10) overlaps both B and C individually, but B ends early
+    // A (score 9.5) overlaps both B and C individually, but B ends early
     // enough to let C follow it - see this file's own worked timing in the
-    // audit response. B + C (9 + 9 = 18) beats A alone (10).
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    // audit response. B + C (9 + 9 = 18) beats A alone (9.5): A is only
+    // 0.5 ahead, inside VARIETY_CLOSE_CALL_GAP, so it's not clearly the
+    // best game of the day (see BEST_OF_DAY - the next describe).
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     assert.ok(!canWatchSequentially(a, c)); // A genuinely blocks C
@@ -636,7 +693,7 @@ describe('Test 3 - a better SEQUENCE beats a single higher-scoring match', () =>
     // pin off the full cluster, swiping stack 'a' to reach 'c' correctly
     // forces c and excludes BOTH a and b (each of which does directly
     // near-total-overlap c, even though a and b don't overlap each other).
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const pinnedForDay = new Set(['a']);
@@ -971,7 +1028,7 @@ describe('Invariant checks', () => {
   test('Invariant 3: a valid continuation is never discarded merely because another match won an EARLIER conflict', () => {
     // Same setup as Test 3 - A "won" its own head-to-head against B on raw
     // score, but the scheduler still finds B->C over A alone.
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const plan = computeDayPlan('2026-09-19', [a, b, c]);
@@ -1078,8 +1135,8 @@ describe('§27 explainWhyNotRecommended', () => {
   });
 
   test('lostToBetterSequence: names the real conflicting winners and gives real, comparable values', () => {
-    // Same "A alone (10) loses to B+C (18)" scenario as Test 3.
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10, name: 'A' });
+    // Same "A alone (9.5) loses to B+C (18)" scenario as Test 3.
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5, name: 'A' });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9, name: 'B' });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9, name: 'C' });
     computeDayPlan('2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
@@ -1087,7 +1144,7 @@ describe('§27 explainWhyNotRecommended', () => {
     assert.equal(result.reason, 'lostToBetterSequence');
     assert.deepEqual(new Set(result.conflictsWith), new Set(['b', 'c']));
     assert.equal(result.actualValue, 18);
-    assert.equal(result.wouldBeValue, 10);
+    assert.equal(result.wouldBeValue, 9.5);
   });
 
   test('blockedByPin: a pin is genuinely what excluded a candidate that would otherwise have won', () => {
@@ -1119,7 +1176,7 @@ describe('§27 explainWhyNotRecommended', () => {
   });
 
   test('never mutates the caller\'s own match objects (clones internally)', () => {
-    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 10 });
+    const a = footballMatch({ id: 'a', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 150, effectiveScore: 9.5 });
     const b = footballMatch({ id: 'b', startTimeUtc: '2026-09-19T18:00:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     const c = footballMatch({ id: 'c', startTimeUtc: '2026-09-19T19:20:00.000Z', durationMinutes: 60, effectiveScore: 9 });
     computeDayPlan('2026-09-19', [a, b, c], null, { scoreField: 'effectiveScore' });
