@@ -7,7 +7,7 @@
 // extractF1LiveUpdates's own competitor/leaderboard shape).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractLiveUpdates, extractF1LiveUpdates, liveScoreboardUrls, sizedEspnLogoUrl } from '../public/lib/espn.mjs';
+import { extractLiveUpdates, extractF1LiveUpdates, liveScoreboardUrls, sizedEspnLogoUrl, darkEspnLogoUrl } from '../public/lib/espn.mjs';
 
 describe('liveScoreboardUrls', () => {
   test('builds TWO single-date requests, never one range request', () => {
@@ -276,5 +276,26 @@ describe('sizedEspnLogoUrl', () => {
     assert.equal(sizedEspnLogoUrl(''), '');
     assert.equal(sizedEspnLogoUrl(undefined), undefined);
     assert.equal(sizedEspnLogoUrl('not a url'), 'not a url');
+  });
+});
+
+describe('darkEspnLogoUrl', () => {
+  test('points a team crest at its 500-dark twin', () => {
+    assert.equal(
+      darkEspnLogoUrl('https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/nyy.png'),
+      'https://a.espncdn.com/i/teamlogos/mlb/500-dark/scoreboard/nyy.png'
+    );
+    assert.equal(
+      darkEspnLogoUrl('https://a.espncdn.com/combiner/i?img=/i/teamlogos/soccer/500/360.png&w=64&h=64'),
+      'https://a.espncdn.com/combiner/i?img=/i/teamlogos/soccer/500-dark/360.png&w=64&h=64'
+    );
+  });
+
+  test('leaves league logos, other hosts and empty values alone', () => {
+    const league = 'https://a.espncdn.com/i/leaguelogos/soccer/500/23.png';
+    assert.equal(darkEspnLogoUrl(league), league);
+    const other = 'https://example.com/i/teamlogos/mlb/500/nyy.png';
+    assert.equal(darkEspnLogoUrl(other), other);
+    assert.equal(darkEspnLogoUrl(''), '');
   });
 });

@@ -217,6 +217,16 @@ export function extractF1LiveUpdates(scoreboardJson) {
   return updates;
 }
 
+// ESPN keeps a dark-theme twin of every team crest under `500-dark/`
+// (white Yankees NY, white Tigers D, ...) - the navy/black originals vanish
+// into a dark card. Only team logos have one; anything else is returned
+// untouched. Some teams have no twin (404) - callers fall back to the
+// original (see app.js's updateTeamRow).
+export function darkEspnLogoUrl(url) {
+  if (!url) return url;
+  return url.replace(/(a\.espncdn\.com(?:\/combiner\/i\?img=)?\/i\/teamlogos\/[^/?&]+\/500)\//, '$1-dark/');
+}
+
 // ESPN serves every team/league logo as a 500px PNG (20-45KB each, live-
 // measured) while this page only ever draws them at 16-22px - so a first
 // visit spent most of its image bandwidth on pixels nobody sees, and the

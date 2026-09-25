@@ -96,7 +96,8 @@ import {
   extractLiveUpdates,
   f1LiveScoreboardUrl,
   extractF1LiveUpdates,
-  sizedEspnLogoUrl
+  sizedEspnLogoUrl,
+  darkEspnLogoUrl
 } from './lib/espn.mjs';
 import { pickDistinctTeamColors } from './lib/color.mjs';
 import { roundToHundred } from './lib/percent.mjs';
@@ -289,7 +290,7 @@ async function proxyFetchJson(url, { trim = null } = {}) {
 // megabyte of decoded pixels at most.
 const warmedLogos = new Map(); // downsized src -> decoded Image
 function warmLogo(logo) {
-  const src = sizedEspnLogoUrl(logo);
+  const src = teamLogoSrc(logo);
   if (!src || warmedLogos.has(src)) return;
   const img = new Image();
   img.referrerPolicy = 'no-referrer';
@@ -1917,6 +1918,27 @@ function createTeamRowNode() {
 // updateMatchCard's own teams-section comment) - so this never assumes it's
 // starting from the template's own blank defaults the way a fresh clone
 // would.
+// The page follows the system theme (styles.css has no toggle), and in the
+// dark one a team crest is drawn from ESPN's dark-theme twin (see
+// darkEspnLogoUrl) instead of sitting on a light backdrop.
+const lightSchemeQuery = window.matchMedia?.('(prefers-color-scheme: light)');
+function teamLogoSrc(logo) {
+  return sizedEspnLogoUrl(lightSchemeQuery?.matches ? logo : darkEspnLogoUrl(logo));
+}
+// A theme switch while the page is open swaps every crest already on screen.
+lightSchemeQuery?.addEventListener?.('change', () => {
+  document.querySelectorAll('.team-logo[data-logo]').forEach(img => {
+    const src = teamLogoSrc(img.dataset.logo);
+    if (img.dataset.wantSrc === src) return;
+    img.dataset.wantSrc = src;
+    delete img.dataset.loadFailed;
+    img.classList.remove('is-light-crest');
+    img.hidden = false;
+    showTeamLogoFallback(img.closest('.team-row') || img.parentNode, false);
+    img.src = src;
+  });
+});
+
 function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore }) {
   const img = node.querySelector('.team-logo');
   // Bound exactly ONCE per DOM node, ever - not per render - so reusing this
@@ -1928,6 +1950,13 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
   if (!img.dataset.errorBound) {
     img.dataset.errorBound = '1';
     img.addEventListener('error', () => {
+      // No dark twin for this team - the original crest is still better
+      // than initials.
+      if (img.dataset.lightSrc && img.getAttribute('src') !== img.dataset.lightSrc) {
+        img.classList.add('is-light-crest');
+        img.src = img.dataset.lightSrc;
+        return;
+      }
       img.dataset.loadFailed = '1';
       img.hidden = true;
       showTeamLogoFallback(node, true);
@@ -1940,13 +1969,19 @@ function updateTeamRow(node, { logo, name, nameZh, homeAway, score, showScore })
   node.querySelector('.team-logo-fallback').textContent = teamInitials(name);
   if (logo) {
     // Downsized - see sizedEspnLogoUrl's own comment.
-    const src = sizedEspnLogoUrl(logo);
+    const src = teamLogoSrc(logo);
     // Only touches `src` when the URL actually changed - this IS the fix
     // for the reported team-logo flash: an unconditional `img.src = logo`
     // every render (even to the exact same URL a reused node already has
     // loaded and painted) still restarts that image's decode, which
     // visibly blanks it for a frame on every routine background refresh.
-    if (img.getAttribute('src') !== src) {
+    // (Compared against the URL it asked for, not the current `src` - after
+    // a missing dark crest fell back to the original, the two differ.)
+    if (img.dataset.wantSrc !== src) {
+      img.dataset.wantSrc = src;
+      img.dataset.logo = logo;
+      img.dataset.lightSrc = sizedEspnLogoUrl(logo);
+      img.classList.remove('is-light-crest');
       img.src = src;
       // A new URL deserves a fresh chance - most relevant for a service
       // logo whose fallback state (see updateMatchCard's watch-badge

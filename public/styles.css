@@ -748,15 +748,12 @@ main#app {
 /* An F1 race row's logo is the event's own art, not a crest - initials of a
    race name would just be noise there. */
 .team-row.is-solo .team-logo-fallback { display: none; }
-/* Many crests are dark artwork (the Yankees' navy NY, the Tigers' D) that
-   disappears straight into the dark card - the same fixed light backdrop
-   the sport icons already get (see .sport-icon), dark theme only. */
+/* A dark-theme crest that fell back to ESPN's original (no dark twin, or it
+   failed to load - see updateTeamRow) keeps its navy/black artwork visible
+   with a faint light outline rather than a white disc. */
 @media not (prefers-color-scheme: light) {
-  .team-row:not(.is-solo) .team-logo {
-    box-sizing: border-box;
-    padding: 2px;
-    border-radius: 50%;
-    background: #f1f3f9;
+  .team-logo.is-light-crest {
+    filter: drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.9)) drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.35));
   }
 }
 .team-name-en,
