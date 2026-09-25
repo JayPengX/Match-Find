@@ -85,6 +85,7 @@ export default {
   titleOdds: 'Title Odds',
   poleOdds: 'Pole Position Odds',
   playoffsLabel: 'Playoffs',
+  playInLabel: 'Play-In',
   seriesTied: 'Series tied {score}',
   seriesLeads: '{team} leads series {score}',
   seriesWon: '{team} wins series {score}',

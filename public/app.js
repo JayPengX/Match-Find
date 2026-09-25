@@ -1987,49 +1987,64 @@ function renderVenue(el, match) {
   el.textContent = match.venue || '';
 }
 
-// A postseason fixture's own context line - "季後賽 · 美聯分區系列賽 第4戰
-// · 系列賽 2-2 平手 · 決勝戰" - from match.playoff (see ./lib/playoff.mjs).
-// Series counts come straight from ESPN, which already folds a finished
-// game's own result in, so they always read as the series' CURRENT state;
-// the stakes tag (winner-take-all / facing elimination) is about tonight's
-// game, so playoffSeriesState only reports it before the game is over.
-function renderPlayoffLine(el, match) {
+// A postseason fixture's own context (see ./lib/playoff.mjs): a gold
+// "季後賽"/"附加賽" tag in the card heading next to the sport badge, then a
+// line with the round, the series score, and tonight's stakes as a red pill
+// (winner-take-all, or which team faces elimination). Series counts come
+// straight from ESPN, which already folds a finished game's own result in,
+// so they always read as the series' CURRENT state; the stakes pill is
+// about tonight's game, so playoffSeriesState only reports it before the
+// game is over.
+function renderPlayoff(node, match) {
   const playoff = match.isPostseason ? match.playoff : null;
-  el.hidden = !playoff;
+  const tagEl = node.querySelector('.playoff-tag');
+  const lineEl = node.querySelector('.match-playoff');
+  tagEl.hidden = !playoff;
+  lineEl.hidden = !playoff;
   if (!playoff) {
-    el.replaceChildren();
+    lineEl.replaceChildren();
     return;
   }
+  tagEl.textContent = isPlayInRound(playoff.round) ? t('playInLabel') : t('playoffsLabel');
+
   const locale = getLocale();
   const [away, home] = match.competitors || [];
   const teamLabel = team => (locale === 'zh-TW' && team?.nameZh) || team?.abbreviation || team?.name || '';
+  const span = (className, text) => {
+    const el = document.createElement('span');
+    el.className = className;
+    el.textContent = text;
+    return el;
+  };
   const parts = [];
   const round = localizePlayoffRound(playoff.round, locale);
-  // A play-in round's own name already says "play-in" - no separate prefix.
-  if (!isPlayInRound(playoff.round)) parts.push(t('playoffsLabel'));
-  if (round) parts.push(round);
+  if (round) parts.push(span('playoff-round', round));
   const series = playoffSeriesState(playoff, match.isFinished);
   // A 0-0 series (Game 1, not yet over) has no score worth showing.
   if (series && series.leaderWins > 0) {
     const score = `${series.leaderWins}-${series.trailerWins}`;
     const leaderTeam = series.leader === 'away' ? away : home;
-    parts.push(
+    const seriesEl = span(
+      'playoff-series',
       !series.leader
         ? t('seriesTied', { score })
         : t(series.decided ? 'seriesWon' : 'seriesLeads', { team: teamLabel(leaderTeam), score })
     );
+    seriesEl.classList.toggle('is-decided', series.decided);
+    parts.push(seriesEl);
   }
-  const nodes = parts.flatMap((text, i) => (i ? [' · ', text] : [text]));
   if (series?.stakes) {
-    const stakesEl = document.createElement('strong');
-    stakesEl.className = 'playoff-stakes';
-    stakesEl.textContent =
-      series.stakes === 'decider'
-        ? t('playoffDecider')
-        : t('playoffElimination', { team: teamLabel(series.eliminationSide === 'away' ? away : home) });
-    nodes.push(' · ', stakesEl);
+    parts.push(
+      span(
+        'playoff-stakes',
+        series.stakes === 'decider'
+          ? t('playoffDecider')
+          : t('playoffElimination', { team: teamLabel(series.eliminationSide === 'away' ? away : home) })
+      )
+    );
   }
-  el.replaceChildren(...nodes);
+  lineEl.replaceChildren(...parts);
+  lineEl.hidden = !parts.length;
 }
 
 function cssVar(name) {
@@ -2316,7 +2331,7 @@ function updateMatchCard(node, match) {
   leaderboardEl.hidden = !leaderboardNode;
 
   renderVenue(node.querySelector('.match-venue'), match);
-  renderPlayoffLine(node.querySelector('.match-playoff'), match);
+  renderPlayoff(node, match);
 
   const watchEl = node.querySelector('.match-watch');
   if (match.whereToWatchTw && match.whereToWatchTw !== '無已知台灣轉播') {

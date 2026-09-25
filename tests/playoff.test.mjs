@@ -55,14 +55,15 @@ describe('localizePlayoffRound', () => {
       'West Semifinals - Game 1': '西區準決賽 第1戰',
       'East Finals - Game 1': '東區決賽 第1戰',
       'NBA Finals - Game 7': 'NBA 總冠軍賽 第7戰',
-      'NBA Play-In - East - 9th Place vs 10th Place': '東區附加賽 第9、10名之戰',
-      'NBA Play-In - West - 8th Seed Game': '西區附加賽 第8種子爭奪戰'
+      'NBA Play-In - East - 9th Place vs 10th Place': '東區 第9、10名之戰',
+      'NBA Play-In - West - 8th Seed Game': '西區 第8種子爭奪戰'
     };
     for (const [round, zh] of Object.entries(cases)) assert.equal(localizePlayoffRound(round, 'zh-TW'), zh, round);
   });
 
-  test('keeps ESPN text for English and for anything unrecognized', () => {
-    assert.equal(localizePlayoffRound('ALDS - Game 4', 'en'), 'ALDS - Game 4');
+  test('keeps ESPN wording for English and for anything unrecognized', () => {
+    assert.equal(localizePlayoffRound('ALDS - Game 4', 'en'), 'ALDS · Game 4');
+    assert.equal(localizePlayoffRound('NBA Play-In - West - 8th Seed Game', 'en'), 'West · 8th Seed Game');
     assert.equal(localizePlayoffRound('Some New Round - Game 2', 'zh-TW'), 'Some New Round - Game 2');
   });
 

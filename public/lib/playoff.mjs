@@ -66,15 +66,17 @@ function localizePlayInZh(round) {
   const places = detail.match(/^(\d+)(?:st|nd|rd|th) Place vs (\d+)(?:st|nd|rd|th) Place$/);
   const seed = detail.match(/^(\d+)(?:st|nd|rd|th) Seed Game$/);
   const detailZh = places ? `第${places[1]}、${places[2]}名之戰` : seed ? `第${seed[1]}種子爭奪戰` : '';
-  return [`${conferenceZh}附加賽`, detailZh].filter(Boolean).join(' ');
+  return [conferenceZh, detailZh].filter(Boolean).join(' ') || '附加賽';
 }
 
 // The round headline in the viewer's language - zh-TW translates every
 // known ESPN round name (anything unrecognized falls back to ESPN's own
-// English text rather than guessing); en keeps ESPN's text as-is.
+// English text rather than guessing); en keeps ESPN's wording with its
+// " - " separators as " · ". A play-in round drops its own "play-in"
+// wording either way - the card's heading tag already says it.
 export function localizePlayoffRound(round, locale) {
   if (!round) return '';
-  if (locale !== 'zh-TW') return round;
+  if (locale !== 'zh-TW') return round.replace(/^NBA Play-In\s+-\s+/i, '').replace(/\s+-\s+/g, ' · ');
   if (isPlayInRound(round)) return localizePlayInZh(round);
   const parts = round.match(/^(.*?)(?:\s+-\s+Game\s+(\d+))?(\s+If Necessary)?$/i);
   const name = parts?.[1]?.trim() || '';

@@ -85,6 +85,7 @@ export default {
   titleOdds: '奪冠機率',
   poleOdds: '桿位機率',
   playoffsLabel: '季後賽',
+  playInLabel: '附加賽',
   seriesTied: '系列賽 {score} 平手',
   seriesLeads: '{team} 系列賽 {score} 領先',
   seriesWon: '{team} 系列賽 {score} 勝出',
