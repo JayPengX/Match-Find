@@ -2,7 +2,7 @@
 
 **Tell you what's actually worth watching today — Premier League, MLB, NBA, and F1 — in your own local time, scored by real data, not guesswork.**
 
-**Live site: [https://jaypengx-collab.github.io/Match-Find/](https://jaypengx-collab.github.io/Match-Find/)**
+**Live site: [https://jaypengx.github.io/Match-Find/](https://jaypengx.github.io/Match-Find/)**
 
 ---
 
@@ -1677,7 +1677,7 @@ times the shared proxy's own per-IP rate limit on a single open tab alone:
   a fresh request every tick since live score/odds data can't tolerate a
   45s-old cache.
 - **Shared edge cache** (`cachePolicyFor` in
-  `jaypengx-collab/shared-proxy`'s `sports-proxy-worker.js`) —
+  `JayPengX/shared-proxy`'s `sports-proxy-worker.js`) —
   `/sports-proxy` itself caches every successful upstream response, keyed
   by the upstream URL: 20s for scoreboards within a day of today and for
   Polymarket odds (never served once expired, so the 30s live poll always
@@ -1831,7 +1831,7 @@ climbs.
 
 `public/app.js`'s own `PROXY_URL` constant points at a Cloudflare Worker in
 its own dedicated repo,
-[jaypengx-collab/shared-proxy](https://github.com/jaypengx-collab/shared-proxy) —
+[JayPengX/shared-proxy](https://github.com/JayPengX/shared-proxy) —
 but it's a *different* Worker deployment from the one Orbit/Orbit Vocab's
 own AI/sync features use there, not the same URL with a different path.
 `/sports-proxy` used to live on that same shared Worker as those two
@@ -2308,18 +2308,18 @@ doesn't break anything: the site just shows that team's English name only.
 ## Related Projects
 
 Match Find is one of several sites sharing the same backend/tooling
-infrastructure in the `jaypengx-collab` GitHub organization:
+infrastructure in the `JayPengX` GitHub account:
 
-- **[Shared-Proxy](https://github.com/jaypengx-collab/Shared-Proxy)** — the
+- **[Shared-Proxy](https://github.com/JayPengX/Shared-Proxy)** — the
   Cloudflare Worker backend, including the `/sports-proxy` route this site
   depends on for all live data (see [The Shared Proxy
   Architecture](#the-shared-proxy-architecture)).
-- **[Orbit](https://github.com/jaypengx-collab/Orbit)** and
-  **[Orbit-Vocab](https://github.com/jaypengx-collab/Orbit-Vocab)** —
+- **[Orbit](https://github.com/JayPengX/Orbit)** and
+  **[Orbit-Vocab](https://github.com/JayPengX/Orbit-Vocab)** —
   sibling sites that share the same Worker infrastructure (a different,
   Gemini-backed deployment of it), though not Match Find's own
   `/sports-proxy` Worker specifically.
 
 ---
 
-**Live site: [https://jaypengx-collab.github.io/Match-Find/](https://jaypengx-collab.github.io/Match-Find/)**
+**Live site: [https://jaypengx.github.io/Match-Find/](https://jaypengx.github.io/Match-Find/)**

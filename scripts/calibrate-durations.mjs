@@ -58,7 +58,7 @@ const liveDays = Number(args['live-days'] ?? 14);
 
 // ESPN's Akamai front blocks Node's default User-Agent - same honest bot UA
 // as scripts/build-snapshot.mjs.
-const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/jaypengx-collab/Match-Find)';
+const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/JayPengX/Match-Find)';
 
 async function getJson(url, attempts = 3) {
   for (let i = 1; ; i++) {
