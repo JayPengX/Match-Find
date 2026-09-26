@@ -85,9 +85,18 @@ export function updatePlanHistory(rawMatches, previousDays, now = new Date()) {
     const ids = plan.map(m => m.id);
     if (ids.length) next[day] = ids;
   });
-  // A past day this build no longer has matches for keeps what it had.
+  // Anything this build can't re-plan keeps what it had: a whole past day
+  // it no longer has matches for, and any recorded pick missing from this
+  // build (a league whose fetch failed this time round) - dropping that
+  // would unlock a started pick and reshuffle its day.
+  const builtIds = new Set(matches.map(m => m.id));
   history.forEach((ids, day) => {
-    if (!(day in next)) next[day] = ids;
+    if (!(day in next)) {
+      next[day] = ids;
+      return;
+    }
+    const missing = ids.filter(id => !builtIds.has(id) && !next[day].includes(id));
+    if (missing.length) next[day] = [...next[day], ...missing];
   });
   return Object.fromEntries(Object.entries(next).sort(([a], [b]) => (a < b ? -1 : 1)));
 }

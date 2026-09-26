@@ -73,9 +73,24 @@ jobs:
           TZ: Asia/Taipei
         run: |
           SHA=$(git rev-parse HEAD)
-          # Seed with the published snapshot so its plan history carries over.
+          # Seed with the published snapshot so its plan history carries
+          # over a restart (a push cancelling this job, the timeout, the next
+          # scheduled run) - see scripts/plan-history.mjs. Never start the
+          # history fresh over a network blip: retry, then fall back to the
+          # raw file, and if both fail, stop here - the published snapshot
+          # stays as it is and the next run tries again.
           mkdir -p snapshot
-          git fetch -q --depth=1 origin data && git show FETCH_HEAD:matches.json > snapshot/matches.json || rm -f snapshot/matches.json
+          seeded=
+          for delay in 2 4 8 16; do
+            if git fetch -q --depth=1 origin data; then seeded=1; break; fi
+            sleep "$delay"
+          done
+          if [ -n "$seeded" ]; then
+            git show FETCH_HEAD:matches.json > snapshot/matches.json || rm -f snapshot/matches.json
+          elif ! curl -fsS --retry 4 -o snapshot/matches.json "https://raw.githubusercontent.com/${REPO}/data/matches.json"; then
+            echo "::error::Could not read the published snapshot to carry its plan history over"
+            exit 1
+          fi
           END=$(( $(date +%s) + LOOP_SECONDS ))
           publish() {
             rm -rf publish && mkdir publish && cp snapshot/matches.json publish/

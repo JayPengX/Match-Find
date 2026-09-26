@@ -3904,6 +3904,11 @@ async function fetchServerSnapshot({ bust = false, maxAgeMs = SERVER_SNAPSHOT_MA
     });
     if (!response.ok) return null;
     const snapshot = await response.json();
+    // Before the build/age checks: the plan history is plain data every
+    // deploy reads the same way, and right after a deploy (this page's
+    // storage just wiped, the snapshot still stamped with the previous
+    // build until the job republishes) it's the only history there is.
+    if (snapshot && adoptServerPlanHistory(snapshot.planHistory) && state.allRawMatches.length) renderSections();
     if (!snapshot || snapshot.buildId !== APP_BUILD_ID || !Array.isArray(snapshot.matches)) return null;
     const generatedMs = Date.parse(snapshot.generatedAt);
     if (!Number.isFinite(generatedMs) || Date.now() - generatedMs > maxAgeMs) return null;
@@ -3949,11 +3954,7 @@ function isSnapshotLiveEnough(snapshot) {
 // build, so every day counts as loaded, same as after the live full-window
 // refresh.
 function applyServerSnapshot(snapshot) {
-  const historyChanged = adoptServerPlanHistory(snapshot.planHistory);
-  if (state.lastGeneratedAt && Date.parse(snapshot.generatedAt) <= Date.parse(state.lastGeneratedAt)) {
-    if (historyChanged && state.allRawMatches.length) renderSections();
-    return;
-  }
+  if (state.lastGeneratedAt && Date.parse(snapshot.generatedAt) <= Date.parse(state.lastGeneratedAt)) return;
   state.fullWindowLoaded = true;
   state.nearTermLoaded = true;
   applyFreshBuild(snapshot.matches, snapshot.generatedAt);

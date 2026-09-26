@@ -52,3 +52,13 @@ test('drops days older than five days back and keeps past days it no longer has 
   const result = updatePlanHistory([], { [key(-6)]: ['old'], [key(-3)]: ['kept'] }, now);
   assert.deepEqual(result, { [key(-3)]: ['kept'] });
 });
+
+test('a recorded pick missing from this build (its league failed to fetch) is kept', () => {
+  const now = new Date();
+  now.setHours(21, 0, 0, 0);
+  const today = localDateKey(now);
+  const other = makeMatch({ id: 'other', name: 'C @ D', startTimeUtc: localIso(0, 19, now) });
+  const result = updatePlanHistory([other], { [today]: ['gone'] }, now);
+  assert.ok(result[today].includes('gone'));
+  assert.ok(result[today].includes('other'));
+});
