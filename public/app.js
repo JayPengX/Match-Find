@@ -430,6 +430,7 @@ const APP_BUILD_ID = '__BUILD_ID__';
 const state = {
   allRawMatches: [], // every fetched, non-TBD match regardless of enabled sports - see applyEnabledSportsAndRender
   rawMatches: [], // allRawMatches filtered to enabled sports, untouched otherwise - kept so a priority/service change can re-run resolveViewingPlan without re-fetching
+  serverPlanHistory: new Map(), // dayKey -> planned ids, from the snapshot job - see adoptServerPlanHistory
   tbdMatches: [], // fixtures ESPN has on the schedule but hasn't set a kickoff time for yet - see applyFreshBuild
   matches: [], // every fetched (non-TBD), enabled-sport match, mutated in place with .recommended/.overlappingIds
   days: [], // [{key: 'YYYY-MM-DD', date: Date}, ...] - every calendar day the fetched window covers
@@ -1057,7 +1058,8 @@ function lockedIdsByDay() {
   return new Map(state.days.map(day => [day.key, lockedIdsForDay(day.key)]));
 }
 function lockedIdsForDay(dayKey) {
-  return startedPlanLockIds(state.dayPlanHistory.get(dayPlanHistoryKey(dayKey, state.activeSport)), applySportFilter(matchesForDay(dayKey)));
+  const serverPlan = state.activeSport === 'all' ? state.serverPlanHistory.get(dayKey) : null;
+  return startedPlanLockIds(serverPlan || state.dayPlanHistory.get(dayPlanHistoryKey(dayKey, state.activeSport)), applySportFilter(matchesForDay(dayKey)));
 }
 // Pins are left out: a pin is already its own hard override, and recording
 // it here would keep it locked in even after the viewer swipes it away.
@@ -3911,6 +3913,33 @@ async function fetchServerSnapshot({ bust = false, maxAgeMs = SERVER_SNAPSHOT_MA
   }
 }
 
+// The day plan history the snapshot job keeps server-side (see
+// scripts/plan-history.mjs) - what every device's plan for a day has
+// already committed to, so a wiped browser and a home-screen app that
+// remembers everything lock the same started picks and re-plan the same
+// past days. Only for a viewer in the same time zone the job plans in
+// (Asia/Taipei): its days are that zone's calendar days. Takes over from
+// this browser's own history for the unfiltered plan (see
+// lockedIdsForDay); a sport filter's plan still uses the local one.
+function adoptServerPlanHistory(planHistory) {
+  if (!planHistory || !planHistory.days || typeof planHistory.days !== 'object') return false;
+  let viewerTimeZone = null;
+  try {
+    viewerTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {}
+  if (!viewerTimeZone || planHistory.timeZone !== viewerTimeZone) return false;
+  const days = new Map(
+    Object.entries(planHistory.days)
+      .filter(([, ids]) => Array.isArray(ids))
+      .map(([day, ids]) => [day, ids.filter(id => typeof id === 'string')])
+  );
+  const same = days.size === state.serverPlanHistory.size && [...days].every(([day, ids]) => state.serverPlanHistory.get(day)?.join() === ids.join());
+  if (same) return false;
+  state.serverPlanHistory = days;
+  invalidateVarietyRotation();
+  return true;
+}
+
 function isSnapshotLiveEnough(snapshot) {
   return !!snapshot && Date.now() - Date.parse(snapshot.generatedAt) <= SERVER_SNAPSHOT_LIVE_ENOUGH_MS;
 }
@@ -3920,7 +3949,11 @@ function isSnapshotLiveEnough(snapshot) {
 // build, so every day counts as loaded, same as after the live full-window
 // refresh.
 function applyServerSnapshot(snapshot) {
-  if (state.lastGeneratedAt && Date.parse(snapshot.generatedAt) <= Date.parse(state.lastGeneratedAt)) return;
+  const historyChanged = adoptServerPlanHistory(snapshot.planHistory);
+  if (state.lastGeneratedAt && Date.parse(snapshot.generatedAt) <= Date.parse(state.lastGeneratedAt)) {
+    if (historyChanged && state.allRawMatches.length) renderSections();
+    return;
+  }
   state.fullWindowLoaded = true;
   state.nearTermLoaded = true;
   applyFreshBuild(snapshot.matches, snapshot.generatedAt);

@@ -68,8 +68,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # Day plan history is kept in this site's audience's own calendar
+          # days - see scripts/plan-history.mjs.
+          TZ: Asia/Taipei
         run: |
           SHA=$(git rev-parse HEAD)
+          # Seed with the published snapshot so its plan history carries over.
+          mkdir -p snapshot
+          git fetch -q --depth=1 origin data && git show FETCH_HEAD:matches.json > snapshot/matches.json || rm -f snapshot/matches.json
           END=$(( $(date +%s) + LOOP_SECONDS ))
           publish() {
             rm -rf publish && mkdir publish && cp snapshot/matches.json publish/

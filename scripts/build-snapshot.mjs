@@ -15,9 +15,10 @@
 // replaces it a moment later - a visible flicker.
 //
 // Usage: node scripts/build-snapshot.mjs [output path]
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { buildMatches, enrichWithPolymarketOdds, DEFAULT_DAYS_AHEAD } from '../public/lib/match-builder.mjs';
+import { updatePlanHistory } from './plan-history.mjs';
 
 const FETCH_USER_AGENT = 'Match-Find-Bot/1.0 (+https://github.com/JayPengX/Match-Find)';
 
@@ -43,8 +44,20 @@ async function main() {
   // than a genuinely empty three weeks across four leagues - fail so the
   // workflow keeps the last good snapshot instead of publishing an empty one.
   if (!matches.length) throw new Error('Build produced no matches - not publishing');
+  // The previous snapshot at the same path (the last loop iteration's, or
+  // the published one snapshot.yml seeds it with) carries the plan history
+  // this build extends - see plan-history.mjs.
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let previousDays = null;
+  try {
+    const previous = JSON.parse(await readFile(outputPath, 'utf8'));
+    if (previous.planHistory?.timeZone === timeZone) previousDays = previous.planHistory.days;
+  } catch {
+    // First build, or an unreadable file - start the history fresh.
+  }
+  const planHistory = { timeZone, days: updatePlanHistory(matches, previousDays) };
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, JSON.stringify({ generatedAt, daysAhead, matches }));
+  await writeFile(outputPath, JSON.stringify({ generatedAt, daysAhead, matches, planHistory }));
   console.log(`Wrote ${matches.length} matches to ${outputPath}`);
 }
 
