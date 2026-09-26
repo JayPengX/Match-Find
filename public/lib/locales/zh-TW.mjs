@@ -119,5 +119,17 @@ export default {
   refreshFailed: '重新整理失敗，請稍後再試。',
   checkingVersion: '檢查版本中…',
   nextUpdateIn: '下次更新：{secs} 秒後',
-  updatingNow: '更新中…'
+  updatingNow: '更新中…',
+  quadraHeading: '四方通行碼',
+  quadraHint: '輸入四方通行碼：你在四方運彩釘選的比賽，會加進你的賽程和推薦。',
+  quadraLink: '連結',
+  quadraLinked: '已連結，四方運彩釘選了 {n} 場比賽。',
+  quadraNotLinked: '尚未連結（四方的其他 App 建立的四方通行碼都能用）。',
+  quadraBadPass: '四方通行碼是 10 個英文字母或數字。',
+  quadraPassNotFound: '找不到這組四方通行碼。',
+  quadraPassFailed: '暫時讀不到四方通行碼，稍後會再試。',
+  quadraOddsLabel: '四方運彩',
+  quadraDraw: '和',
+  quadraNoOdds: '這場還沒有賠率',
+  quadraBet: '去下注 →'
 };

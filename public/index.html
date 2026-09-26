@@ -74,6 +74,7 @@
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
 <noscript><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700;800&display=swap" rel="stylesheet" /></noscript>
 <link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./quadra.css" />
 <!-- Every module app.js imports, directly or through another module.
      Without these the browser only learns about each module after
      downloading the one that imports it - three rounds of downloads in a
@@ -94,6 +95,8 @@
 <link rel="modulepreload" href="./lib/sportsbook-odds.mjs" />
 <link rel="modulepreload" href="./lib/objective-score.mjs" />
 <link rel="modulepreload" href="./lib/percent.mjs" />
+<link rel="modulepreload" href="./lib/quadra-link.mjs" />
+<link rel="modulepreload" href="./lib/quadra.mjs" />
 <link rel="modulepreload" href="./lib/locales/zh-TW.mjs" />
 <link rel="modulepreload" href="./lib/locales/en.mjs" />
 </head>
@@ -116,6 +119,16 @@
       <h3 id="settings-enabled-heading">已啟用的運動</h3>
       <p id="settings-enabled-hint" class="settings-hint">關閉的運動不會出現在網站上。</p>
       <div id="settings-enabled-sports" class="settings-chip-list"></div>
+    </section>
+
+    <section class="settings-section">
+      <h3 id="settings-quadra-heading">四方通行碼</h3>
+      <p id="settings-quadra-hint" class="settings-hint">輸入四方通行碼，在四方運彩釘選的比賽就會加進你的賽程。</p>
+      <form id="settings-quadra-form" class="settings-quadra-form">
+        <input id="settings-quadra-input" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXX-XXXXX" aria-label="四方通行碼" />
+        <button id="settings-quadra-btn" type="submit" class="settings-action-btn">連結</button>
+      </form>
+      <p id="settings-quadra-status" class="settings-hint"></p>
     </section>
 
     <section class="settings-section">
@@ -228,6 +241,11 @@
       <p class="match-watch" hidden><span class="watch-badge" hidden><img class="watch-logo" alt="" hidden decoding="sync" referrerpolicy="no-referrer" /><span class="watch-badge-text"></span></span><span class="watch-text"></span></p>
       <p class="match-reason"></p>
       <p class="conflict-note" hidden></p>
+      <div class="quadra-odds" hidden>
+        <span class="quadra-odds-label"></span>
+        <span class="quadra-odds-prices"></span>
+        <a class="quadra-bet" href="#"></a>
+      </div>
       <button type="button" class="match-prefer-btn" hidden>設為偏好</button>
     </article>
   </template>

@@ -118,5 +118,17 @@ export default {
   refreshFailed: 'Refresh failed — please try again.',
   checkingVersion: 'Checking for updates…',
   nextUpdateIn: 'Next update in {secs}s',
-  updatingNow: 'Updating…'
+  updatingNow: 'Updating…',
+  quadraHeading: 'Quadra Pass',
+  quadraHint: 'Enter your Quadra Pass: matches you pin in Quadra Sportsbook join your schedule and picks.',
+  quadraLink: 'Link',
+  quadraLinked: 'Linked: {n} matches pinned in Quadra Sportsbook.',
+  quadraNotLinked: 'Not linked (a Quadra Pass made in any Quadra app works).',
+  quadraBadPass: 'A Quadra Pass is 10 letters or digits.',
+  quadraPassNotFound: 'No account has this Quadra Pass.',
+  quadraPassFailed: 'Couldn\'t read the Quadra Pass just now; trying again later.',
+  quadraOddsLabel: 'Quadra Sportsbook',
+  quadraDraw: 'Draw',
+  quadraNoOdds: 'No odds yet',
+  quadraBet: 'Bet →'
 };

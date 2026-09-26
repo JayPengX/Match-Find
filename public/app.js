@@ -121,6 +121,10 @@ import { buildMatches, enrichWithPolymarketOdds, freezeStartedMatchScoring, isDr
 import { t, getLocale, dateFnsLocaleTag } from './lib/i18n.mjs';
 import { isPlayInRound, localizePlayoffRound, playoffSeriesState } from './lib/playoff.mjs';
 import { installTapLog, isTapLogOn, setTapLogHeader, tapLog } from './lib/tap-log.mjs';
+// Quadra: Sportsbook's odds and leagues, bet links and pinned matches (see
+// quadra-link.mjs), and the shared shell (home screen only, updates).
+import { EXTRA_SPORTS, EXTRA_SPORT_NAMES, extraInfo, loadOddsBoard, oddsGameFor, matchFromOddsGame, matchFromPin, readWalletPins, betUrl } from './lib/quadra-link.mjs';
+import { ECO_URL, storedPass, isPass, cleanCode, storePass, formatPass, installGate, APPS } from './lib/quadra.mjs';
 
 // JayPengX/shared-proxy's dedicated `sports-proxy` Worker - a plain,
 // public value, not a secret (a static site's own client bundle can't keep
@@ -526,6 +530,8 @@ const SPORT_LABEL_KEYS = {
 };
 
 function sportLabel(sport) {
+  const extra = extraInfo(sport);
+  if (extra) return getLocale() === 'en' ? extra.en : extra.zh;
   return t(SPORT_LABEL_KEYS[sport]) || sport;
 }
 
@@ -825,6 +831,9 @@ function applyStaticTranslations() {
   settingsResetBtn.textContent = t('resetPriorityBtn');
   setText('settings-enabled-heading', 'enabledSportsHeading');
   setText('settings-enabled-hint', 'enabledSportsHint');
+  setText('settings-quadra-heading', 'quadraHeading');
+  setText('settings-quadra-hint', 'quadraHint');
+  setText('settings-quadra-btn', 'quadraLink');
   setText('settings-update-heading', 'updateHeading');
   updateStatusText.textContent = t('updateStatusDefault');
   refreshDataBtn.textContent = t('refreshNowBtn');
@@ -910,6 +919,9 @@ const SETTINGS_STORAGE_KEY = 'matchfind-sport-priority-order';
 // Default sport priority, best first - also the order the enabled-sports
 // toggles are listed in. Every sport in SPORT_LABEL_KEYS must appear here.
 const DEFAULT_SPORT_ORDER = ['F1', 'NBA', 'Premier League', 'MLB'];
+// Every sport there is to follow: this app's own four (the defaults), then
+// every other league Quadra Sportsbook offers (off until followed).
+const ALL_SPORT_ORDER = [...DEFAULT_SPORT_ORDER, ...EXTRA_SPORT_NAMES];
 
 function loadPriorityOrder() {
   const stored = readStoredJson(SETTINGS_STORAGE_KEY);
@@ -918,14 +930,164 @@ function loadPriorityOrder() {
   // whatever stored order still applies, appends any brand new sport at
   // the end (never assume a new sport, or leftover an unknown value in a
   // stale write, means anything relative to today's ranking).
-  const known = stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport));
-  const missing = DEFAULT_SPORT_ORDER.filter(sport => !known.includes(sport));
+  const known = stored.filter(sport => ALL_SPORT_ORDER.includes(sport));
+  const missing = ALL_SPORT_ORDER.filter(sport => !known.includes(sport));
   return [...known, ...missing];
 }
 function savePriorityOrder(order) {
   writeStoredJson(SETTINGS_STORAGE_KEY, order);
 }
 state.priorityOrder = loadPriorityOrder();
+
+
+// ---- Quadra: Sportsbook's board, pinned matches and the pass -----------------
+//
+// Quadra Sportsbook's board (its odds for every game it prices, loaded from
+// its own modules - see quadra-link.mjs): its odds show on every card with
+// a link to bet there, and its other leagues can be followed in Settings.
+// With a Quadra Pass, games pinned in Sportsbook come from the pass's wallet
+// and are put in the viewing plan as the viewer's own picks (once each).
+state.quadra = { board: null, pins: {}, pass: storedPass(), loading: null, status: '' };
+const QUADRA_APPLIED_KEY = 'matchfind-quadra-applied-pins';
+const QUADRA_REFRESH_MS = 10 * 60_000;
+const simpleNorm = name => String(name || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Sportsbook's game id for one of this app's matches (the board's, or a
+// pin's when the board isn't loaded).
+function quadraGameIdOf(match) {
+  if (match.quadraGameId) return match.quadraGameId;
+  const found = oddsGameFor(match, state.quadra.board);
+  if (found) return found.id;
+  const pins = Object.entries(state.quadra.pins || {}).filter(([, p]) => p.on);
+  if (!pins.length) return null;
+  const pseudo = { normalize: state.quadra.board?.normalize || simpleNorm, games: pins.map(([id, p]) => ({ id, key: p.sport, startUtc: p.start, away: { en: p.away }, home: { en: p.home } })) };
+  return oddsGameFor(match, pseudo)?.id || null;
+}
+function quadraPinnedGameIds() {
+  return new Set(Object.entries(state.quadra.pins || {}).filter(([, p]) => p.on).map(([id]) => id));
+}
+// Sportsbook's games in the leagues followed (and any pinned), as matches.
+function quadraExtraMatches() {
+  const pinned = quadraPinnedGameIds();
+  const out = [];
+  const seen = new Set();
+  for (const g of state.quadra.board?.games || []) {
+    const info = EXTRA_SPORTS[g.key];
+    if (!info || (!state.enabledSports.has(info.sport) && !pinned.has(g.id))) continue;
+    const m = matchFromOddsGame(g, { isPinned: pinned.has(g.id) });
+    if (m) {
+      out.push(m);
+      seen.add(g.id);
+    }
+  }
+  for (const [id, pin] of Object.entries(state.quadra.pins || {})) {
+    if (!pin.on || seen.has(id) || !EXTRA_SPORTS[pin.sport]) continue;
+    const m = matchFromPin(id, pin);
+    if (m) out.push(m);
+  }
+  return out.filter(isWithinRetentionWindow);
+}
+
+// Each Sportsbook pin becomes the viewer's own pick for its day, once (a
+// later change of mind here isn't undone at every refresh).
+function applyQuadraPins() {
+  const pins = Object.entries(state.quadra.pins || {}).filter(([, p]) => p.on);
+  if (!pins.length || !state.rawMatches?.length) return;
+  const applied = new Set(readStoredJson(QUADRA_APPLIED_KEY) || []);
+  let changed = false;
+  for (const [id, pin] of pins) {
+    const stamp = `${id}:${pin.t}`;
+    if (applied.has(stamp)) continue;
+    const match = state.matches.find(m => !m.isFinished && quadraGameIdOf(m) === id);
+    if (!match) continue;
+    try {
+      preferMatch(match);
+    } catch (error) {
+      console.error('quadra pin', error);
+    }
+    applied.add(stamp);
+    changed = true;
+  }
+  if (changed) writeStoredJson(QUADRA_APPLIED_KEY, [...applied].slice(-300));
+}
+
+async function refreshQuadra({ force = false } = {}) {
+  if (state.quadra.loading) return state.quadra.loading;
+  if (!force && state.quadra.board && Date.now() - state.quadra.board.at < QUADRA_REFRESH_MS) return null;
+  state.quadra.loading = (async () => {
+    try {
+      const extras = [...state.enabledSports].some(sport => extraInfo(sport));
+      const board = await loadOddsBoard({ extras: extras || Object.keys(state.quadra.pins || {}).length > 0 });
+      state.quadra.board = board;
+      for (const [sport, logo] of Object.entries(board.logos)) if (logo && !LEAGUE_LOGOS[sport]) LEAGUE_LOGOS[sport] = logo;
+    } catch (error) {
+      console.warn('Quadra Sportsbook board unavailable', error);
+    }
+    if (state.quadra.pass) {
+      try {
+        const pins = await readWalletPins(ECO_URL, state.quadra.pass);
+        state.quadra.pins = pins || {};
+        state.quadra.status = pins ? '' : t('quadraPassNotFound');
+      } catch (error) {
+        state.quadra.status = t('quadraPassFailed');
+      }
+    }
+    if (state.allRawMatches.length) {
+      applyEnabledSportsAndRender();
+      applyQuadraPins();
+    }
+    renderQuadraSettings();
+  })().finally(() => (state.quadra.loading = null));
+  return state.quadra.loading;
+}
+
+// The card's Sportsbook line: its estimated lottery odds and a link to bet.
+function updateQuadraOdds(node, match) {
+  const box = node.querySelector('.quadra-odds');
+  if (!box) return;
+  const game = match.quadraExtra ? state.quadra.board?.games.find(g => g.id === match.quadraGameId) : oddsGameFor(match, state.quadra.board);
+  const id = game?.id || match.quadraGameId;
+  if (!id || match.isFinished) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const pinned = quadraPinnedGameIds().has(id);
+  box.querySelector('.quadra-odds-label').textContent = `${pinned ? '📌 ' : ''}${t('quadraOddsLabel')}`;
+  const o = game?.odds || {};
+  const name = side => {
+    const c = match.competitors?.find(x => x.homeAway === side);
+    return c ? (getLocale() === 'en' ? c.name : c.nameZh || c.name) : '';
+  };
+  const parts = ['away', 'draw', 'home'].filter(side => o[side]).map(side => `${side === 'draw' ? t('quadraDraw') : name(side)} ${o[side].toFixed(2)}`);
+  box.querySelector('.quadra-odds-prices').textContent = parts.join(' · ') || t('quadraNoOdds');
+  const link = box.querySelector('.quadra-bet');
+  link.href = betUrl(id);
+  link.textContent = t('quadraBet');
+}
+
+function renderQuadraSettings() {
+  const input = document.getElementById('settings-quadra-input');
+  const status = document.getElementById('settings-quadra-status');
+  if (!input || !status) return;
+  if (document.activeElement !== input) input.value = state.quadra.pass ? formatPass(state.quadra.pass) : '';
+  const pins = quadraPinnedGameIds().size;
+  status.textContent = state.quadra.status || (state.quadra.pass ? t('quadraLinked', { n: pins }) : t('quadraNotLinked'));
+}
+document.getElementById('settings-quadra-form')?.addEventListener('submit', event => {
+  event.preventDefault();
+  const code = cleanCode(document.getElementById('settings-quadra-input').value);
+  if (code && !isPass(code)) {
+    state.quadra.status = t('quadraBadPass');
+    return renderQuadraSettings();
+  }
+  state.quadra.pass = code;
+  state.quadra.pins = {};
+  state.quadra.status = '';
+  storePass(code);
+  renderQuadraSettings();
+  refreshQuadra({ force: true });
+});
 
 // ---- Enabled sports / subscribed services settings ------------------------
 //
@@ -939,7 +1101,7 @@ const ENABLED_SPORTS_STORAGE_KEY = 'matchfind-enabled-sports';
 function loadEnabledSports() {
   const stored = readStoredJson(ENABLED_SPORTS_STORAGE_KEY);
   if (!Array.isArray(stored) || !stored.length) return new Set(DEFAULT_SPORT_ORDER);
-  return new Set(stored.filter(sport => DEFAULT_SPORT_ORDER.includes(sport)));
+  return new Set(stored.filter(sport => ALL_SPORT_ORDER.includes(sport)));
 }
 function saveEnabledSports(enabledSports) {
   writeStoredJson(ENABLED_SPORTS_STORAGE_KEY, [...enabledSports]);
@@ -1141,8 +1303,10 @@ function recomputeAndRender() {
 }
 
 function renderSettingsPanel() {
+  // Only the sports followed (the full order keeps the rest's places).
+  const shown = state.priorityOrder.filter(sport => state.enabledSports.has(sport));
   settingsSportList.replaceChildren(
-    ...state.priorityOrder.map((sport, index) => {
+    ...shown.map((sport, index) => {
       const row = document.createElement('div');
       row.className = 'settings-sport-row';
       const rank = document.createElement('span');
@@ -1158,8 +1322,9 @@ function renderSettingsPanel() {
 
       function move(delta) {
         const from = state.priorityOrder.indexOf(sport);
-        const to = from + delta;
-        if (to < 0 || to >= state.priorityOrder.length) return;
+        const neighbour = shown[shown.indexOf(sport) + delta];
+        if (!neighbour) return;
+        const to = state.priorityOrder.indexOf(neighbour);
         [state.priorityOrder[from], state.priorityOrder[to]] = [state.priorityOrder[to], state.priorityOrder[from]];
         persistSettings();
         renderSettingsPanel();
@@ -1177,7 +1342,7 @@ function renderSettingsPanel() {
       downBtn.type = 'button';
       downBtn.setAttribute('aria-label', t('moveSportDown', { sport: sportLabel(sport) }));
       downBtn.textContent = '↓';
-      downBtn.disabled = index === state.priorityOrder.length - 1;
+      downBtn.disabled = index === shown.length - 1;
       downBtn.addEventListener('click', () => move(1));
 
       moveGroup.append(upBtn, downBtn);
@@ -1203,7 +1368,7 @@ function persistSettings() {
 // sport can't be turned off - an empty site isn't a valid state.
 function renderEnabledSportsPanel() {
   settingsEnabledSports.replaceChildren(
-    ...DEFAULT_SPORT_ORDER.map(sport => {
+    ...ALL_SPORT_ORDER.map(sport => {
       const enabled = state.enabledSports.has(sport);
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -1235,8 +1400,9 @@ function renderEnabledSportsPanel() {
           refreshFullWindow({ silent: true }).catch(error => console.error('sport re-enable refresh failed', error));
         }
         persistSettings();
-        renderEnabledSportsPanel();
+        renderSettingsPanel();
         applyEnabledSportsAndRender();
+        if (extraInfo(sport) && !enabled) refreshQuadra({ force: true });
       });
       return chip;
     })
@@ -1245,6 +1411,7 @@ function renderEnabledSportsPanel() {
 
 function openSettingsPanel() {
   renderSettingsPanel();
+  renderQuadraSettings();
   settingsPanel.hidden = false;
   settingsBackdrop.hidden = false;
 }
@@ -2643,6 +2810,7 @@ function updateMatchCard(node, match) {
     conflictNote.textContent = '';
   }
   if (match.recommended) node.classList.add('is-recommended');
+  updateQuadraOdds(node, match);
 
   // "設為偏好" - lets a viewer promote THIS card into a hard pin directly,
   // without needing it to already be a member of some other slot's swipe
@@ -4069,7 +4237,8 @@ function applyEnabledSportsAndRender() {
   // any recurring one (initial load, every data poll, every sport toggle)
   // to keep localStorage/the synced payload from growing forever.
   prunePinnedChoices();
-  const rawMatches = state.allRawMatches.filter(m => state.enabledSports.has(m.sport));
+  const pinnedIds = quadraPinnedGameIds();
+  const rawMatches = [...state.allRawMatches, ...quadraExtraMatches()].filter(m => state.enabledSports.has(m.sport) || pinnedIds.has(m.quadraGameId || quadraGameIdOf(m)));
   state.rawMatches = rawMatches;
   state.matches = resolveViewingPlan(rawMatches, state.priorityOrder, state.myServiceIds);
   state.days = buildDayList(state.matches);
@@ -5038,7 +5207,12 @@ function renderNextUpdateCountdown() {
 setInterval(renderNextUpdateCountdown, 1000);
 
 async function init() {
+  // Phones and tablets: from the home screen only (see quadra.mjs).
+  installGate('match', getLocale() === 'en' ? 'en' : 'zh');
   state.proxyUrl = PROXY_URL;
+  // Sportsbook's odds and leagues, and the pass's pins, once the page is up.
+  setTimeout(() => refreshQuadra({ force: true }), 2500);
+  setInterval(() => document.visibilityState === 'visible' && refreshQuadra(), QUADRA_REFRESH_MS);
   // #loading-state (visible by default in index.html - not touched at
   // all until one of these produces something real) stays up until AT
   // LEAST one of these has real content to show - never the empty/
