@@ -1,6 +1,37 @@
-# Match Find
+# 四方賽程 Quadra Fixtures (Match Find)
 
 **Tell you what's actually worth watching today — Premier League, MLB, NBA, and F1 — in your own local time, scored by real data, not guesswork.**
+
+## Quadra 四方
+
+This app is part of **Quadra 四方**, four apps sharing one account:
+
+| App | Was | Part it plays |
+| --- | --- | --- |
+| **四方證券 Quadra Securities** | Stock Study 股市研究室 | The base: a play-money brokerage where the money lives and grows |
+| **四方運彩 Quadra Sportsbook** | Odds Study 賠率研究室 | A side play: sports lottery odds and betting |
+| **四方賽程 Quadra Fixtures** | Match Find | A schedule tool: what's worth watching |
+| **四方單字 Quadra Words** | Orbit Vocab 英單力 | A big mini game with real benefit: English words that pay |
+
+- **The Quadra Pass 四方通行碼**: one 10-character code for all four apps and
+  every device (Shared-Proxy's `/eco` route). New syncs are passes only; an
+  old app-only code still works until it's upgraded or merged.
+- **One money pool**: Securities' NT$ cash and Sportsbook's balance are the
+  same money. Sportsbook's bets and winnings, Words' study rewards and
+  transfers between passes all land in it, with records on every side.
+- **The economy**: every account opens with NT$100,000 in Securities, which
+  pays NT$3,000 on the 1st of each month; Sportsbook adds NT$10,000 once and
+  NT$1,000 each week; both only when that app is opened. Words pays NT$2 a
+  right answer and NT$20 a newly mastered word (NT$800 a day at most);
+  Securities' and Sportsbook's mini games pay for skill, up to NT$1,000 and
+  NT$1,500 a day. Sportsbook has a weekly betting limit you can set.
+- **Merge tool** (`/Stock-Study/merge.html`): every old code in, one new
+  pass out; the old codes and their data are removed.
+- **Installed only** on phones and tablets (added to the home screen), and
+  every app checks for a new deploy on opening, on coming back and every
+  five minutes, clearing old cached files before it reloads.
+- `quadra.mjs` and `quadra.css` are the same file in all four apps; the
+  icons and link cards come from Shared-Proxy's `brand/generate.mjs`.
 
 **Live site: [https://jaypengx.github.io/Match-Find/](https://jaypengx.github.io/Match-Find/)**
 

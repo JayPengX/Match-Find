@@ -19,9 +19,9 @@ export const BRAND = { zh: '四方', en: 'Quadra', passZh: '四方通行碼', pa
 
 export const APPS = {
   stock: { zh: '四方證券', en: 'Quadra Securities', short: { zh: '證券', en: 'Securities' }, path: '/Stock-Study/', color: '#0d9488', icon: '📈' },
-  odds: { zh: '四方運彩', en: 'Quadra Sportsbook', short: { zh: '運彩', en: 'Sportsbook' }, path: '/Odds-Study/', color: '#ea580c', icon: '🎟️' },
-  match: { zh: '四方賽程', en: 'Quadra Fixtures', short: { zh: '賽程', en: 'Fixtures' }, path: '/Match-Find/', color: '#7c3aed', icon: '📅' },
-  vocab: { zh: '四方單字', en: 'Quadra Words', short: { zh: '單字', en: 'Words' }, path: '/Orbit-Vocab/', color: '#db2777', icon: '🔤' }
+  odds: { zh: '四方運彩', en: 'Quadra Sportsbook', short: { zh: '運彩', en: 'Sportsbook' }, path: '/Odds-Study/', color: '#2563eb', icon: '🎟️' },
+  match: { zh: '四方賽程', en: 'Quadra Fixtures', short: { zh: '賽程', en: 'Fixtures' }, path: '/Match-Find/', color: '#d97706', icon: '📅' },
+  vocab: { zh: '四方單字', en: 'Quadra Words', short: { zh: '單字', en: 'Words' }, path: '/Orbit-Vocab/', color: '#5655e8', icon: '🔤' }
 };
 export const appName = (app, lang = 'zh') => APPS[app]?.[lang === 'en' ? 'en' : 'zh'] || app;
 

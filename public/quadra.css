@@ -4,9 +4,9 @@
    fallbacks for the app that names them differently. */
 :root {
   --quadra-stock: #0d9488;
-  --quadra-odds: #ea580c;
-  --quadra-match: #7c3aed;
-  --quadra-vocab: #db2777;
+  --quadra-odds: #2563eb;
+  --quadra-match: #d97706;
+  --quadra-vocab: #5655e8;
   --quadra-radius: 18px;
   --quadra-font: system-ui, -apple-system, 'Segoe UI', 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
 }

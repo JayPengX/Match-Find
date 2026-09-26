@@ -6,8 +6,8 @@
   --text: #f1f3f9;
   --text-muted: #99a2b6;
   --text-faint: #6b7386;
-  --accent: #5b8cff;
-  --accent-soft: rgba(91, 140, 255, 0.16);
+  --accent: #d97706;
+  --accent-soft: rgba(217, 119, 6, 0.18);
   --good: #3ddc97;
   --good-soft: rgba(61, 220, 151, 0.14);
   /* Text on --good-soft - --good itself is fine on dark but too pale on light. */
@@ -22,7 +22,7 @@
   --radius: 20px;
   --radius-sm: 12px;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.45);
-  --shadow-pinned: 0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 32px -14px rgba(91, 140, 255, 0.35);
+  --shadow-pinned: 0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 32px -14px rgba(217, 119, 6, 0.35);
   --sport-epl: #5b8cff;
   --sport-mlb: #ff6b6b;
   --sport-nba: #ff9f4d;
@@ -45,12 +45,12 @@
     --text: #14161c;
     --text-muted: #5c6270;
     --text-faint: #8890a0;
-    --accent-soft: rgba(91, 140, 255, 0.1);
+    --accent-soft: rgba(217, 119, 6, 0.12);
     --good-soft: rgba(26, 160, 100, 0.12);
     --good-text: #11774a;
     --odds-neutral: #b3b9c6;
     --shadow-card: 0 1px 2px rgba(20, 22, 30, 0.04), 0 8px 20px -12px rgba(20, 22, 30, 0.12);
-    --shadow-pinned: 0 1px 2px rgba(20, 22, 30, 0.06), 0 16px 28px -14px rgba(91, 140, 255, 0.25);
+    --shadow-pinned: 0 1px 2px rgba(20, 22, 30, 0.06), 0 16px 28px -14px rgba(217, 119, 6, 0.25);
   }
 }
 
@@ -386,7 +386,7 @@ main#app {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  box-shadow: 0 6px 16px -8px rgba(91, 140, 255, 0.6);
+  box-shadow: 0 6px 16px -8px rgba(217, 119, 6, 0.6);
 }
 /* One horizontal-scrolling row, never wrapping to a second line - same
    scrollbar-hiding pattern as .day-scroller just above, for the same
@@ -460,7 +460,7 @@ main#app {
   margin-bottom: 12px;
 }
 .match-card.is-recommended {
-  border-color: rgba(91, 140, 255, 0.4);
+  border-color: rgba(217, 119, 6, 0.4);
 }
 .match-card.is-muted,
 .match-card.is-finished {
@@ -469,7 +469,7 @@ main#app {
 }
 .match-card.is-pinned {
   background: linear-gradient(160deg, var(--accent-soft), transparent 60%), var(--bg-raised);
-  border-color: rgba(91, 140, 255, 0.45);
+  border-color: rgba(217, 119, 6, 0.45);
   box-shadow: var(--shadow-pinned);
   padding: 20px;
 }
@@ -1408,11 +1408,11 @@ main#app {
 }
 
 /* ---- Quadra: Sportsbook's odds on a card, and the pass in Settings ---- */
-.quadra-odds { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 8px; padding: 8px 10px; border-radius: 12px; background: rgba(234, 88, 12, 0.1); font-size: 0.85rem; }
+.quadra-odds { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 8px; padding: 8px 10px; border-radius: 12px; background: rgba(37, 99, 235, 0.12); font-size: 0.85rem; }
 .quadra-odds[hidden] { display: none; }
-.quadra-odds-label { font-weight: 700; color: #ea580c; }
+.quadra-odds-label { font-weight: 700; color: #4f8ff7; }
 .quadra-odds-prices { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.quadra-bet { font-weight: 700; color: #ea580c; text-decoration: none; white-space: nowrap; }
+.quadra-bet { font-weight: 700; color: #4f8ff7; text-decoration: none; white-space: nowrap; }
 .quadra-bet:hover { text-decoration: underline; }
 .settings-quadra-form { display: flex; gap: 8px; }
 .settings-quadra-form input { flex: 1; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127, 127, 127, 0.35); background: transparent; color: inherit; text-transform: uppercase; letter-spacing: 0.05em; }

@@ -6,7 +6,7 @@ export default {
   // ---- Page metadata (title/meta tags - applied client-side, see
   // app.js's applyStaticTranslations, since this is a static HTML file
   // with no per-request templating step) ----
-  title: 'Match Find — 今晚看什麼',
+  title: '四方賽程 — 今晚看什麼',
   metaDescription: '英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。',
 
   // ---- Settings panel ----

@@ -30,30 +30,30 @@
      before #app or #settings-panel (both `hidden` by default) are ever
      shown, so there's no real flash-of-wrong-language for anything except
      the browser tab's own <title>, which cannot be hidden. -->
-<title>Match Find — 今晚看什麼</title>
+<title>四方賽程 Quadra Fixtures — 今晚看什麼</title>
 <meta name="description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="./icons/icon-180.png" />
 <link rel="manifest" href="./manifest.webmanifest" />
 <meta name="theme-color" content="#0b0d12" />
 <meta property="og:type" content="website" />
-<meta property="og:site_name" content="Match Find" />
-<meta property="og:title" content="Match Find — 今晚看什麼" />
+<meta property="og:site_name" content="四方賽程 Quadra Fixtures" />
+<meta property="og:title" content="四方賽程 Quadra Fixtures — 今晚看什麼" />
 <meta property="og:description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <meta property="og:image" content="https://jaypengx.github.io/Match-Find/og-image.jpg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="Match Find — 今晚看什麼" />
+<meta property="og:image:alt" content="四方賽程 Quadra Fixtures — 今晚看什麼" />
 <meta property="og:image" content="https://jaypengx.github.io/Match-Find/og-image-square.jpg" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="1200" />
-<meta property="og:image:alt" content="Match Find — 今晚看什麼" />
+<meta property="og:image:alt" content="四方賽程 Quadra Fixtures — 今晚看什麼" />
 <meta property="og:url" content="https://jaypengx.github.io/Match-Find/" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Match Find — 今晚看什麼" />
+<meta name="twitter:title" content="四方賽程 Quadra Fixtures — 今晚看什麼" />
 <meta name="twitter:description" content="英超、MLB、NBA、F1 賽程，依精彩程度推薦，換算成你的當地時間。" />
 <meta name="twitter:image" content="https://jaypengx.github.io/Match-Find/og-image.jpg" />
-<meta name="twitter:image:alt" content="Match Find — 今晚看什麼" />
+<meta name="twitter:image:alt" content="四方賽程 Quadra Fixtures — 今晚看什麼" />
 <!-- Opens the connections every first load needs while app.js is still
      downloading: the sports proxy (every match/odds request - crossorigin,
      since those are CORS fetches) and ESPN's image CDN (every logo). -->
@@ -147,6 +147,8 @@
 
   <div id="loading-state" class="loading-state" role="status" aria-live="polite" aria-label="載入中">
     <img class="loading-logo" src="./favicon.svg" alt="" width="64" height="64" aria-hidden="true" />
+    <p class="loading-brand">四方 QUADRA</p>
+    <p class="loading-title">四方賽程</p>
     <span class="loading-spinner" aria-hidden="true"></span>
   </div>
 
@@ -163,7 +165,7 @@
            pinned bar is better spent on the day/sport controls. -->
       <header class="app-header">
         <img class="app-header-logo" src="./favicon.svg" alt="" width="36" height="36" />
-        <span class="app-header-name">Match Find</span>
+        <span class="app-header-name">四方賽程</span>
         <span class="app-header-tagline" id="app-header-tagline">今晚看什麼</span>
       </header>
       <section id="day-scroller-section">

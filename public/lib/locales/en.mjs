@@ -13,7 +13,7 @@
 // screenshot after adding a language, especially for anything short and
 // buttonlike that sits next to fixed-width siblings.
 export default {
-  title: 'Match Find — What to Watch Tonight',
+  title: 'Quadra Fixtures — What to Watch Tonight',
   metaDescription:
     'Premier League, MLB, NBA and F1 schedules, ranked by watchability and converted to your local time.',
 
